@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
+from uuid import UUID
 
 from pydantic import AwareDatetime, Field, field_validator, model_validator
 
@@ -467,9 +468,22 @@ class JiraConfig(SourceConfig):
 
 
 class LinearConfig(SourceConfig):
-    """Linear configuration schema."""
+    """Explicit workspace and team scope for owned Linear originals."""
 
-    pass
+    workspace_id: UUID = Field(description="Expected native Linear organization UUID")
+    team_ids: tuple[UUID, ...] = Field(
+        min_length=1,
+        max_length=100,
+        description="Exact selected native team UUIDs; no implicit workspace-wide default",
+    )
+
+    @field_validator("team_ids")
+    @classmethod
+    def unique_teams(cls, value: tuple[UUID, ...]) -> tuple[UUID, ...]:
+        """Reject ambiguous duplicate configuration rather than silently rewriting it."""
+        if len(value) != len(set(value)):
+            raise ValueError("Linear team IDs must be unique")
+        return value
 
 
 class MondayConfig(SourceConfig):

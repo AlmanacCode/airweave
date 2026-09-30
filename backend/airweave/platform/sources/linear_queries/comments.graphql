@@ -1,0 +1,14 @@
+query OwnedLinearIssueComments($issueId: String!, $first: Int!, $after: String) {
+  issue(id: $issueId) {
+    id team { id }
+    comments(first: $first, after: $after, includeArchived: true, orderBy: createdAt) {
+      nodes {
+        id body url createdAt updatedAt archivedAt resolvedAt
+        user { id name updatedAt }
+        parent { id }
+        issue { id }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}

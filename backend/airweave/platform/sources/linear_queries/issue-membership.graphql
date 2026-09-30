@@ -1,0 +1,3 @@
+query OwnedLinearIssueMembership($issueId: String!) {
+  issue(id: $issueId) { id team { id } archivedAt trashed }
+}
