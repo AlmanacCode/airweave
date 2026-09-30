@@ -156,9 +156,39 @@ async def test_corrupt_blob_bytes_fail_before_projection(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_partial_capture_cannot_be_marked_successfully_projected(tmp_path):
-    with pytest.raises(ValueError, match="complete active"):
-        await map_gmail(record(part(), completeness="partial"), AsyncMock(), tmp_path)
+async def test_missing_attachment_keeps_available_body_searchable_and_original_partial(tmp_path):
+    source = record(
+        {
+            "mimeType": "multipart/mixed",
+            "parts": [
+                part(b"Available message text"),
+                {
+                    "mimeType": "application/pdf",
+                    "filename": "uncaptured.pdf",
+                    "body": {"attachmentId": "large", "size": 500000000},
+                },
+            ],
+        },
+        completeness="partial",
+    )
+    before = source.model_dump()
+    storage = AsyncMock()
+    entities = await map_gmail(source, storage, tmp_path)
+    assert len(entities) == 1
+    assert "Available message text" in next(tmp_path.glob("*.html")).read_text()
+    assert source.model_dump() == before
+    storage.read_file.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_partial_capture_still_requires_actual_message_body(tmp_path):
+    source = record(
+        {"mimeType": "text/plain", "body": {"attachmentId": "body", "size": 3}},
+        completeness="partial",
+    )
+    with pytest.raises(ValueError, match="exactly one"):
+        await map_gmail(source, AsyncMock(), tmp_path)
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.asyncio

@@ -77,7 +77,13 @@ class GmailProjection:
         self.attachments: list[GmailAttachmentEntity] = []
 
     async def attachment(self, part: dict, path: str) -> None:
-        """Retain each MIME attachment identity, including duplicate filenames."""
+        """Project retained attachment bytes; keep missing bytes explicit on the original."""
+        if (
+            self.record.completeness == "partial"
+            and part.get("body", {}).get("attachmentId")
+            and not any(blob.source_path == path + "/body" for blob in self.record.blobs)
+        ):
+            return
         content = await _body(part, path, self.record, self.storage)
         filename = part.get("filename") or "attachment"
         mime = part.get("mimeType", "application/octet-stream")
@@ -131,8 +137,11 @@ class GmailProjection:
     async def map(self) -> tuple[BaseEntity, ...]:
         """Produce file entities for strict conversion without any provider network calls."""
         data = self.record.payload
-        if self.record.deleted_at is not None or self.record.completeness != "complete":
-            raise ValueError("Gmail projection requires a complete active source record")
+        if self.record.deleted_at is not None or self.record.completeness not in {
+            "complete",
+            "partial",
+        }:
+            raise ValueError("Gmail projection requires an active captured source record")
         if data.get("id") != self.record.identity.native_id or not data.get("threadId"):
             raise ValueError("Gmail projection identity is inconsistent")
         body = await self.render(data["payload"], "/payload")
