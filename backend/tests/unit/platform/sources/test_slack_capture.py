@@ -174,3 +174,49 @@ async def test_thread_not_found_outside_reply_fetch_does_not_invalidate_inventor
             ScanContinuation(),
             files=MagicMock(),
         )
+
+
+@pytest.mark.parametrize(
+    "native,created,updated",
+    [
+        (
+            {"ts": "1355517523.000005", "edited": {"ts": "1355517536.000001"}},
+            "2012-12-14T20:38:43.000005+00:00",
+            "2012-12-14T20:38:56.000001+00:00",
+        ),
+        (
+            {"ts": "1355517523.000005", "latest_reply": "1855517536.999999"},
+            "2012-12-14T20:38:43.000005+00:00",
+            None,
+        ),
+        ({"ts": "invalid", "edited": {"ts": "NaN"}}, None, None),
+        ({"ts": "999999999999.123456", "edited": {"ts": True}}, None, None),
+    ],
+)
+def test_message_native_dates_preserve_precision_and_unknowns(native, created, updated):
+    record = SlackSource._capture_message(native, "C1")
+    assert record.payload == native
+    assert (record.source_created_at.isoformat() if record.source_created_at else None) == created
+    assert (record.source_updated_at.isoformat() if record.source_updated_at else None) == updated
+
+
+@pytest.mark.asyncio
+async def test_conversation_dates_use_distinct_native_units():
+    connector = source()
+    connector._get = AsyncMock(
+        return_value={
+            "channels": [
+                {"id": "C1", "created": 1449252889, "updated": 1689965803820},
+                {"id": "C2", "created": True, "updated": "1689965803820"},
+                {"id": "C3"},
+            ]
+        }
+    )
+    result = await connector.capture_page(
+        CompletedScope(record_type="channel"), ScanContinuation(), files=MagicMock()
+    )
+    first, malformed, absent = result.records
+    assert first.source_created_at.isoformat() == "2015-12-04T18:14:49+00:00"
+    assert first.source_updated_at.isoformat() == "2023-07-21T18:56:43.820000+00:00"
+    assert malformed.source_created_at is malformed.source_updated_at is None
+    assert absent.source_created_at is absent.source_updated_at is None

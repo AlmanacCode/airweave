@@ -533,3 +533,68 @@ async def test_missing_queued_thread_restarts_inventory_before_absence(database,
     assert next(row for row in rows if row.native_id == "C1").deleted_at is None
     assert cursor["canonical_cycle"]["phase"] == "complete"
     assert all(scan.phase == "complete" for scan in scans)
+
+
+async def test_native_slack_dates_reach_persisted_search_fields_and_date_filters(database, source):
+    from datetime import datetime, timezone
+
+    from airweave.domains.entities.canonical.projection_mappers import map_record
+    from airweave.domains.entities.canonical.search_metadata import stamp_search_metadata
+    from airweave.domains.entities.canonical.store import source_record
+    from airweave.domains.search.owned import OwnedSearchService
+    from airweave.domains.search.owned_models import OwnedSearchRequest
+    from airweave.platform.destinations.vespa.transformer import EntityTransformer
+    from airweave.platform.entities._base import AirweaveSystemMetadata
+
+    first, _, _ = runner(
+        database,
+        source,
+        [
+            ROOT,
+            {
+                "messages": [
+                    {"ts": "1767225600.000001", "text": "Before editing"},
+                    {
+                        "ts": "1767225600.000002",
+                        "text": "Edited",
+                        "edited": {"ts": "1767312000.000003"},
+                    },
+                ]
+            },
+        ],
+    )
+    await run(first)
+    rows, _, _ = await saved(database)
+    unchanged = next(row for row in rows if row.native_id == "1767225600.000001")
+    edited = next(row for row in rows if row.native_id == "1767225600.000002")
+    assert unchanged.source_created_at == datetime(2026, 1, 1, microsecond=1, tzinfo=timezone.utc)
+    assert unchanged.source_updated_at is None
+    assert edited.source_updated_at == datetime(2026, 1, 2, microsecond=3, tzinfo=timezone.utc)
+
+    # Exercise the same canonical metadata stamper and Vespa serializer used by projection.
+    async with map_record(source_record(edited), "slack", MagicMock()) as entities:
+        (entity,) = entities
+    entity.airweave_system_metadata = AirweaveSystemMetadata()
+    stamp_search_metadata(entity.airweave_system_metadata, source_record(edited))
+    fields = EntityTransformer()._build_system_metadata(entity)
+    assert fields["source_created_us"] == 1767225600000002
+    assert fields["source_updated_us"] == 1767312000000003
+    assert fields["source_updated_known"] == 1
+    assert fields["canonical_record_type"] == "message"
+
+    # Current-SQL postvalidation enforces inclusive lower and exclusive upper bounds.
+    request = OwnedSearchRequest(
+        query="Edited",
+        sync_ids=(edited.sync_id,),
+        created_after=datetime(2026, 1, 1, microsecond=2, tzinfo=timezone.utc),
+        updated_after=datetime(2026, 1, 2, microsecond=3, tzinfo=timezone.utc),
+    )
+    assert OwnedSearchService._matches(edited, request)
+    assert not OwnedSearchService._matches(unchanged, request)
+    assert not OwnedSearchService._matches(
+        edited, request.model_copy(update={"updated_before": edited.source_updated_at})
+    )
+    stamp_search_metadata(entity.airweave_system_metadata, source_record(unchanged))
+    fields = EntityTransformer()._build_system_metadata(entity)
+    assert fields["source_updated_known"] == 0
+    assert fields["source_updated_us"] is None

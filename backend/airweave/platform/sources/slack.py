@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -49,6 +49,32 @@ from airweave.platform.http_client.retry_helpers import (
 from airweave.platform.sources._base import BaseSource
 from airweave.platform.sources.http_helpers import _parse_retry_after, raise_for_status
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
+
+
+def _message_timestamp(value: object) -> datetime | None:
+    """Decode Slack decimal seconds exactly; unavailable native dates stay unknown."""
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{1,12}(?:\.[0-9]{1,6})?", value):
+        return None
+    seconds, _, fraction = value.partition(".")
+    try:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+            seconds=int(seconds), microseconds=int(fraction.ljust(6, "0"))
+        )
+    except OverflowError:
+        return None
+
+
+def _conversation_timestamp(value: object, *, milliseconds: bool = False) -> datetime | None:
+    """Conversation creation uses seconds; settings updates use milliseconds."""
+    if type(value) is not int or value < 0:
+        return None
+    try:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+            microseconds=value * (1000 if milliseconds else 1_000_000)
+        )
+    except OverflowError:
+        return None
+
 
 # Pattern for Slack mrkdwn special sequences:
 # <@U1234|display_name> → @display_name  (user mention with label)
@@ -208,6 +234,8 @@ class SlackSource(BaseSource):
     @staticmethod
     def _capture_message(message: dict, channel_id: str) -> CaptureRecord:
         """Keep the complete native response; file bytes are explicitly not captured yet."""
+        edited = message.get("edited")
+        edited_ts = edited.get("ts") if isinstance(edited, dict) else None
         return CaptureRecord(
             identity=RecordIdentity(
                 record_type="message", native_id=message["ts"], container_id=channel_id
@@ -215,6 +243,8 @@ class SlackSource(BaseSource):
             payload=message,
             observed_at=datetime.now(timezone.utc),
             completeness="partial" if message.get("files") else "complete",
+            source_created_at=_message_timestamp(message["ts"]),
+            source_updated_at=_message_timestamp(edited_ts),
         )
 
     def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
@@ -255,6 +285,10 @@ class SlackSource(BaseSource):
                     identity=RecordIdentity(record_type="channel", native_id=item["id"]),
                     payload=item,
                     observed_at=datetime.now(timezone.utc),
+                    source_created_at=_conversation_timestamp(item.get("created")),
+                    source_updated_at=_conversation_timestamp(
+                        item.get("updated"), milliseconds=True
+                    ),
                 )
                 for item in items
             )
