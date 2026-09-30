@@ -1,12 +1,14 @@
 """Exercise the opt-in Docs sample with fake provider HTTP and real SQL/HTTP/process reads."""
 
 import json
+import os
 
+import pytest
 from sqlalchemy import text
 
 from airweave.domains.entities.canonical.tests.test_resume_probe import subprocess_script
 
-SCRIPT = r'''
+SCRIPT = r"""
 import asyncio,json,os,sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -66,7 +68,7 @@ async def main():
     finally:
         await engine.dispose()
 asyncio.run(main())
-'''
+"""
 
 
 async def test_workspace_sample_survives_sql_reopen_and_real_http_reader(database, tmp_path):
@@ -85,3 +87,28 @@ async def test_workspace_sample_survives_sql_reopen_and_real_http_reader(databas
     assert result["document_reader"]["verified"]
     assert result["document_reader"]["stale_revision_denied"]
     assert result["document_reader"]["wrong_source_denied"]
+
+
+@pytest.mark.skipif(
+    not os.environ.get("ALMANAC_PROBE_ROOT"), reason="Explicit companion checkout required"
+)
+async def test_workspace_sample_through_almanac_cli(database, tmp_path):
+    async with database() as db:
+        schema = await db.scalar(text("select current_schema()"))
+    code, output, error = await subprocess_script(
+        SCRIPT,
+        {
+            "TEST_ROOT": str(tmp_path),
+            "TEST_SCHEMA": schema,
+            "LIVE_ALMANAC_ROOT": os.environ["ALMANAC_PROBE_ROOT"],
+            "LIVE_ALMANAC_PYTHON": os.environ["ALMANAC_PROBE_PYTHON"],
+        },
+    )
+    assert code == 0, output + error
+    result = json.loads(output.splitlines()[-1])
+    assert result["document_reader"]["verified"]
+    assert (
+        result["document_reader"]["scope"]
+        == "actual_cli_and_almanac_fixture_route_to_real_store_http"
+    )
+    assert result["document_reader"]["revoked_binding_denied"]

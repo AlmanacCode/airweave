@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -65,6 +66,15 @@ async def verify_workspace_document_reader(
         )
     expected = hashlib.sha256(canonical_json(result.document)).hexdigest()
     backend = Path(__file__).resolve().parents[2]
+    consumer = Path(__file__).with_name("workspace_document_read.py")
+    repository = backend.parent
+    python = Path(sys.executable)
+    if os.environ.get("LIVE_ALMANAC_PYTHON"):
+        python = Path(os.environ["LIVE_ALMANAC_PYTHON"]).absolute()
+        repository = Path(os.environ["LIVE_ALMANAC_ROOT"]).resolve()
+        consumer = repository / "backend/tests/live/read_owned_document.py"
+        if not python.is_file() or not consumer.is_file():
+            raise ValueError("Explicit Almanac Python and document consumer required")
     return await run_consumer(
         sessions=sessions,
         organization_id=organization_id,
@@ -72,8 +82,8 @@ async def verify_workspace_document_reader(
         root=root,
         storage=storage,
         query=query,
-        consumer=Path(__file__).with_name("workspace_document_read.py"),
-        repository=backend.parent,
-        python=Path(sys.executable),
+        consumer=consumer,
+        repository=repository,
+        python=python,
         extra={"record_id": str(record.id), "revision": record.revision, "expected": expected},
     )
