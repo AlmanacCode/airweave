@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 import canonical_capture as harness  # settings must precede application imports
-from provider_sample import rest_source
+from provider_sample import rest_source, wispr_source
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -50,6 +50,7 @@ from airweave.platform.cursors.gmail import GmailCursor
 from airweave.platform.cursors.google_calendar import GoogleCalendarCursor
 from airweave.platform.cursors.google_drive import GoogleDriveCursor
 from airweave.platform.http_client.composio_transport import ComposioProxyError
+from airweave.platform.sources.slack import SlackApiError
 
 
 class BudgetExceeded(RuntimeError):
@@ -89,8 +90,35 @@ async def bounded_observations(source, cursor, files, counters, record_limit):
 def safe_failure_reason(error):
     """Only local fixed diagnostics; never emit provider payloads, URLs or IDs."""
     text = str(error)
-    if isinstance(error, BudgetExceeded) and text in {"records", "provider_requests", "blob_bytes"}:
+    if isinstance(error, BudgetExceeded) and text in {
+        "records",
+        "provider_requests",
+        "blob_bytes",
+        "rate_limit",
+    }:
         return text
+    if type(error) is ValueError and text in {
+        "Wispr tool execution failed; capture is incomplete",
+        "Wispr returned incomplete or repeated pagination",
+        "Wispr query cap cannot be partitioned safely",
+        "Wispr date partition made no progress",
+        "Wispr returned a meeting without identity",
+        "Wispr meeting text is not a string",
+        "Wispr returned a different meeting identity",
+        "Wispr meeting changed during paginated capture",
+        "Wispr continuation made no progress",
+        "Wispr meeting exceeds the bounded capture page limit",
+    }:
+        return text
+    if isinstance(error, SlackApiError) and error.code in {
+        "missing_scope",
+        "not_in_channel",
+        "channel_not_found",
+        "is_archived",
+        "method_not_supported_for_channel_type",
+        "not_allowed_token_type",
+    }:
+        return f"Slack request failed: {error.code}"
     if isinstance(error, ComposioProxyError) and (
         text
         in {
@@ -103,6 +131,37 @@ def safe_failure_reason(error):
     ):
         return text
     return None
+
+
+def validate_checkpoint(name, manifest, counters, saved, previous, loaded, attempt, sequence):
+    """Match production cursor/scope capabilities; never manufacture a resume claim."""
+    if name == "google_calendar":
+        calendar_id = manifest["calendar_config"]["calendar_ids"][0]
+        assert set(saved["calendar_tokens"]) == {calendar_id}
+        assert saved["calendar_tokens"][calendar_id]
+        assert set(saved["occurrence_coverage"]) == {calendar_id}
+        expected_scopes = 2 if loaded else 3
+        assert counters["started"] == counters["completed"] == expected_scopes
+        assert bool(counters["sync_token_requests"]) == loaded
+    elif name == "google_drive":
+        assert saved["canonical_page_token"]
+        assert counters["started"] == counters["completed"] == (0 if loaded else 1)
+        assert bool(counters["resumed_changes_requests"]) == loaded
+    elif name in {"slack", "wispr"}:
+        assert saved is None
+        if name == "wispr":
+            assert counters["started"] == counters["completed"] == 0
+        else:
+            assert counters["started"] == counters["completed"] > 0
+        return
+    else:
+        assert saved["canonical_query"] == manifest["query"]
+        assert saved["history_id"] == "" and counters["started"] == counters["completed"] == 1
+    assert saved["canonical_checkpoint"] == {
+        "writer_attempt_id": str(attempt.id),
+        "observed_change_sequence": sequence,
+    }
+    assert saved != previous
 
 
 async def child(manifest):
@@ -121,6 +180,24 @@ async def child(manifest):
     counters["sync_token_requests"] = 0
     counters["resumed_changes_requests"] = 0
     last_operation = "identity"
+    rate_limits = []
+
+    async def observe_slack_rate_limit(response):
+        await response.aread()
+        limited = response.status_code == 429 or response.json().get("error") in {
+            "ratelimited",
+            "rate_limited",
+        }
+        if limited:
+            from airweave.platform.sources.http_helpers import _parse_retry_after
+
+            rate_limits.append(
+                {
+                    "status": response.status_code,
+                    "retry_after_seconds": _parse_retry_after(response, default=60),
+                    "request_number": counters["provider_requests"],
+                }
+            )
 
     async def request_hook(request):
         nonlocal last_operation
@@ -129,6 +206,8 @@ async def child(manifest):
             if request.url.path.endswith("/export")
             else ("download" if request.url.params.get("alt") == "media" else "metadata")
         )
+        if counters["provider_requests"] >= manifest["request_limit"]:
+            raise BudgetExceeded("provider_requests")
         counters["provider_requests"] += 1
         if request.url.params.get("syncToken"):
             counters["sync_token_requests"] += 1
@@ -138,8 +217,6 @@ async def child(manifest):
             and request.url.params.get("pageToken") == previous["canonical_page_token"]
         ):
             counters["resumed_changes_requests"] += 1
-        if counters["provider_requests"] > manifest["request_limit"]:
-            raise BudgetExceeded("provider_requests")
 
     @asynccontextmanager
     async def db_context():
@@ -179,42 +256,48 @@ async def child(manifest):
         cursor_service = SyncCursorService()
         async with sessions() as db:
             previous = await cursor_service.get_cursor_data(db, sync_id, ctx)
-        cursor = SyncCursor(
-            sync_id,
-            {
-                "gmail": GmailCursor,
-                "google_calendar": GoogleCalendarCursor,
-                "google_drive": GoogleDriveCursor,
-            }[name],
-            previous or None,
-        )
-        loaded = cursor.loaded_from_db
+        cursor_schema = {
+            "gmail": GmailCursor,
+            "google_calendar": GoogleCalendarCursor,
+            "google_drive": GoogleDriveCursor,
+        }.get(name)
+        cursor = SyncCursor(sync_id, cursor_schema, previous or None) if cursor_schema else None
+        loaded = cursor.loaded_from_db if cursor else False
         storage = BoundedStorage(Path(manifest["root"]) / "blobs", manifest["blob_byte_limit"])
         files = FileService(job_id, storage, sync_id=sync_id)
         files.MAX_FILE_SIZE_BYTES = manifest["file_byte_limit"]
         fence = SimpleNamespace(organization_id=organization_id, sync_id=sync_id, job_id=job_id)
-        async with (
-            asyncio.timeout(manifest["timeout"]),
-            rest_source(
+        key = os.environ["COMPOSIO_API_KEY"]
+        account_variable = {
+            "gmail": "LIVE_GMAIL_ACCOUNT_ID",
+            "google_calendar": "LIVE_CALENDAR_ACCOUNT_ID",
+            "google_drive": "LIVE_DRIVE_ACCOUNT_ID",
+            "slack": "LIVE_SLACK_ACCOUNT_ID",
+            "wispr": "LIVE_WISPR_ACCOUNT_ID",
+        }[name]
+        connection = (
+            wispr_source(os.environ[account_variable], key, fence, request_hook=request_hook)
+            if name == "wispr"
+            else rest_source(
                 name,
-                os.environ[
-                    {
-                        "gmail": "LIVE_GMAIL_ACCOUNT_ID",
-                        "google_calendar": "LIVE_CALENDAR_ACCOUNT_ID",
-                        "google_drive": "LIVE_DRIVE_ACCOUNT_ID",
-                    }[name]
-                ],
+                os.environ[account_variable],
                 os.environ["LIVE_EXPECTED_EMAIL"],
-                os.environ["COMPOSIO_API_KEY"],
+                key,
                 fence,
                 gmail_query=manifest.get("query", ""),
                 calendar_config=GoogleCalendarConfig.model_validate(manifest["calendar_config"])
                 if is_calendar
                 else None,
                 request_hook=request_hook,
+                response_hook=observe_slack_rate_limit if name == "slack" else None,
                 max_file_bytes=manifest["file_byte_limit"],
-            ) as (source, _),
+            )
+        )
+        async with (
+            asyncio.timeout(manifest["timeout"]),
+            connection as (source, identity_verification),
         ):
+            assert source.cursor_class == cursor_schema
             bus = FakeEventBus()
             attempt = CaptureAttempt(id=uuid4(), number=1)
             pipeline = CanonicalCapturePipeline(
@@ -267,26 +350,7 @@ async def child(manifest):
             )
             rows = list((await db.scalars(select(Entity).where(Entity.sync_id == sync_id))).all())
         assert status == "completed"
-        if is_calendar:
-            calendar_id = manifest["calendar_config"]["calendar_ids"][0]
-            assert set(saved["calendar_tokens"]) == {calendar_id}
-            assert saved["calendar_tokens"][calendar_id]
-            assert set(saved["occurrence_coverage"]) == {calendar_id}
-            expected_scopes = 2 if loaded else 3
-            assert counters["started"] == counters["completed"] == expected_scopes
-            assert bool(counters["sync_token_requests"]) == loaded
-        elif name == "google_drive":
-            assert saved["canonical_page_token"]
-            assert counters["started"] == counters["completed"] == (0 if loaded else 1)
-            assert bool(counters["resumed_changes_requests"]) == loaded
-        else:
-            assert saved["canonical_query"] == manifest["query"]
-            assert saved["history_id"] == "" and counters["started"] == counters["completed"] == 1
-        assert saved["canonical_checkpoint"] == {
-            "writer_attempt_id": str(attempt.id),
-            "observed_change_sequence": sequence,
-        }
-        assert saved != previous
+        validate_checkpoint(name, manifest, counters, saved, previous, loaded, attempt, sequence)
         visible = [r for r in rows if r.deleted_at is None and r.source_payload is not None]
         digest = hashlib.sha256(
             json.dumps(
@@ -319,23 +383,26 @@ async def child(manifest):
             )
         result = {
             "failed": False,
+            "provider": name,
+            "identity_verification": identity_verification,
             "almanac_consumer": consumer_result,
             **counters,
+            "rate_limits": rate_limits,
             "stored_records": len(visible),
             "partial_records": sum(r.completeness != "complete" for r in visible),
             "blob_bytes_written": storage.written_bytes,
-            "checkpoint_saved": True,
+            "checkpoint_saved": saved is not None,
             "observed_change_sequence": sequence,
             "loaded_durable_checkpoint": loaded,
             "job_status": status,
             "payload_revision_digest": digest,
-            "mode": ("calendar_incremental" if loaded else "calendar_initial")
-            if is_calendar
-            else (
-                ("drive_incremental" if loaded else "drive_initial")
-                if name == "google_drive"
-                else "filtered_full_reconciliation"
-            ),
+            "mode": {
+                "gmail": "filtered_full_reconciliation",
+                "google_calendar": "calendar_incremental" if loaded else "calendar_initial",
+                "google_drive": "drive_incremental" if loaded else "drive_initial",
+                "slack": "accessible_history_full_reconciliation",
+                "wispr": "exposed_meeting_enumeration_no_deletion_guarantee",
+            }[name],
             "all_day_occurrences": sum(
                 r.entity_definition_short_name == "event_occurrence"
                 and "date" in r.source_payload.get("start", {})
@@ -354,6 +421,7 @@ async def child(manifest):
             "safe_reason": safe_failure_reason(error),
             "last_operation": last_operation,
             **counters,
+            "rate_limits": rate_limits,
             "checkpoint_unchanged": saved == (previous or None),
             "job_status": status,
         }
@@ -373,7 +441,7 @@ def check_free_disk(provider):
 
 async def main():
     name = os.environ.get("LIVE_LIFECYCLE_PROVIDER", "gmail")
-    if name not in {"gmail", "google_calendar", "google_drive"}:
+    if name not in {"gmail", "google_calendar", "google_drive", "slack", "wispr"}:
         raise ValueError("Unsupported lifecycle provider")
     free_disk_bytes = check_free_disk(name)
     url = harness.test_database_url()
@@ -414,11 +482,27 @@ async def main():
             end = int(time.time())
             manifest = {
                 "provider": name,
-                "request_limit": {"gmail": 600, "google_calendar": 100, "google_drive": 250}[name],
-                "record_limit": {"gmail": 250, "google_calendar": 10000, "google_drive": 2000}[
-                    name
-                ],
-                "timeout": {"gmail": 600, "google_calendar": 180, "google_drive": 300}[name],
+                "request_limit": {
+                    "gmail": 600,
+                    "google_calendar": 100,
+                    "google_drive": 250,
+                    "slack": 600,
+                    "wispr": 150,
+                }[name],
+                "record_limit": {
+                    "gmail": 250,
+                    "google_calendar": 10000,
+                    "google_drive": 2000,
+                    "slack": 10000,
+                    "wispr": 1000,
+                }[name],
+                "timeout": {
+                    "gmail": 600,
+                    "google_calendar": 180,
+                    "google_drive": 300,
+                    "slack": 1800,
+                    "wispr": 300,
+                }[name],
                 "blob_byte_limit": (512 if name == "google_drive" else 256) * 1024 * 1024,
                 "file_byte_limit": FileService.MAX_FILE_SIZE_BYTES
                 if name == "google_drive"

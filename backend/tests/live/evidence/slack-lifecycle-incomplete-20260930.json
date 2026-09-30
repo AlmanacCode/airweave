@@ -1,0 +1,25 @@
+{
+  "provider": "slack",
+  "date": "2026-09-30",
+  "scope": "full accessible history without hidden filter",
+  "limits": {
+    "requests": 150,
+    "observations": 5000,
+    "seconds": 300
+  },
+  "attempt": {
+    "provider_requests": 70,
+    "observations": 457,
+    "started_scopes": 2,
+    "completed_scopes": 0,
+    "job_status": "failed",
+    "safe_reason": "rate_limit",
+    "checkpoint_unchanged": true
+  },
+  "second_process_started": false,
+  "schema_removed": true,
+  "blob_directory_removed": true,
+  "full_scope_verified": false,
+  "retry_after_recorded": false,
+  "provider_writes": false
+}

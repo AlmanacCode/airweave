@@ -66,6 +66,7 @@ async def rest_source(
     *,
     gmail_query="newer_than:7d smaller:5M",
     request_hook=None,
+    response_hook=None,
     calendar_config=None,
     max_file_bytes=10 * 1024 * 1024,
 ):
@@ -74,6 +75,8 @@ async def rest_source(
     transport = ComposioTransport(api_key=key, connected_account_id=account, allowed_hosts={host})
     transport.MAX_BINARY_BYTES = max_file_bytes
     hooks = {"request": [request_hook]} if request_hook is not None else {}
+    if response_hook is not None:
+        hooks["response"] = [response_hook]
     async with httpx.AsyncClient(transport=transport, timeout=180, event_hooks=hooks) as client:
         wrapped = AirweaveHttpClient(
             client, fence.organization_id, name, feature_flag_enabled=False
@@ -92,10 +95,11 @@ async def rest_source(
 
 
 @asynccontextmanager
-async def wispr_source(account, key, fence):
+async def wispr_source(account, key, fence, *, request_hook=None):
     """Verify exact Composio account binding; Wispr exposes no identity profile here."""
     expected_user = os.environ["LIVE_WISPR_USER_ID"]
-    async with httpx.AsyncClient(timeout=180) as client:
+    hooks = {"request": [request_hook]} if request_hook is not None else {}
+    async with httpx.AsyncClient(timeout=180, event_hooks=hooks) as client:
         metadata_response = await client.get(
             "https://backend.composio.dev/api/v3/connected_accounts/" + quote(account, safe=""),
             headers={"x-api-key": key},

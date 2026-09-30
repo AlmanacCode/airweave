@@ -213,3 +213,32 @@ accessible Drive scope and a quiet real delta run; it does not prove the three
 incomplete bodies, a hosted consumer, or live induced deletions/revocations.
 The earlier smaller-budget failure evidence remains unchanged. Sanitized result:
 `evidence/drive-lifecycle-production-limit-20260930.json`.
+
+
+### Slack and Wispr full lifecycle attempts
+
+Both modes use the real canonical orchestrator and production `cursor=None`.
+Slack reconciles only completed channel/message scopes; Wispr has no deletion
+scope or durable provider checkpoint. Neither is described as delta resume.
+Actual network requests are metered, including Wispr session/account operations.
+
+The first Slack full-accessible-history attempt stopped on a rate limit after
+70 requests and 457 observations, with two started scopes and zero completed.
+The job failed, checkpoint stayed unchanged, and private schema/files were removed.
+No repeat process started. Retry-After was not retained in that first attempt.
+The subsequent approved budget is 600 requests, 10,000 observations and 1,800
+seconds per process. Slack uses its five-attempt retry policy and honors the
+full Retry-After wait; the test does not shorten waits to fit its total budget.
+Only status, numeric retry delay and request count are retained as diagnostics.
+The longer attempt's result is pending; do not infer full capture from the budget.
+
+Wispr enumeration and one diagnostic retry each failed after 18 requests and nine
+partial observations. `GET_MEETING` returned an opaque tool error string; the
+source stopped instead of skipping that meeting. A targeted read-only diagnostic
+found no structured status/code or recognized auth/not-found/rate-limit category.
+The underlying provider versus intermediary cause is unknown. No complete source,
+checkpoint, repeat process or deletion guarantee is claimed. Both lifecycle
+attempts cleaned private storage. This is additional failure evidence alongside
+the earlier successful three-record sample, not a replacement for that sample.
+See `evidence/slack-lifecycle-incomplete-20260930.json` and
+`evidence/wispr-lifecycle-incomplete-20260930.json`.

@@ -103,3 +103,15 @@ async def test_unpartitionable_cap_fails(monkeypatch):
     )
     with pytest.raises(ValueError, match="cap"):
         _ = [row async for row in connector._list_all()]
+
+
+@pytest.mark.asyncio
+async def test_explicit_tool_failure_never_becomes_partial_success(monkeypatch):
+    connector = await source()
+    monkeypatch.setattr(
+        connector,
+        "_post",
+        AsyncMock(side_effect=[{"session_id": "session"}, {"data": {}, "error": "failed"}]),
+    )
+    with pytest.raises(ValueError, match="tool execution failed; capture is incomplete"):
+        await connector._meeting("m")
