@@ -219,3 +219,35 @@ async def test_parent_trial_keeps_aggregate_budget_and_marks_killed_usage_unknow
         )
         assert code == 0, stderr
         assert stdout.splitlines()[-1] == "verified"
+
+
+async def test_trial_summary_distinguishes_observation_from_full_scope_evidence():
+    script = r"""
+import sys
+sys.path.insert(0, 'tests/live')
+import provider_lifecycle as lifecycle
+first = dict(failed=False, full_scope_completed=True, payload_revision_digest='same')
+second = dict(failed=False, full_scope_completed=False, payload_revision_digest='same',
+              loaded_durable_checkpoint=True, sync_token_requests=1)
+assert lifecycle.trial_read_summary([first, second]) == {
+    'saved_cursor_reused': True, 'identical_second_read': True}
+for field in ('sync_token_requests', 'resumed_changes_requests', 'resumed_saved_page'):
+    delta = {**second, 'sync_token_requests': 0, field: 1}
+    assert lifecycle.trial_read_summary([first, delta])['saved_cursor_reused']
+result = lifecycle.trial_read_summary([first, {**second, 'sync_token_requests': 0}])
+assert not result['saved_cursor_reused']
+result = lifecycle.trial_read_summary([first, {**second, 'saved_cursor_expired': True}])
+assert not result['saved_cursor_reused']
+result = lifecycle.trial_read_summary([first, {**second, 'failed': True}])
+assert not result['identical_second_read']
+result = lifecycle.trial_read_summary(
+    [first, {**second, 'payload_revision_digest': 'changed'}])
+assert not result['identical_second_read']
+result = lifecycle.trial_read_summary([{'failed': False}, {'failed': False}])
+assert not result['identical_second_read']
+assert not lifecycle.trial_read_summary([])['identical_second_read']
+print('verified')
+"""
+    code, stdout, stderr = await subprocess_script(script, {})
+    assert code == 0, stderr
+    assert stdout.strip().endswith("verified")

@@ -816,6 +816,28 @@ def trial_counter_summary(results):
     }
 
 
+def trial_read_summary(results):
+    """Report observed token reuse and revision stability independently of full scopes."""
+    successful = [item for item in results if not item.get("failed", True)]
+    digests = [item.get("payload_revision_digest") for item in successful]
+    reused = any(
+        item.get("loaded_durable_checkpoint", False)
+        and not item.get("saved_cursor_expired", False)
+        and (
+            item.get("resumed_saved_page", False)
+            or item.get("sync_token_requests", 0) > 0
+            or item.get("resumed_changes_requests", 0) > 0
+        )
+        for item in successful
+    )
+    return {
+        "saved_cursor_reused": reused,
+        "identical_second_read": len(results) == len(successful) == 2
+        and bool(digests[0])
+        and digests[0] == digests[1],
+    }
+
+
 def wispr_request_limit(value: str) -> int:
     """Validate an explicitly reduced trial budget before setup or network access."""
     try:
@@ -962,7 +984,6 @@ async def main():
             async with admin.begin() as connection:
                 await connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
         await admin.dispose()
-    completed = [item for item in results if item.get("full_scope_completed")]
     resume_verified = (
         name == "slack"
         and len(results) == 3
@@ -998,14 +1019,8 @@ async def main():
                     item.get("resumed_page_committed", False) for item in results
                 ),
                 "resumed_partial": any(item.get("resumed_partial", False) for item in results),
-                "saved_cursor_reused": bool(
-                    (resume_verified or gmail_verified)
-                    and not results[1].get("saved_cursor_expired")
-                ),
                 **trial_counter_summary(results),
-                "identical_second_read": len(completed) == 2
-                and completed[0].get("payload_revision_digest")
-                == completed[1].get("payload_revision_digest"),
+                **trial_read_summary(results),
             }
         )
     )
