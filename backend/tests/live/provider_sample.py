@@ -87,6 +87,7 @@ async def rest_source(
             "gmail": (
                 GmailSource,
                 GmailConfig(
+                    expected_mailbox=expected_email,
                     gmail_query=None,
                     included_labels=[],
                     excluded_labels=[],
@@ -94,7 +95,7 @@ async def rest_source(
                     after_date=None,
                 )
                 if gmail_unfiltered
-                else GmailConfig(gmail_query=gmail_query),
+                else GmailConfig(gmail_query=gmail_query, expected_mailbox=expected_email),
             ),
             "google_drive": (GoogleDriveSource, GoogleDriveConfig()),
             "google_calendar": (GoogleCalendarSource, calendar_config or GoogleCalendarConfig()),
@@ -103,7 +104,9 @@ async def rest_source(
         source = await source_type.create(
             auth=auth, logger=logging.getLogger("probe"), http_client=wrapped, config=config
         )
-        await verify_rest_identity(name, source, expected_email)
+        # Gmail create attests this selected mailbox using its native profile.
+        if name != "gmail":
+            await verify_rest_identity(name, source, expected_email)
         yield source, "provider_email"
 
 

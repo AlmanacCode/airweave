@@ -47,12 +47,15 @@ async def main():
                 'blob_bytes_written': 0}
     async def handle(request):
         counters['provider_requests'] += 1
+        if request.url.params.get('fields') == 'emailAddress':
+            return await native.handle(request)
         if request.url.path.endswith('/profile'):
             counters['capture_profile_requests'] += 1
         return await native.handle(request)
     client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
     connector = await GmailSource.create(auth=StaticTokenProvider('synthetic'),
         logger=MagicMock(), http_client=client, config=GmailConfig(
+            expected_mailbox="synthetic@example.test",
             included_labels=[], excluded_labels=[], excluded_categories=[]))
     ctx, _, runtime, bus = components(sessions, (service, fence))
     attempt = CaptureAttempt(id=fence.attempt_id if mode == 'interrupt' else uuid4(),
@@ -183,7 +186,6 @@ sys.path.insert(0, 'tests/live')
 import conftest
 import httpx
 import provider_lifecycle as lifecycle
-from provider_sample import verify_rest_identity
 from airweave.domains.entities.canonical.tests.test_gmail_recovery import NativeHTTP
 from airweave.domains.sources.token_providers.static import StaticTokenProvider
 from airweave.platform.configs.config import GmailConfig
@@ -194,7 +196,6 @@ from airweave.platform.sources.tests.test_gmail_capture import message
 async def synthetic_source(name, account, expected_email, key, fence, **options):
     assert name == 'gmail' and options['gmail_unfiltered'] is True
     native = NativeHTTP([
-        ('/profile', {'emailAddress': expected_email, 'historyId': 'identity-only'}),
         ('/profile', {'historyId': 'capture-boundary'}),
         ('/messages', {'messages': [{'id': 'synthetic-a'}], 'nextPageToken': 'next'}),
         ('/messages/synthetic-a', message('synthetic-a')),
@@ -203,8 +204,8 @@ async def synthetic_source(name, account, expected_email, key, fence, **options)
             event_hooks={'request': [options['request_hook']]}) as client:
         connector = await GmailSource.create(auth=StaticTokenProvider('synthetic'),
             logger=MagicMock(), http_client=client, config=GmailConfig(
+                expected_mailbox=expected_email,
                 included_labels=[], excluded_labels=[], excluded_categories=[]))
-        await verify_rest_identity(name, connector, expected_email)
         yield connector, 'provider_email'
 
 lifecycle.rest_source = synthetic_source

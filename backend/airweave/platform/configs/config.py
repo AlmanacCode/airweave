@@ -240,6 +240,15 @@ class GitLabConfig(SourceConfig):
 class GmailConfig(SourceConfig):
     """Gmail configuration schema."""
 
+    expected_mailbox: str | None = Field(
+        default=None,
+        pattern=r"^[^\s@]+@[^\s@]+$",
+        description=(
+            "Native mailbox identity attested by the trusted account binding. "
+            "Required for owned capture."
+        ),
+    )
+
     after_date: Optional[str] = Field(
         None,
         title="After Date",

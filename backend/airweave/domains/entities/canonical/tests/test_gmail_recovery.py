@@ -1,5 +1,6 @@
 """Actual Gmail transport/page source, lifecycle and PostgreSQL; native HTTP is synthetic."""
 
+from contextlib import aclosing
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -27,6 +28,8 @@ class NativeHTTP:
         self.calls = []
 
     async def handle(self, request):
+        if request.url.params.get("fields") == "emailAddress":
+            return httpx.Response(200, json={"emailAddress": "synthetic@example.test"})
         self.calls.append((str(request.url).split("?")[0], dict(request.url.params)))
         expected, response = self.responses.pop(0)
         assert str(request.url).split("?")[0] == BASE + expected
@@ -44,7 +47,11 @@ async def setup(database, source, native, *, attempt=1, query=None):
         logger=MagicMock(),
         http_client=client,
         config=GmailConfig(
-            gmail_query=query, included_labels=[], excluded_labels=[], excluded_categories=[]
+            expected_mailbox="synthetic@example.test",
+            gmail_query=query,
+            included_labels=[],
+            excluded_labels=[],
+            excluded_categories=[],
         ),
     )
     ctx, _, runtime, bus = components(database, source)
@@ -98,7 +105,7 @@ async def test_full_resume_interleaved_history_known_omission_and_next_delta(dat
         ]
     )
     pipeline, ctx, runtime, client = await setup(database, source, native)
-    async with client:
+    async with aclosing(client):
         with pytest.raises(ConnectionError, match="interruption"):
             await run(pipeline, ctx, runtime)
     async with database() as db:
@@ -106,7 +113,7 @@ async def test_full_resume_interleaved_history_known_omission_and_next_delta(dat
         assert "canonical_checkpoint" not in cursor.cursor_data
         assert cursor.cursor_data["canonical_cycle"]["promoted_checkpoint"] is None
     pipeline, ctx, runtime, client = await setup(database, source, native, attempt=2)
-    async with client:
+    async with aclosing(client):
         await run(pipeline, ctx, runtime)
     assert len([url for url, _ in native.calls if url.endswith("/profile")]) == 1
     assert [
@@ -145,7 +152,7 @@ async def test_full_resume_interleaved_history_known_omission_and_next_delta(dat
         ]
     )
     pipeline, ctx, runtime, client = await setup(database, (service, next_fence), delta)
-    async with client:
+    async with aclosing(client):
         await run(pipeline, ctx, runtime)
     assert delta.calls[0][1]["startHistoryId"] == "120"
     assert not delta.responses
@@ -169,7 +176,7 @@ async def test_filtered_mutating_view_omission_is_not_provider_deletion(database
         [("/messages", {"messages": [{"id": "a"}]}), ("/messages/a", message("a", labelIds=[]))]
     )
     pipeline, ctx, runtime, client = await setup(database, source, native, query="in:inbox")
-    async with client:
+    async with aclosing(client):
         await run(pipeline, ctx, runtime)
     assert native.calls[0][1]["q"] == "in:inbox"
     async with database() as db:
@@ -193,7 +200,7 @@ async def test_history_expiry_restarts_full_without_using_partial_sightings(data
         ]
     )
     pipeline, ctx, runtime, client = await setup(database, source, native)
-    async with client:
+    async with aclosing(client):
         await run(pipeline, ctx, runtime)
     async with database() as db:
         cycle = await source[0].read_cycle(db, pipeline._writer())
@@ -221,17 +228,17 @@ async def test_history_offset_resume_and_lost_final_ack_do_not_rehydrate_committ
     )
     native = NativeHTTP(responses)
     pipeline, ctx, runtime, client = await setup(database, source, native)
-    async with client:
+    async with aclosing(client):
         with pytest.raises(ConnectionError, match="partial history"):
             await run(pipeline, ctx, runtime)
     pipeline, ctx, runtime, client = await setup(database, source, native, attempt=2)
-    async with client:
+    async with aclosing(client):
         await pipeline.run_scans(ctx, runtime, no_limits)
         # The process disappears after its durable final page, before final checkpoint publication.
     assert not native.responses
     calls = len(native.calls)
     pipeline, ctx, runtime, client = await setup(database, source, native, attempt=3)
-    async with client:
+    async with aclosing(client):
         await run(pipeline, ctx, runtime)
     assert len(native.calls) == calls
     assert len([url for url, _ in native.calls if "/messages/" in url]) == 51
@@ -268,7 +275,7 @@ async def test_new_job_resumes_active_cycle_after_exhausted_server_error(
     )
     service, fence = source
     pipeline, ctx, runtime, client = await setup(database, source, native)
-    async with client:
+    async with aclosing(client):
         with pytest.raises(SourceServerError):
             await run(pipeline, ctx, runtime)
     async with database() as db:
@@ -300,7 +307,7 @@ async def test_new_job_resumes_active_cycle_after_exhausted_server_error(
             attempt_number=1,
         )
     pipeline, ctx, runtime, client = await setup(database, (service, next_fence), native)
-    async with client:
+    async with aclosing(client):
         await run(pipeline, ctx, runtime)
     assert not native.responses
     assert sum(url.endswith("/messages/a") for url, _ in native.calls) == 1
@@ -311,3 +318,23 @@ async def test_new_job_resumes_active_cycle_after_exhausted_server_error(
         assert completed.phase == "complete"
         assert completed.promoted_checkpoint.checkpoint.value == {"history_id": "120"}
         assert {row.native_id for row in (await db.scalars(select(Entity))).all()} == {"a", "b"}
+
+
+async def test_wrong_native_mailbox_never_starts_capture(database, source):
+    native = NativeHTTP([])
+    async with database() as db:
+        before = (await db.execute(select(SyncCursor))).scalars().all()
+        before = [(item.id, item.cursor_data) for item in before]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(native.handle)) as client:
+        with pytest.raises(ValueError, match="does not match"):
+            await GmailSource.create(
+                auth=StaticTokenProvider("same-broker-account"),
+                logger=MagicMock(),
+                http_client=client,
+                config=GmailConfig(expected_mailbox="different@example.test"),
+            )
+    assert native.calls == []
+    async with database() as db:
+        assert (await db.execute(select(Entity))).scalars().all() == []
+        after = (await db.execute(select(SyncCursor))).scalars().all()
+        assert [(item.id, item.cursor_data) for item in after] == before

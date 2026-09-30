@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from tenacity import retry, retry_if_exception, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
@@ -105,6 +106,13 @@ def _wait_gmail_request(retry_state) -> float:
     return wait_rate_limit_with_backoff(retry_state)
 
 
+class GmailProfile(BaseModel):
+    """Native mailbox identity; unrelated profile fields remain provider-owned."""
+
+    model_config = ConfigDict(extra="ignore")
+    emailAddress: str = Field(pattern=r"^[^\s@]+@[^\s@]+$")
+
+
 @source(
     name="Gmail",
     short_name="gmail",
@@ -134,15 +142,23 @@ class GmailSource(BaseSource):
 
     canonical_container_parents = {}
     capture_config: GmailConfig
+    _verified_mailbox: str | None = None
+
+    def _require_mailbox(self) -> None:
+        """Direct capture calls cannot bypass native identity verification."""
+        expected = self.capture_config.expected_mailbox
+        if expected is None or self._verified_mailbox != expected.casefold():
+            raise ValueError("Owned Gmail capture requires an attested mailbox identity")
 
     @property
     def capture_cycle_configuration(self) -> CycleConfiguration:
         """Bind the actual query and typed filters; preserve every existing filtered scope."""
+        self._require_mailbox()
         query = self._build_gmail_query()
         fingerprint = hashlib.sha256(
             json.dumps(
                 {
-                    "capture_version": 1,
+                    "capture_version": 2,
                     "query": query,
                     "filters": self.capture_config.model_dump(mode="json"),
                 },
@@ -156,6 +172,7 @@ class GmailSource(BaseSource):
         )
 
     def _canonical_capture(self, files: FileService | None = None) -> GmailCapture:
+        self._require_mailbox()
         return GmailCapture(
             self._get_capture_json,
             self._build_gmail_query(),
@@ -171,6 +188,7 @@ class GmailSource(BaseSource):
 
     def initial_continuation(self, cycle: CaptureCycle) -> ScanContinuation:
         """Resume the cycle's original mailbox boundary, never a fresh profile value."""
+        self._require_mailbox()
         return GmailPages.initial(cycle)
 
     async def capture_page(
@@ -233,6 +251,8 @@ class GmailSource(BaseSource):
             "excluded_categories", ["promotions", "social"]
         )
         instance.gmail_query = config_dict.get("gmail_query")
+        if config.expected_mailbox is not None:
+            await instance.validate()
 
         return instance
 
@@ -1074,5 +1094,18 @@ class GmailSource(BaseSource):
             raise
 
     async def validate(self) -> None:
-        """Validate credentials by pinging the Gmail user profile."""
-        await self._get("https://gmail.googleapis.com/gmail/v1/users/me/profile")
+        """Re-attest the native mailbox before permitting owned capture."""
+        self._verified_mailbox = None
+        raw = await self._get_capture_json(
+            "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+            params={"fields": "emailAddress"},
+        )
+        try:
+            profile = GmailProfile.model_validate(raw)
+        except ValidationError:
+            raise ValueError("Gmail returned an invalid mailbox identity") from None
+        expected = self.capture_config.expected_mailbox
+        if expected is not None:
+            if profile.emailAddress.casefold() != expected.casefold():
+                raise ValueError("Gmail mailbox identity does not match the trusted binding")
+            self._verified_mailbox = expected.casefold()
