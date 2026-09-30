@@ -73,3 +73,22 @@ The canonical/pipeline/wiring regression run passed 376, skipped 2, with one
 on isolated rerun. Final focused retained-text/exclusion/worker checks passed 34.
 The worker readiness mock now uses the real `/.well-known/ready` path and tests
 both healthy 200 and unavailable 503. No private provider calls or deployment ran.
+
+## Gmail size metadata and configured extraction coverage
+
+| Native capability/resource | Product name | Access operation | Stored representation | Sync/change guarantee | Proof | Gap |
+| --- | --- | --- | --- | --- | --- | --- |
+| Inline MIME body / external body bytes | Email text | Retained record projection | Native JSON unchanged; external blob verified against canonical actual byte size and SHA256 | Projection does not refetch or modify capture | Synthetic declared-size discrepancy succeeds; invalid base64 and corrupt canonical bytes still fail | Live retained inline bodies showed native size one byte smaller than decoded data; no upstream cause established |
+| Inline images and attachments | Email extraction parts | Configured converter registry | Available body text plus explicit unsupported part coverage when converter absent | Reprojection follows existing pipeline-version lifecycle | Real SQL partial publication without OCR; configured converter failure still blocks publication | Adding OCR requires pipeline-version change to retry prior unsupported parts; no image understanding claim |
+
+Google documents MIME `size` as byte count, but it is provider metadata rather
+than our storage-integrity checksum. Projection preserves the reported value
+and consumes the retained base64 data or verified canonical blob without an
+additional provider-size equality requirement. External attachment acquisition
+keeps its existing checks; this change does not claim that path was requalified.
+[Native MessagePartBody contract](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages.attachments#MessagePartBody).
+
+Unsupported means no configured converter for that part. It does not turn an
+installed converter's failure into success: malformed PDFs, OCR errors, and
+other attempted-conversion failures still leave publication pending. Scanned
+PDFs with a configured PDF converter but no OCR fallback remain in that category.

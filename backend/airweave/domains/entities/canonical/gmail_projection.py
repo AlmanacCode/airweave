@@ -57,8 +57,9 @@ async def _body(
         content = base64.b64decode(
             encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True
         )
-    if len(content) != int(body.get("size", 0)):
-        raise ValueError("Gmail MIME size differs from committed provider metadata")
+    # Native size is retained metadata, not our integrity authority: live Gmail
+    # responses can disagree with their decoded data. External bytes have already
+    # passed canonical size/SHA verification; inline bytes came from retained JSON.
     return content
 
 

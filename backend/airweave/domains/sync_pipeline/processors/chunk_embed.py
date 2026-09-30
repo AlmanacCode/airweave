@@ -40,9 +40,14 @@ class ChunkEmbedProcessor:
         sparse_embedder: SparseEmbedderProtocol,
     ) -> None:
         """Initialize with converter registry and embedding providers."""
+        self._converter_registry = converter_registry
         self._text_builder = TextualRepresentationBuilder(converter_registry)
         self._dense_embedder = dense_embedder
         self._sparse_embedder = sparse_embedder
+
+    def supports_file_extension(self, extension: str) -> bool:
+        """Whether this processor has a configured converter for these bytes."""
+        return self._converter_registry.for_extension(extension) is not None
 
     async def process(
         self,

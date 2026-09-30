@@ -107,7 +107,7 @@ async def test_external_blob_and_duplicate_filename_attachments_get_distinct_ide
         {
             "mimeType": "multipart/mixed",
             "parts": [
-                {"mimeType": "text/html", "body": {"attachmentId": "body", "size": 11}},
+                {"mimeType": "text/html", "body": {"attachmentId": "body", "size": 10}},
                 part(b"one", "text/plain", filename="../../same.txt", partId="1"),
                 part(b"two", "text/plain", filename="../../same.txt", partId="2"),
             ],
@@ -115,8 +115,8 @@ async def test_external_blob_and_duplicate_filename_attachments_get_distinct_ide
     )
     data = b"<b>body</b>"
     source = source.model_copy(update={"blobs": (blob(source, data, "/payload/parts/0/body"),)})
-    # Provider's declared size must match actual content.
-    source.payload["payload"]["parts"][0]["body"]["size"] = len(data)
+    # Canonical SHA and actual size are authoritative even when native size differs.
+    assert source.payload["payload"]["parts"][0]["body"]["size"] != len(data)
     storage = AsyncMock()
     storage.read_file.return_value = data
     entities = await map_gmail(source, storage, tmp_path)
@@ -219,3 +219,18 @@ async def test_related_html_branch_does_not_get_replaced_by_plain_alternative(tm
 
     assert Path(entities[0].local_path).read_text().strip() == "<p>Complete rich content</p>"
     assert entities[1].file_type == "png"
+
+
+@pytest.mark.asyncio
+async def test_inline_native_size_discrepancy_preserves_data_and_metadata(tmp_path):
+    source = record(part(b"<p>Retained full body</p>", "text/html"))
+    source.payload["payload"]["body"]["size"] -= 1
+    before = source.model_dump()
+    mapped = await map_gmail(source, AsyncMock(), tmp_path)
+    from pathlib import Path
+
+    assert Path(mapped.entities[0].local_path).read_bytes() == b"<p>Retained full body</p>"
+    assert source.model_dump() == before
+    source.payload["payload"]["body"]["data"] = "invalid!!"
+    with pytest.raises(ValueError):
+        await map_gmail(source, AsyncMock(), tmp_path)

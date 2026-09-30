@@ -25,7 +25,6 @@ from airweave.domains.entities.canonical.projection_store import CanonicalProjec
 from airweave.domains.entities.canonical.search_metadata import stamp_search_metadata
 from airweave.domains.entities.canonical.text_artifacts import prepare_text
 from airweave.domains.storage.protocols import StorageBackend
-from airweave.domains.sync_pipeline.file_types import SUPPORTED_FILE_EXTENSIONS
 from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
 from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
 from airweave.platform.destinations.vespa.destination import VespaDestination
@@ -103,7 +102,9 @@ class CanonicalProjector:
             async with map_record(work.record, source_name, self._storage) as mapped:
                 if not mapped.parts:
                     raise ValueError("Projection mapper returned no required content")
-                selected, coverage = _select_inputs(mapped, work, source_name, generation)
+                selected, coverage = _select_inputs(
+                    mapped, work, source_name, generation, self._processor.supports_file_extension
+                )
                 context = ProjectionContext(logger, source_name)
                 runtime = ProjectionRuntime(StrictProjectionTracker())
                 built = await self._processor.build_text(selected, context, runtime)
@@ -204,7 +205,11 @@ class CanonicalProjector:
 
 
 def _select_inputs(
-    mapped: ProjectionInputs, work: ProjectionWork, source_name: str, generation: UUID
+    mapped: ProjectionInputs,
+    work: ProjectionWork,
+    source_name: str,
+    generation: UUID,
+    supports_file_extension: Callable[[str], bool],
 ) -> tuple[list[BaseEntity], ExtractionCoverage]:
     """Classify only deterministic omissions, preserving stable pre-filter part ordinals."""
     selected = []
@@ -216,7 +221,7 @@ def _select_inputs(
         elif (
             part.kind == "file"
             and part.extension is not None
-            and part.extension not in SUPPORTED_FILE_EXTENSIONS
+            and not supports_file_extension(part.extension)
         ):
             outcome, reason = "unsupported", "unsupported_format"
         else:

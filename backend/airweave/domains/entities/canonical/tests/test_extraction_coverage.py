@@ -343,3 +343,53 @@ async def test_coverage_manifest_is_exact_immutable_and_capture_fences_publicati
             )
             is None
         )
+
+
+async def test_inline_image_without_ocr_keeps_body_partial_but_converter_failure_is_fatal(
+    database, source, tmp_path
+):
+    service, fence = source
+    item = original(part(b"retained image bytes", mime="image/png", filename="inline.png"))
+    item.payload["payload"]["mimeType"] = "multipart/related"
+    await capture(database, service, fence, item)
+    storage = FilesystemBackend(tmp_path)
+    target = destination()
+    result = await projector(database, storage).batch(
+        fence.organization_id, fence.sync_id, "gmail", target, logger
+    )
+    assert result.published == 1 and result.failed == 0
+    async with database() as db:
+        row = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
+        coverage = await current_extraction(
+            db, fence.organization_id, fence.sync_id, row.id, row.record_revision
+        )
+        assert coverage.status == "partial"
+        assert [p.outcome for p in coverage.parts] == ["indexed", "unsupported"]
+        assert coverage.parts[1].media_type == "image/png"
+        assert row.indexed_chunk_count > 0
+        assert row.source_payload == item.payload
+        # Enabling OCR changes the pipeline; an actual converter failure must not
+        # masquerade as an unsupported-format success or preserve stale coverage.
+        await db.execute(
+            update(Sync).where(Sync.id == fence.sync_id).values(index_pipeline_version=2)
+        )
+        await db.commit()
+    ocr = MagicMock(convert_batch=AsyncMock(side_effect=lambda paths: dict.fromkeys(paths)))
+    configured = CanonicalProjector(
+        CanonicalProjectionStore(),
+        database,
+        ChunkEmbedProcessor(ConverterRegistry(ocr), FakeDenseEmbedder(), FakeSparseEmbedder()),
+        storage,
+    )
+    target.feed_prepared.reset_mock()
+    failed = await configured.batch(fence.organization_id, fence.sync_id, "gmail", target, logger)
+    assert failed.failed == 1 and failed.published == 0
+    ocr.convert_batch.assert_awaited_once()
+    target.feed_prepared.assert_not_awaited()
+    async with database() as db:
+        assert (
+            await current_extraction(
+                db, fence.organization_id, fence.sync_id, row.id, row.record_revision
+            )
+            is None
+        )
