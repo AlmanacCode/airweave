@@ -1,0 +1,60 @@
+name: Owned source store
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - backend/**
+      - Makefile
+      - .github/workflows/owned-source-store.yml
+  push:
+    branches: [dev]
+    paths:
+      - backend/**
+      - Makefile
+      - .github/workflows/owned-source-store.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owned-store-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  correctness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_USER: sync_test
+          POSTGRES_PASSWORD: disposable-ci-only
+          POSTGRES_DB: sync_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sync_test -d sync_tests"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CANONICAL_TEST_DATABASE_URL: postgresql+asyncpg://sync_test:disposable-ci-only@localhost:5432/sync_tests
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.13'
+      - uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a
+        with:
+          version: 2.3.2
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      - name: Install locked dependencies
+        working-directory: backend
+        run: poetry install --with dev,lint --no-root --no-interaction
+      - name: Verify durable records and publication
+        run: make test-store
+      - name: Verify source capture and transport
+        run: make test-capture
+      - name: Verify indexed retrieval and visibility
+        run: make test-search
