@@ -282,6 +282,7 @@ async def test_managed_linear_binding_only_allows_graphql_origin(monkeypatch):
     )
     fetch = AsyncMock(
         return_value={
+            "id": "ca_test",
             "toolkit": {"slug": "linear"},
             "status": "ACTIVE",
             "auth_config": {"id": "ac_test"},

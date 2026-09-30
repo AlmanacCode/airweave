@@ -241,7 +241,9 @@ async def test_managed_provider_account_binding(monkeypatch):
     provider = await ComposioAuthProvider.create(
         credentials={"api_key": "key"}, config={"account_id": "ca_bound"}
     )
-    fetch = AsyncMock(return_value={"toolkit": {"slug": "gmail"}, "status": "ACTIVE"})
+    fetch = AsyncMock(
+        return_value={"id": "ca_bound", "toolkit": {"slug": "gmail"}, "status": "ACTIVE"}
+    )
     monkeypatch.setattr(provider, "_get_with_auth", fetch)
     result = await provider.get_auth_result("gmail", ["access_token"])
     assert result.credentials is None

@@ -19,6 +19,7 @@ async def test_notion_binding_preserves_version_body_and_native_error(monkeypatc
     )
     fetch = AsyncMock(
         return_value={
+            "id": "ca_notion",
             "toolkit": {"slug": "notion"},
             "status": "ACTIVE",
             "auth_config": {"id": "ac_notion"},
@@ -124,6 +125,7 @@ async def test_notion_rejects_missing_account_or_mismatched_binding(
     )
     fetch = AsyncMock(
         return_value={
+            "id": account,
             "toolkit": {"slug": toolkit},
             "status": "ACTIVE",
             "auth_config": {"id": config_id},

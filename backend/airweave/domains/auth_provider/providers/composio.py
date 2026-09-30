@@ -135,6 +135,14 @@ class ComposioAuthProvider(BaseAuthProvider):
                 "https://backend.composio.dev/api/v3/connected_accounts/"
                 + quote(self.account_id, safe=""),
             )
+        if account.get("id") != self.account_id:
+            raise AuthProviderConfigError(
+                "Connected account identity does not match", provider_name="composio"
+            )
+        if self.user_id is not None and account.get("user_id") != self.user_id:
+            raise AuthProviderConfigError(
+                "Connected account user does not match", provider_name="composio"
+            )
         if account.get("toolkit", {}).get("slug", "").lower() != self._get_composio_slug(
             source_short_name
         ):

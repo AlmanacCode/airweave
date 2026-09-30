@@ -491,6 +491,7 @@ async def test_composio_capability_binds_only_selected_github_account_and_api_ho
     )
     provider._get_with_auth = AsyncMock(
         return_value={
+            "id": "ca_synthetic",
             "toolkit": {"slug": "github"},
             "auth_config": {"id": "cfg"},
             "status": "ACTIVE",
