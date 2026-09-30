@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from airweave.domains.entities.canonical.checkpoint import CanonicalCheckpoint
+from airweave.domains.entities.canonical.cycle_models import CYCLE_KEY
 from airweave.domains.entities.canonical.models import (
     CaptureResult,
     ChangePage,
@@ -502,6 +503,8 @@ class CanonicalRecordStore:
         """Call only after capture barrier and successful exact-scope reconciliation."""
         sync = await self._fenced_sync(db, fence)
         cursor = await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == fence.sync_id))
+        if CYCLE_KEY in cursor_data or (cursor is not None and CYCLE_KEY in cursor.cursor_data):
+            raise CanonicalStoreError("Cycle-owned progress must use explicit cycle finalization")
         if cursor is None:
             cursor = SyncCursor(
                 organization_id=fence.organization_id,

@@ -6,6 +6,13 @@ from pydantic import JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
+from airweave.domains.entities.canonical.cycle_models import BeginCycle, CaptureCycle, CompleteCycle
+from airweave.domains.entities.canonical.cycle_store import (
+    begin_cycle,
+    complete_cycle,
+    cursor_row,
+    cycle_state,
+)
 from airweave.domains.entities.canonical.models import CaptureResult, ReconcileResult
 from airweave.domains.entities.canonical.requests import (
     CaptureBatch,
@@ -121,3 +128,21 @@ class CanonicalCaptureService:
         """Commit one bounded whole-scope absence reconciliation step."""
         async with UnitOfWork(db):
             return await self.scans.reconcile(db, request)
+
+    async def read_cycle(self, db: AsyncSession, fence: WriterFence) -> CaptureCycle | None:
+        """Read the current durable boundary without creating a new cycle."""
+        async with UnitOfWork(db):
+            await self.store._fenced_sync(db, fence)
+            return cycle_state(await cursor_row(db, fence))
+
+    async def begin_cycle(self, db: AsyncSession, request: BeginCycle) -> CaptureCycle:
+        """Resume or explicitly advance the existing checkpoint's cycle."""
+        async with UnitOfWork(db):
+            await self.store._fenced_sync(db, request.fence)
+            return await begin_cycle(db, request)
+
+    async def complete_cycle(self, db: AsyncSession, request: CompleteCycle) -> CaptureCycle:
+        """Atomically verify scope completion and publish the source checkpoint."""
+        async with UnitOfWork(db):
+            sync = await self.store._fenced_sync(db, request.fence)
+            return await complete_cycle(db, sync, request)

@@ -7,10 +7,18 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from airweave.domains.entities.canonical.cycle_models import CycleVersion
+from airweave.domains.entities.canonical.cycle_store import (
+    CycleConflict,
+    attest_cycle,
+    attest_scope,
+    persist,
+)
 from airweave.domains.entities.canonical.requests import (
     CaptureBatch,
     CompletedScope,
     ReconcileScope,
+    RecordIdentity,
     WriterFence,
 )
 from airweave.domains.entities.canonical.scan_models import (
@@ -96,7 +104,20 @@ class CanonicalScanStore:
     async def begin(self, db: AsyncSession, request: BeginScan) -> ScanState:
         """Resume unchanged scans; restart and next-cycle transitions require exact CAS."""
         await self.records._fenced_sync(db, request.fence)
+        cursor, cycle = await attest_cycle(db, request.fence, request.cycle_id)
+        is_root = await attest_scope(db, request.fence, cycle, request.scope)
+        if request.fingerprint != cycle.configuration.fingerprint:
+            raise CycleConflict("Scan configuration differs from the active cycle")
         row = await self._row(db, request.fence, request.scope)
+        if (
+            row is not None
+            and row.cycle_id == request.cycle_id
+            and is_root
+            and cycle.configuration.child_record_types
+            and cycle.root_writer_attempt_id != request.fence.attempt_id
+            and not request.restart
+        ):
+            raise CycleConflict("Restart root membership for this writer attempt")
         if row is None:
             if request.expected is not None or request.restart:
                 raise ScanConflict("Cannot restart a missing scan")
@@ -120,8 +141,6 @@ class CanonicalScanStore:
                 return scan_state(row)
             if request.expected is None:
                 raise ScanConflict("Replacing a scan requires its current version")
-            if row.cycle_id != request.cycle_id and row.phase != "complete":
-                raise ScanConflict("An unfinished cycle must be completed before advancing")
             if row.cycle_id == request.cycle_id and not request.restart:
                 raise ScanConflict("Changed scope configuration requires an explicit restart")
             row.revision += 1
@@ -132,12 +151,30 @@ class CanonicalScanStore:
         row.continuation = request.continuation.value
         row.started_at = datetime.now(timezone.utc)
         row.completed_at = None
+        if is_root:
+            cycle = cycle.model_copy(
+                update={
+                    "root_writer_attempt_id": request.fence.attempt_id,
+                    "version": CycleVersion(
+                        cycle_id=cycle.version.cycle_id, revision=cycle.version.revision + 1
+                    ),
+                }
+            )
+            persist(cursor, cycle)
         await db.flush()
         return scan_state(row)
 
     async def page(self, db: AsyncSession, request: CommitScanPage) -> ScanResult:
         """Capture and advance the page as one transaction, never a partial acknowledgement."""
         sync = await self.records._fenced_sync(db, request.fence)
+        _, cycle = await attest_cycle(db, request.fence, request.cycle_id)
+        is_root = await attest_scope(db, request.fence, cycle, request.scope)
+        if (
+            is_root
+            and cycle.configuration.child_record_types
+            and cycle.root_writer_attempt_id != request.fence.attempt_id
+        ):
+            raise CycleConflict("Root membership belongs to an earlier writer attempt")
         row = self._expect(
             await self._row(db, request.fence, request.scope), request.expected, request.cycle_id
         )
@@ -149,6 +186,13 @@ class CanonicalScanStore:
             for record in request.records
         ):
             raise ScanConflict("Page contains records outside its exact scope")
+        if not is_root:
+            parent = RecordIdentity(
+                record_type=cycle.configuration.root_record_type,
+                native_id=request.scope.container_id,
+            )
+            if any(record.parent != parent for record in request.records):
+                raise ScanConflict("Child records must retain their declared parent identity")
         captured = await self.records._capture_locked(
             db,
             sync,
@@ -165,6 +209,14 @@ class CanonicalScanStore:
     async def reconcile(self, db: AsyncSession, request: ReconcileScan) -> ScanResult:
         """A final page is necessary; absence completion is durable and bounded."""
         sync = await self.records._fenced_sync(db, request.fence)
+        _, cycle = await attest_cycle(db, request.fence, request.cycle_id)
+        is_root = await attest_scope(db, request.fence, cycle, request.scope)
+        if (
+            is_root
+            and cycle.configuration.child_record_types
+            and cycle.root_writer_attempt_id != request.fence.attempt_id
+        ):
+            raise CycleConflict("Root membership belongs to an earlier writer attempt")
         row = self._expect(
             await self._row(db, request.fence, request.scope), request.expected, request.cycle_id
         )
@@ -176,7 +228,11 @@ class CanonicalScanStore:
             ReconcileScope(
                 fence=request.fence,
                 scope=request.scope,
-                removal_reason=request.removal_reason,
+                removal_reason=(
+                    "scope_removed"
+                    if is_root and cycle.configuration.child_record_types
+                    else request.removal_reason
+                ),
                 observed_at=request.observed_at,
                 limit=request.limit,
             ),

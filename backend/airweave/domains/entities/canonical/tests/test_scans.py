@@ -7,6 +7,12 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
+from airweave.domains.entities.canonical.cycle_models import (
+    BeginCycle,
+    CompleteCycle,
+    CycleConfiguration,
+)
+from airweave.domains.entities.canonical.cycle_store import CycleConflict
 from airweave.domains.entities.canonical.requests import CompletedScope
 from airweave.domains.entities.canonical.scan_models import (
     BeginScan,
@@ -27,6 +33,18 @@ FINGERPRINT = "a" * 64
 
 
 async def begin(database, service, fence, *, cycle=None, **kwargs):
+    if cycle is None:
+        async with database() as db:
+            active = await service.begin_cycle(
+                db,
+                BeginCycle(
+                    fence=fence,
+                    configuration=CycleConfiguration(
+                        fingerprint=FINGERPRINT, root_record_type="event"
+                    ),
+                ),
+            )
+        cycle = active.version.cycle_id
     async with database() as db:
         return await service.begin_scan(
             db,
@@ -157,16 +175,31 @@ async def test_partial_cannot_reconcile_and_expired_cursor_restarts_sweep(databa
 async def test_completed_scope_reused_in_cycle_but_next_cycle_refreshes(database, source):
     service, fence = source
     state = await begin(database, service, fence)
-    with pytest.raises(ScanConflict, match="unfinished"):
-        await begin(database, service, fence, expected=state.version)
+    with pytest.raises(CycleConflict):
+        await begin(database, service, fence, cycle=uuid4(), expected=state.version)
     final = await page(database, service, fence, state, final=True)
     complete = (await reconcile(database, service, fence, final.state)).state
     assert await begin(database, service, fence, cycle=state.cycle_id) == complete
-    next_cycle = await begin(database, service, fence, expected=complete.version)
+    async with database() as db:
+        active = await service.read_cycle(db, fence)
+    async with database() as db:
+        finished = await service.complete_cycle(
+            db, CompleteCycle(fence=fence, expected=active.version)
+        )
+    async with database() as db:
+        following = await service.begin_cycle(
+            db,
+            BeginCycle(
+                fence=fence, configuration=finished.configuration, expected=finished.version
+            ),
+        )
+    next_cycle = await begin(
+        database, service, fence, cycle=following.version.cycle_id, expected=complete.version
+    )
     assert next_cycle.cycle_id != complete.cycle_id
     assert next_cycle.version.sweep_id != complete.version.sweep_id
     assert next_cycle.phase == "collecting"
-    with pytest.raises(ScanConflict, match="unfinished"):
+    with pytest.raises(CycleConflict):
         await begin(
             database,
             service,
@@ -199,19 +232,11 @@ async def test_scope_identity_null_and_empty_are_distinct_and_pages_cannot_cross
     state = await begin(database, service, fence)
     with pytest.raises(ScanConflict, match="outside"):
         await page(database, service, fence, state, observation(container_id=""))
+    from airweave.domains.entities.canonical.scan_store import scope_key
+
+    assert scope_key(SCOPE) != scope_key(CompletedScope(record_type="event", container_id=""))
     async with database() as db:
-        other = await service.begin_scan(
-            db,
-            BeginScan(
-                fence=fence,
-                scope=CompletedScope(record_type="event", container_id=""),
-                cycle_id=state.cycle_id,
-                fingerprint=FINGERPRINT,
-            ),
-        )
-    assert state.version.sweep_id != other.version.sweep_id
-    async with database() as db:
-        assert await db.scalar(select(func.count()).select_from(CaptureScan)) == 2
+        assert await db.scalar(select(func.count()).select_from(CaptureScan)) == 1
         assert await db.scalar(select(func.count()).select_from(Entity)) == 0
 
 
@@ -248,32 +273,3 @@ async def test_scan_migration_preserves_existing_legacy_records(database, source
     async with database() as db:
         legacy = await db.scalar(select(Entity).where(Entity.record_revision == 0))
         assert legacy is not None and legacy.entity_id == "legacy-native-key"
-
-
-async def test_root_refresh_does_not_restart_completed_child_in_same_cycle(database, source):
-    service, fence = source
-    child = await begin(database, service, fence)
-    final = await page(database, service, fence, child, final=True)
-    complete = (await reconcile(database, service, fence, final.state)).state
-    root_scope = CompletedScope(record_type="channel")
-    async with database() as db:
-        root = await service.begin_scan(
-            db,
-            BeginScan(
-                fence=fence, scope=root_scope, cycle_id=child.cycle_id, fingerprint=FINGERPRINT
-            ),
-        )
-    async with database() as db:
-        refreshed = await service.begin_scan(
-            db,
-            BeginScan(
-                fence=fence,
-                scope=root_scope,
-                cycle_id=child.cycle_id,
-                fingerprint=FINGERPRINT,
-                expected=root.version,
-                restart=True,
-            ),
-        )
-    assert refreshed.version.sweep_id != root.version.sweep_id
-    assert await begin(database, service, fence, cycle=child.cycle_id) == complete
