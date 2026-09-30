@@ -76,25 +76,24 @@ venv-launch failure and successful rerun, independent checks found 0 retained
 `canonical_live_*` schemas and 0 private live directories. No complete-source
 coverage, checkpoint, hosted authentication, or deployed product proof is claimed.
 
-## Historical Slack sample and current Wispr sampler
+## Historical Slack and Wispr samples
 
-The earlier Slack sample below used the old observation adapter. Slack now uses
-durable pages and the sampler explicitly directs it to `provider_lifecycle.py`;
-there is no second capture implementation. `LIVE_PROVIDERS=wispr` remains supported,
-with `LIVE_WISPR_ACCOUNT_ID` and `LIVE_WISPR_USER_ID` for a previously connected
-account. Slack's lifecycle verifies `auth.test` and the matching `users.info`
-email against `LIVE_EXPECTED_EMAIL`. Wispr verifies
-exact ACTIVE Composio account ID, toolkit and principal; this is weaker than a
-provider mailbox/profile check and is not an Almanac user binding. A Wispr-only
-run does not require the email variable.
+Both samples below used the former observation adapters. Slack and Wispr now
+use durable pages; `canonical_capture.py` rejects these sources and directs callers
+to the shared `provider_lifecycle.py`. Do not use `LIVE_PROVIDERS=wispr` or
+`LIVE_PROVIDERS=slack` with the old sampler.
 
-The historical Slack and current Wispr sampler stop after three distinct records, or
-25 observations. No file/blob presence is required. Repeated native identities
-are reduced to their latest raw observation in this bounded sample before
-capture and replay; Slack history/replies can return the same parent twice.
-Declared channel/container parent relationships are retained. Every record's
-native JSON is compared after durable readback; identical replay must add no
-journal changes. Source markers/checkpoints remain deliberately uncommitted.
+The current lifecycle selects `LIVE_LIFECYCLE_PROVIDER=wispr`, with
+`LIVE_WISPR_ACCOUNT_ID` and `LIVE_WISPR_USER_ID` for the existing connected account.
+It verifies exact ACTIVE Composio account ID, toolkit and principal. This is weaker
+than a provider mailbox/profile check and is not an Almanac user binding. Wispr
+requires no email variable. Slack verifies `auth.test` and matching `users.info`
+email against `LIVE_EXPECTED_EMAIL`.
+
+The historical samples stopped after three distinct records or25 observations.
+Exact native JSON survived durable readback and identical replay added no journal
+changes. Source markers/checkpoints remained deliberately uncommitted. These are
+historical sample results, not verification of the new page adapters.
 
 Verified 2026-09-30: Slack produced four observations and three distinct records
 (channel/message), with three journal changes, exact fresh-connection readback
@@ -220,9 +219,11 @@ The earlier smaller-budget failure evidence remains unchanged. Sanitized result:
 ### Slack and Wispr full lifecycle attempts
 
 These historical attempts used the real canonical orchestrator and production
-`cursor=None`. Slack's current durable-page trial is described below. Wispr still
-has no deletion scope or durable provider checkpoint; its enumeration is not a
-delta-resume guarantee.
+`cursor=None`. Current adapters use canonical durable page checkpoints. Slack's
+interruption trial is described below. Wispr now resumes individual meeting scopes,
+but has no provider delta cursor or deletion evidence; its discovery-only traversal
+is not an exhaustive-source claim. Its current lifecycle runs first/second cycles;
+the deliberate same-job interruption probe is still Slack-specific.
 Actual network requests are metered, including Wispr session/account operations.
 
 The first Slack full-accessible-history attempt stopped on a rate limit after
@@ -291,3 +292,29 @@ Private schema, downloaded files, and resume evidence are removed by the parent.
 resume using synthetic Slack responses and isolated PostgreSQL. Its budget tests
 use fake child processes to check decreasing limits and unknown killed-child usage.
 These are harness tests, not evidence of live Slack coverage or throughput.
+
+### Planned Wispr same-job recovery proof (not yet runnable)
+
+The current `LIVE_LIFECYCLE_PROVIDER=wispr PYTHONPATH=. .venv/bin/python
+tests/live/provider_lifecycle.py` invokes the real page pipeline, but does **not**
+prove failure recovery: `run_trials` restarts a failed Wispr run zero times, and
+`PageResumeProbe` matches only Slack message scopes with pending replies. Its
+current Wispr limits are150 requests/1,000 observations/300 seconds **per process**,
+not an aggregate interruption budget. Do not call that command a resume trial.
+
+A narrowly extended existing probe should interrupt before the next body request
+after three meeting child scopes are SQL-verified complete. Persist only private
+scan/cycle identity, revision and completed-sibling identity evidence; retain no
+meeting content in diagnostic output. A fresh child uses the same job with writer
+attempt2, refreshes listing membership, then commits one previously incomplete
+meeting. Verify the three prior child revisions remain unchanged and intercept
+GET arguments in memory to assert zero calls for those completed identities. End
+after this proof, without requiring a complete traversal or starting a new cycle.
+
+Proposed aggregate guard:20 HTTP requests including account/session/listing/body
+calls across both children,600 observed records and180 seconds total; no retries.
+A body needing many ranges, changed inventory, rate failure or exhausted budget
+may make the proof inconclusive; stop immediately on a rate signal. Reuse the parent's remaining-budget accounting,
+private PostgreSQL schema and cleanup on every exit. Add offline process/SQL tests
+for the Wispr selector and early-failure path before requesting a live run. No new
+command switch or executable trial mode has been implemented for this proposal.
