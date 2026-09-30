@@ -28,6 +28,7 @@ os.environ.update(
     POSTGRES_PASSWORD="unused",
 )
 import httpx  # noqa: E402
+from pydantic import ValidationError  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
@@ -35,7 +36,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 import conftest  # noqa: E402,F401 - local test settings must precede Airweave imports
 from airweave.adapters.storage.filesystem import FilesystemBackend  # noqa: E402
 from airweave.domains.entities.canonical.query import CanonicalQueryService  # noqa: E402
-from airweave.domains.entities.canonical.query_models import RecordListQuery  # noqa: E402
+from airweave.domains.entities.canonical.query_models import (  # noqa: E402
+    RecordFilters,
+    RecordListQuery,
+)
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore  # noqa: E402
 from airweave.domains.entities.canonical.requests import CaptureBatch, CaptureRecord  # noqa: E402
 from airweave.domains.entities.canonical.service import CanonicalCaptureService  # noqa: E402
@@ -45,10 +49,15 @@ from airweave.domains.sources.token_providers.protocol import ManagedAuthProvide
 from airweave.domains.storage.file_service import FileService  # noqa: E402
 from airweave.domains.storage.paths import StoragePaths  # noqa: E402
 from airweave.models import Organization, Sync, SyncJob  # noqa: E402
-from airweave.platform.configs.config import GmailConfig, GoogleDriveConfig  # noqa: E402
+from airweave.platform.configs.config import (  # noqa: E402
+    GmailConfig,
+    GoogleCalendarConfig,
+    GoogleDriveConfig,
+)
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient  # noqa: E402
 from airweave.platform.http_client.composio_transport import ComposioTransport  # noqa: E402
 from airweave.platform.sources import GmailSource, GoogleDriveSource  # noqa: E402
+from airweave.platform.sources.google_calendar import GoogleCalendarSource  # noqa: E402
 
 logging.disable(logging.CRITICAL)
 PROBE_STAGE = "initialization"
@@ -99,6 +108,17 @@ async def fetch_records(name, account, expected_email, key, fence, root):
             )
             profile = await source._get("https://gmail.googleapis.com/gmail/v1/users/me/profile")
             email = profile.get("emailAddress", "")
+        elif name == "google_calendar":
+            source = await GoogleCalendarSource.create(
+                auth=auth,
+                logger=logging.getLogger("probe"),
+                http_client=wrapped,
+                config=GoogleCalendarConfig(),
+            )
+            profile = await source._get(
+                "https://www.googleapis.com/calendar/v3/users/me/calendarList/primary"
+            )
+            email = profile.get("id", "")
         else:
             source = await GoogleDriveSource.create(
                 auth=auth,
@@ -122,9 +142,16 @@ async def fetch_records(name, account, expected_email, key, fence, root):
                 # selected sample does not prove exhaustive source enumeration.
                 if isinstance(item, CaptureRecord):
                     records.append(item)
-                    if (len(records) >= 3 and any(x.blobs for x in records)) or len(records) >= 25:
+                    if len(records) >= 25 or (
+                        name != "google_calendar"
+                        and len(records) >= 3
+                        and any(x.blobs for x in records)
+                    ):
                         break
-        if not records or not any(x.blobs for x in records):
+        if name == "google_calendar":
+            if not any(x.identity.record_type == "event" for x in records):
+                raise ValueError("Bounded Calendar sample did not contain an event")
+        elif not records or not any(x.blobs for x in records):
             raise ValueError("Bounded source sample did not contain a real owned blob")
     return records, storage
 
@@ -151,10 +178,11 @@ async def verify(name, account, email, key, sessions, engine, root):
     global PROBE_STAGE
     PROBE_STAGE = name + ":provider_capture"
     records, _ = await fetch_records(name, account, email, key, fence, root)
-    PROBE_STAGE = name + ":durable_verification"
+    PROBE_STAGE = name + ":durable_capture"
     async with sessions() as db:
         committed = await service.capture(db, CaptureBatch(fence=fence, records=tuple(records)))
     await engine.dispose()  # Force readback over fresh PostgreSQL connections.
+    PROBE_STAGE = name + ":durable_readback"
     storage = FilesystemBackend(root / "blobs")  # New filesystem storage instance.
     expected = {item.identity.entity_key: item for item in records}
     listed = []
@@ -162,7 +190,10 @@ async def verify(name, account, email, key, sessions, engine, root):
     while True:
         async with sessions() as db:
             page = await query.list_records(
-                db, organization_id, sync_id, RecordListQuery(limit=2, cursor=cursor)
+                db,
+                organization_id,
+                sync_id,
+                RecordListQuery(limit=2, cursor=cursor, filters=RecordFilters(state="all")),
             )
         listed.extend(page.records)
         if not page.has_more:
@@ -203,7 +234,7 @@ async def verify(name, account, email, key, sessions, engine, root):
         "journal_changes": len(changes),
         "blobs": blob_count,
         "blob_bytes": total_bytes,
-        "blob_sha_verified": True,
+        "blob_sha_verified": True if blob_count else None,
         "replay_new_changes": 0,
         "fresh_connections_readback": True,
         "full_scope_completed": False,
@@ -216,13 +247,14 @@ async def main():
     url = test_database_url()
     key = os.environ["COMPOSIO_API_KEY"]
     selected = os.environ.get("LIVE_PROVIDERS", "gmail,google_drive").split(",")
-    if not selected or set(selected) - {"gmail", "google_drive"}:
-        raise ValueError("LIVE_PROVIDERS must select gmail and/or google_drive")
+    if not selected or set(selected) - {"gmail", "google_drive", "google_calendar"}:
+        raise ValueError("LIVE_PROVIDERS must select gmail, google_drive and/or google_calendar")
     inputs = [
         (name, os.environ[variable], os.environ["LIVE_EXPECTED_EMAIL"])
         for name, variable in (
             ("gmail", "LIVE_GMAIL_ACCOUNT_ID"),
             ("google_drive", "LIVE_DRIVE_ACCOUNT_ID"),
+            ("google_calendar", "LIVE_CALENDAR_ACCOUNT_ID"),
         )
         if name in selected
     ]
@@ -242,6 +274,8 @@ async def main():
                 "0000_baseline.py",
                 "0001_canonical_records.py",
                 "0002_projection_publication.py",
+                "0003_mail_thread_index.py",
+                "0004_projection_generation.py",
             ):
                 await connection.run_sync(migrate, migration)
         with TemporaryDirectory(prefix="airweave-private-live-") as directory:
@@ -274,6 +308,11 @@ if __name__ == "__main__":
     except Exception as error:
         # Never print SQL parameters, native payloads, credentials, or exception tracebacks.
         details = {"failed": True, "error_type": type(error).__name__, "stage": PROBE_STAGE}
+        if isinstance(error, ValidationError):
+            # Types only: validation input/context can contain entire original messages.
+            details["validation_error_types"] = sorted(
+                {item["type"] for item in error.errors(include_input=False, include_context=False)}
+            )
         if isinstance(error, httpx.HTTPStatusError):
             details["http_status"] = error.response.status_code
             details["host"] = error.request.url.host
