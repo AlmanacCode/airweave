@@ -591,3 +591,40 @@ def test_review_submission_is_not_invented_as_creation_time():
     )
     assert item.source_created_at is None and item.source_updated_at is None
     assert item.payload["native"]["submitted_at"] == "2026-09-30T10:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_transferred_issue_withdraws_old_scope_without_reading_new_comments():
+    target = "https://api.github.com/repos/other/repo/issues/9"
+    moved = {**ISSUE, "number": 9, "repository_url": "https://api.github.com/repos/other/repo"}
+    capture, client = await source(
+        response(REPO),
+        response(REPO),
+        response([ISSUE]),
+        response(REPO),
+        response({}, status=301, headers={"Location": target}),
+        response(moved),
+        response({}, status=301, headers={"Location": target}),
+        response(moved),
+    )
+    root = await repository(capture)
+    issue = saved(
+        (
+            await capture.capture_page(
+                capture.child_scope(root, "issue"),
+                ScanContinuation(),
+                files=MagicMock(),
+                parent=root,
+            )
+        ).records[0]
+    )
+    with pytest.raises(ScopeAccessLost) as error:
+        await capture.capture_page(
+            capture.child_scope(issue, "comment"),
+            ScanContinuation(),
+            files=MagicMock(),
+            parent=issue,
+        )
+    assert error.value.removal_reason == "scope_removed"
+    await capture.confirm_absent(issue)
+    assert all("/comments" not in call.args[0] for call in client.get.call_args_list)

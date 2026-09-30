@@ -251,9 +251,13 @@ class GitHubSource(BaseSource):
         if parent.identity.record_type == "issue":
             issue = Issue.model_validate(IssuePayload.model_validate(parent.payload).issue)
             current_issue = Issue.model_validate(
-                await self.reader.object(f"/repos/{context.full_name}/issues/{issue.number}")
+                await self.reader.object(
+                    f"/repos/{context.full_name}/issues/{issue.number}", redirects=True
+                )
             )
-            if current_issue.id != issue.id:
+            if current_issue.id != issue.id or current_issue.repository_url != (
+                f"https://api.github.com/repos/{context.full_name}"
+            ):
                 raise GitHubUnavailable("GitHub issue no longer matches the captured parent")
 
     async def _repositories(
@@ -502,12 +506,14 @@ class GitHubSource(BaseSource):
             try:
                 current = Issue.model_validate(
                     await self.reader.object(
-                        f"/repos/{body.repository.full_name}/issues/{issue.number}"
+                        f"/repos/{body.repository.full_name}/issues/{issue.number}", redirects=True
                     )
                 )
             except GitHubUnavailable:
                 return
-            if current.id != issue.id:
+            if current.id != issue.id or current.repository_url != (
+                f"https://api.github.com/repos/{body.repository.full_name}"
+            ):
                 return
         else:
             raise ValueError("GitHub absence confirmation is only valid for inventory owners")
