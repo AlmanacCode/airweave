@@ -62,6 +62,7 @@ from airweave.platform.http_client.retry_helpers import (
 )
 from airweave.platform.sources._base import BaseSource
 from airweave.platform.sources.gmail_capture import GmailCapture
+from airweave.platform.sources.gmail_errors import GmailThrottleError, raise_gmail_throttle
 from airweave.platform.sources.gmail_pages import GmailPages, invalid_page_token
 from airweave.platform.sources.http_helpers import raise_for_status
 from airweave.platform.utils.filename_utils import safe_filename
@@ -70,6 +71,8 @@ from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 
 def _should_retry_gmail_request(exception: Exception) -> bool:
     """Custom retry condition that excludes 404 errors but includes 429 and timeouts."""
+    if isinstance(exception, GmailThrottleError):
+        return exception.retry_after is None or exception.retry_after <= 120
     if isinstance(exception, (SourceRateLimitError, AuthProviderRateLimitError)):
         # The shared wait caps at 120s. Defer a longer provider minimum instead
         # of retrying before it or extending this request's bounded wait.
@@ -92,6 +95,14 @@ def _should_retry_gmail_request(exception: Exception) -> bool:
     ):
         return True
     return False
+
+
+def _wait_gmail_request(retry_state) -> float:
+    """Honor native quota timing; otherwise reuse the existing bounded backoff."""
+    error = retry_state.outcome.exception()
+    if isinstance(error, GmailThrottleError) and error.retry_after is not None:
+        return max(1.0, error.retry_after)
+    return wait_rate_limit_with_backoff(retry_state)
 
 
 @source(
@@ -350,7 +361,7 @@ class GmailSource(BaseSource):
     @retry(
         stop=stop_after_attempt(5),
         retry=retry_if_exception(_should_retry_gmail_request),
-        wait=wait_rate_limit_with_backoff,
+        wait=_wait_gmail_request,
         reraise=True,
     )
     async def _get(self, url: str, params: Optional[dict] = None) -> dict:
@@ -370,6 +381,7 @@ class GmailSource(BaseSource):
         if response.status_code == 429:
             self.logger.warning("Gmail rate limit reached")
 
+        raise_gmail_throttle(response)
         raise_for_status(
             response,
             source_short_name=self.short_name,
@@ -383,7 +395,7 @@ class GmailSource(BaseSource):
     @retry(
         stop=stop_after_attempt(5),
         retry=retry_if_exception(_should_retry_gmail_request),
-        wait=wait_rate_limit_with_backoff,
+        wait=_wait_gmail_request,
         reraise=True,
     )
     async def _get_capture_json(self, url: str, params: Optional[dict] = None) -> dict:
@@ -425,6 +437,7 @@ class GmailSource(BaseSource):
                         native_error = None
                     if isinstance(native_error, dict) and invalid_page_token(native_error):
                         raise InvalidScanContinuation("Gmail rejected its saved page token")
+                raise_gmail_throttle(buffered)
                 raise_for_status(
                     buffered,
                     source_short_name=self.short_name,
