@@ -45,6 +45,19 @@ for exact current fields. Do not copy the main product database from Doppler.
 Use a least-privilege workload IAM role for this bucket and configure the Porter
 AWS-role connection once that role exists. Do not add static root AWS keys.
 
+OCR is optional. The worker starts without MISTRAL_API_KEY or DOCLING_BASE_URL.
+Text extraction and source capture continue; a scanned document that needs OCR
+retains its captured bytes and a failed, retryable projection instead of entering
+search with missing content. Configure an OCR backend to index those documents.
+This does not mean every PDF requires OCR: the PDF converter first tries local
+text extraction. Image conversion requires an OCR backend.
+
+The selected local MiniLM service is a startup dependency for both API and worker:
+composition checks its health endpoint. FastEmbed and the semantic chunker also
+load public model artifacts; provide a writable persistent model cache and verify
+startup with the intended network policy. OCR, generative search credentials,
+Cohere reranking, frontend and Temporal UI are optional for owned indexed search.
+
 The manifest uses local embeddings to avoid assuming third-party model credits.
 Semantic quality and resource use still need measurement. Do not claim generative
 search is operational without separately configured model credentials and a live

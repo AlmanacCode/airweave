@@ -173,13 +173,13 @@ async def main() -> None:
     initialize_container(settings)
     logger.info("Container initialized successfully")
 
-    # 2. Require OCR backend for the sync worker
+    # OCR is an optional document capability, not a worker startup dependency.
     if container_mod.container.ocr_provider is None:
-        logger.error(
-            "Temporal worker requires an OCR backend. "
-            "Set MISTRAL_API_KEY or DOCLING_BASE_URL and restart."
+        logger.warning(
+            "OCR is not configured. Text extraction and source capture remain available; "
+            "documents requiring OCR stay unindexed. Set MISTRAL_API_KEY or "
+            "DOCLING_BASE_URL to enable OCR and retry their projection."
         )
-        raise SystemExit(1)
 
     # 3. Create worker with config
     config = WorkerConfig.from_settings()
