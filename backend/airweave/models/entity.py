@@ -4,7 +4,16 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 from uuid import UUID
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -47,6 +56,8 @@ class Entity(OrganizationBase):
     parent_record_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     parent_native_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     parent_container_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    visibility_epoch: Mapped[int] = mapped_column(BigInteger, default=1, server_default="1")
+    parent_visibility_epoch: Mapped[Optional[int]] = mapped_column(BigInteger)
     source_payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     payload_schema_version: Mapped[int] = mapped_column(default=1, server_default="1")
     record_revision: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
@@ -80,6 +91,25 @@ class Entity(OrganizationBase):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "visibility_epoch >= 1 AND "
+            "(parent_visibility_epoch IS NULL OR parent_visibility_epoch >= 1)",
+            name="ck_entity_visibility_epoch",
+        ),
+        Index(
+            "idx_entity_canonical_identity",
+            "sync_id",
+            "entity_definition_short_name",
+            "native_id",
+            "container_id",
+        ),
+        Index(
+            "idx_entity_canonical_parent",
+            "sync_id",
+            "parent_record_type",
+            "parent_native_id",
+            "parent_container_id",
+        ),
         Index(
             "idx_entity_canonical_scope", "sync_id", "entity_definition_short_name", "container_id"
         ),

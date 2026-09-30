@@ -219,6 +219,13 @@ async def test_hidden_parent_retirement_restoration_requires_fresh_generation(da
         assert (await db.get(Entity, work.record.id)).deleted_at is None
     await capture(database, service, fence, observation(identity=parent))
     async with database() as db:
+        assert all(
+            item.record.id != work.record.id
+            for item in await store.pending(db, fence.organization_id, fence.sync_id)
+        )
+    # Restoration of the parent alone cannot reauthorize retained descendant bytes.
+    await capture(database, service, fence, observation(parent=parent))
+    async with database() as db:
         restored = next(
             item
             for item in await store.pending(db, fence.organization_id, fence.sync_id)
