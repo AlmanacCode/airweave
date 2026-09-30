@@ -1,0 +1,42 @@
+{
+  "date": "2026-09-30",
+  "commit": "2318901",
+  "provider": "wispr",
+  "method": "read-only real provider, actual orchestrator/pipeline and disposable PostgreSQL; intentional process loss then fresh same-job writer attempt",
+  "request_limit": 20,
+  "timeout_seconds": 180,
+  "runs": [
+    {
+      "stage": "interrupt",
+      "failed": false,
+      "provider_requests": 10,
+      "records_observed": 256,
+      "completed_bodies": 3,
+      "intentional_interruption": true,
+      "full_scope_completed": false
+    },
+    {
+      "stage": "resume",
+      "failed": false,
+      "provider_requests": 8,
+      "records_observed": 254,
+      "completed_bodies": 4,
+      "wispr_recovery_verified": true,
+      "full_scope_completed": false
+    }
+  ],
+  "aggregate_provider_requests": 18,
+  "aggregate_records_observed": 510,
+  "wispr_recovery_verified": true,
+  "schema_removed": true,
+  "independent_live_schema_count": 0,
+  "blob_directory_removed": true,
+  "proof": "Three completed body scopes remain at the same cycle/revisions; the fresh process rejects revisiting their native identities and commits one new body.",
+  "limitations": [
+    "No complete-source traversal or subsequent-cycle proof.",
+    "No exhaustive discovery or deletion guarantee.",
+    "Failed individual meetings may repeat their text ranges.",
+    "Captured bodies omit provider raw editor data and remain partial.",
+    "No hosted auth or Almanac owner-binding attestation."
+  ]
+}
