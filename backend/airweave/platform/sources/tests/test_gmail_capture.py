@@ -181,8 +181,8 @@ async def test_legacy_entity_cursor_cannot_skip_canonical_bootstrap():
 async def test_repeated_page_token_fails_without_advancing_cursor():
     provider = Provider(
         [
-            ("/history", {"nextPageToken": "same"}),
-            ("/history", {"nextPageToken": "same"}),
+            ("/history", {"nextPageToken": "same", "historyId": "21"}),
+            ("/history", {"nextPageToken": "same", "historyId": "21"}),
         ]
     )
     state = cursor(history_id="20", canonical_query="")

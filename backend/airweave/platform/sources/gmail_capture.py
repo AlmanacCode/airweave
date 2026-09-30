@@ -1,11 +1,15 @@
 """Original Gmail message capture, independent of derived thread/search entities."""
 
 import base64
+import hashlib
+import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from datetime import datetime, timezone
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field
 
+from airweave.domains.entities.canonical.page_source import InvalidScanContinuation
 from airweave.domains.entities.canonical.requests import (
     BlobReference,
     CaptureRecord,
@@ -14,12 +18,97 @@ from airweave.domains.entities.canonical.requests import (
     StartedScope,
 )
 from airweave.domains.entities.canonical.source import SourceObservation
+from airweave.domains.sources.exceptions import SourceEntityNotFoundError
 from airweave.domains.storage.exceptions import FileSkippedException
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.syncs.cursors.cursor import SyncCursor
 
 BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 Get = Callable[..., Awaitable[dict]]
+
+
+class _HistoryMessage(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    id: str = Field(min_length=1)
+
+
+class _HistoryChange(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    message: _HistoryMessage
+
+
+class _HistoryEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    messages: list[_HistoryMessage] = Field(default_factory=list)
+    messagesAdded: list[_HistoryChange] = Field(default_factory=list)
+    messagesDeleted: list[_HistoryChange] = Field(default_factory=list)
+    labelsAdded: list[_HistoryChange] = Field(default_factory=list)
+    labelsRemoved: list[_HistoryChange] = Field(default_factory=list)
+
+
+class _HistoryResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    history: list[_HistoryEntry] = Field(default_factory=list)
+    historyId: str = Field(min_length=1)
+    nextPageToken: str | None = Field(default=None, min_length=1)
+
+
+class HistoryPage(BaseModel):
+    """One provider page; its mailbox boundary is not a committed checkpoint."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    message_ids: tuple[str, ...]
+    history_id: str
+    next_page_token: str | None
+    fingerprint: str
+
+
+class HistoryBatch(BaseModel):
+    """Bounded current observations; callers atomically commit records and offset."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    records: tuple[CaptureRecord, ...] = Field(max_length=500)
+    next_offset: int
+    complete: bool
+
+
+def parse_history_page(raw: dict) -> HistoryPage:
+    """Normalize only one page, preserving first occurrence order across all event arrays."""
+    response = _HistoryResponse.model_validate(raw)
+    affected: dict[str, None] = {}
+    for entry in response.history:
+        for message in entry.messages:
+            affected[message.id] = None
+        for changes in (
+            entry.messagesAdded,
+            entry.messagesDeleted,
+            entry.labelsAdded,
+            entry.labelsRemoved,
+        ):
+            for change in changes:
+                affected[change.message.id] = None
+    ids = tuple(affected)
+    # Intermediate mailbox historyId can advance without changing this page.
+    # Terminal pages bind the candidate checkpoint to the exact hydrated response.
+    # Include native events: a later edit can leave deduplicated IDs unchanged.
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            [
+                raw.get("history", []),
+                response.nextPageToken,
+                response.historyId if response.nextPageToken is None else None,
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+    return HistoryPage(
+        message_ids=ids,
+        history_id=response.historyId,
+        next_page_token=response.nextPageToken,
+        fingerprint=fingerprint,
+    )
 
 
 def _external_parts(part: dict, path: str = "/payload") -> Iterator[tuple[dict, str]]:
@@ -52,8 +141,8 @@ class GmailCapture:
         identity = RecordIdentity(record_type="message", native_id=message_id)
         try:
             payload = await self.get(f"{BASE}/messages/{message_id}", params={"format": "full"})
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code != 404:
+        except (httpx.HTTPStatusError, SourceEntityNotFoundError) as exc:
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code != 404:
                 raise
             return CaptureRecord(
                 identity=identity,
@@ -124,27 +213,50 @@ class GmailCapture:
             raise ValueError("Gmail MIME body size does not match provider metadata")
         return content
 
+    async def history_page(
+        self, boundary: str, token: str | None = None, *, max_results: int = 500
+    ) -> HistoryPage:
+        """Fetch one history page; boundaries stay opaque and no cursor is advanced."""
+        if not boundary or not 1 <= max_results <= 500:
+            raise ValueError("History requires a boundary and a page size from 1 to 500")
+        params = {"startHistoryId": boundary, "maxResults": max_results}
+        if token is not None:
+            params["pageToken"] = token
+        return parse_history_page(await self.get(f"{BASE}/history", params=params))
+
+    async def hydrate_history_page(
+        self,
+        page: HistoryPage,
+        *,
+        offset: int = 0,
+        limit: int = 500,
+        expected_fingerprint: str | None = None,
+    ) -> HistoryBatch:
+        """Reuse exact current reads, never apply stale history deletion/label payloads."""
+        if expected_fingerprint is not None and page.fingerprint != expected_fingerprint:
+            raise InvalidScanContinuation("Gmail history page changed before offset replay")
+        if offset and expected_fingerprint is None:
+            raise ValueError("Resuming Gmail history hydration requires its page fingerprint")
+        if not 0 <= offset <= len(page.message_ids) or not 1 <= limit <= 500:
+            raise ValueError("Invalid Gmail history hydration offset or batch size")
+        end = min(offset + limit, len(page.message_ids))
+        records = tuple([await self.message(mid) for mid in page.message_ids[offset:end]])
+        return HistoryBatch(records=records, next_offset=end, complete=end == len(page.message_ids))
+
     async def history(self, boundary: str) -> tuple[list[str], str]:
-        """Drain history before emitting, so an expired boundary can restart cleanly."""
-        params = {"startHistoryId": boundary, "maxResults": 500}
+        """Legacy generator bridge, removed when the durable page adapter is wired."""
         affected: dict[str, None] = {}
         tokens: set[str] = set()
+        token = None
         while True:
-            page = await self.get(f"{BASE}/history", params=dict(params))
-            for entry in page.get("history", []):
-                # `messages` is the full changed-ID list; typed lists can overlap it.
-                for message in entry.get("messages", []):
-                    affected[message["id"]] = None
-                for field in ("messagesAdded", "messagesDeleted", "labelsAdded", "labelsRemoved"):
-                    for change in entry.get(field, []):
-                        affected[change["message"]["id"]] = None
-            token = page.get("nextPageToken")
-            if not token:
-                return list(affected), str(page["historyId"])
+            page = await self.history_page(boundary, token)
+            affected.update(dict.fromkeys(page.message_ids))
+            token = page.next_page_token
+            if token is None:
+                return list(affected), page.history_id
             if token in tokens:
                 raise ValueError("Gmail history pagination repeated a token")
             tokens.add(token)
-            params["pageToken"] = token
 
     async def enumerate(self) -> AsyncGenerator[CaptureRecord, None]:
         """List every page in the provider's exact configured query scope."""
@@ -172,8 +284,8 @@ class GmailCapture:
             return None
         try:
             return await self.history(boundary)
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code != 404:
+        except (httpx.HTTPStatusError, SourceEntityNotFoundError) as exc:
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code != 404:
                 raise
             return None
 
