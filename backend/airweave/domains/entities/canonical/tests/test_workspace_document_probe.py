@@ -34,7 +34,7 @@ def response(request):
     assert request.method=='GET'
     seen.append(request.url.path)
     if request.url.path.endswith('/about'):
-        return httpx.Response(200,json={'user':{'emailAddress':'synthetic@example.test'}})
+        return httpx.Response(200,json={'user':{'permissionId':'principal-a','me':True}})
     if request.url.path=='/drive/v3/files':
         return httpx.Response(200,json={'files':[metadata]})
     if request.url.path.endswith('/export'):
@@ -49,8 +49,7 @@ async def source(name,account,email,key,fence,**options):
     async with httpx.AsyncClient(transport=httpx.MockTransport(response),
             event_hooks={'request':[options['request_hook']]}) as client:
         connector=await GoogleDriveSource.create(auth=StaticTokenProvider('synthetic'),
-            logger=MagicMock(),http_client=client,config=GoogleDriveConfig())
-        await verify_rest_identity(name,connector,email)
+            logger=MagicMock(),http_client=client,config=GoogleDriveConfig(expected_permission_id="principal-a"))
         yield connector,'provider_email'
 
 async def main():

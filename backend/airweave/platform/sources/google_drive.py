@@ -17,10 +17,12 @@ References:
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 from tenacity import retry, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
@@ -65,6 +67,21 @@ from airweave.platform.sources.records.google_drive_pages import DrivePages, rej
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 
 
+class DrivePrincipal(BaseModel):
+    """Native stable identity; display labels and email are not binding authority."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+    permissionId: str = Field(min_length=1, pattern=r"^\S+$")
+    me: StrictBool
+
+
+class DriveAbout(BaseModel):
+    """Only the requested native principal response is interpreted."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+    user: DrivePrincipal
+
+
 @source(
     name="Google Drive",
     short_name="google_drive",
@@ -95,14 +112,34 @@ class GoogleDriveSource(BaseSource):
     canonical_record_types = ("file",)
 
     canonical_container_parents = {}
+    expected_permission_id: str | None = None
+    _verified_permission_id: str | None = None
+
+    def _require_principal(self) -> None:
+        """Direct capture and resume cannot bypass native account attestation."""
+        if (
+            self.expected_permission_id is None
+            or self._verified_permission_id != self.expected_permission_id
+        ):
+            raise ValueError("Owned Drive capture requires an attested permission identity")
 
     @property
     def capture_cycle_configuration(self) -> CycleConfiguration:
         """One unfiltered accessible corpus; legacy path selections remain unsupported."""
+        self._require_principal()
         if self.include_patterns:
             raise ValueError("Drive path selection is not yet supported by canonical capture")
         return CycleConfiguration(
-            fingerprint=hashlib.sha256(b"drive-all-accessible-docs-native-v2").hexdigest(),
+            fingerprint=hashlib.sha256(
+                json.dumps(
+                    {
+                        "capture_version": 3,
+                        "permission_id": self.expected_permission_id,
+                        "scope": "drive-all-accessible-docs-native",
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest(),
             parents={"file": (None,)},
             known_object_validation=("file",),
         )
@@ -113,6 +150,9 @@ class GoogleDriveSource(BaseSource):
 
     def initial_continuation(self, cycle: CaptureCycle) -> ScanContinuation:
         """Restore the persisted starting boundary."""
+        self._require_principal()
+        if cycle.configuration != self.capture_cycle_configuration:
+            raise ValueError("Drive cycle does not match the trusted capture configuration")
         return DrivePages.initial(cycle)
 
     async def _capture_body(self, record: CaptureRecord, files: FileService) -> CaptureRecord:
@@ -134,6 +174,7 @@ class GoogleDriveSource(BaseSource):
         parent: SourceRecord | None = None,
     ) -> CapturePage:
         """Commit one version-checked file without retaining a native response queue."""
+        self._require_principal()
         if scope != CompletedScope(record_type="file") or parent is not None:
             raise ValueError("Drive requires its independent file scope")
 
@@ -144,6 +185,7 @@ class GoogleDriveSource(BaseSource):
 
     async def refresh_known(self, record: SourceRecord, *, files: FileService) -> CaptureRecord:
         """Known list omissions require an exact accessible-file read."""
+        self._require_principal()
         if record.identity.record_type != "file" or record.parent is not None:
             raise ValueError("Drive omission must identify an independent file")
         return await self._capture_body(
@@ -170,11 +212,14 @@ class GoogleDriveSource(BaseSource):
         """Create a new Google Drive source instance."""
         instance = cls(auth=auth, logger=logger, http_client=http_client)
         instance.include_patterns = config.include_patterns if config else []
+        instance.expected_permission_id = config.expected_permission_id if config else None
         instance.batch_size = 30
         instance.batch_generation = True
         instance.max_queue_size = 200
         instance.preserve_order = False
         instance.stop_on_error = False
+        if instance.expected_permission_id is not None:
+            await instance.validate()
         return instance
 
     @staticmethod
@@ -183,11 +228,22 @@ class GoogleDriveSource(BaseSource):
         return _parse_drive_dt(value)
 
     async def validate(self) -> None:
-        """Validate credentials by pinging the shared drives list."""
-        await self._get(
-            "https://www.googleapis.com/drive/v3/drives",
-            params={"pageSize": "1"},
+        """Re-attest the native principal; failure clears any previous attestation."""
+        self._verified_permission_id = None
+        raw = await self._get(
+            "https://www.googleapis.com/drive/v3/about",
+            params={"fields": "user(permissionId,me)"},
         )
+        try:
+            principal = DriveAbout.model_validate(raw).user
+        except ValidationError:
+            raise ValueError("Drive returned an invalid principal identity") from None
+        if not principal.me:
+            raise ValueError("Drive returned a principal that is not the authenticated user")
+        if self.expected_permission_id is not None:
+            if principal.permissionId != self.expected_permission_id:
+                raise ValueError("Drive principal identity does not match the trusted binding")
+            self._verified_permission_id = principal.permissionId
 
     @retry(
         stop=stop_after_attempt(5),

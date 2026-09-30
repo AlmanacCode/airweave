@@ -23,7 +23,7 @@ from airweave.platform.sources.google_drive import GoogleDriveSource
 @asynccontextmanager
 async def synthetic_source(name, account, expected_email, key, fence, **options):
     assert name == 'google_drive'
-    responses = [('/about', {'user': {'emailAddress': expected_email}})]
+    responses = []
     if os.environ['TEST_STAGE'] == 'first':
         responses += [('/changes/startPageToken', {'startPageToken': 'before'}),
             ('/files', {'files': [{'id': 'folder-a'}]}),
@@ -35,8 +35,8 @@ async def synthetic_source(name, account, expected_email, key, fence, **options)
     async with httpx.AsyncClient(transport=httpx.MockTransport(native.handle),
             event_hooks={'request': [options['request_hook']]}) as client:
         connector = await GoogleDriveSource.create(auth=StaticTokenProvider('synthetic'),
-            logger=MagicMock(), http_client=client, config=GoogleDriveConfig())
-        await verify_rest_identity(name, connector, expected_email)
+            logger=MagicMock(), http_client=client,
+            config=GoogleDriveConfig(expected_permission_id="principal-a"))
         yield connector, 'provider_email'
         assert not native.replies
 

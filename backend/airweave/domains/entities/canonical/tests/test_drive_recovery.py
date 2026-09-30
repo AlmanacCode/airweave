@@ -1,5 +1,6 @@
 """Real canonical SQL/pipeline and Drive source; native HTTP is synthetic."""
 
+from contextlib import aclosing
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -24,6 +25,9 @@ class NativeHTTP:
         self.calls = []
 
     async def handle(self, request):
+        if request.url.path.endswith("/about"):
+            assert request.url.params["fields"] == "user(permissionId,me)"
+            return httpx.Response(200, json={"user": {"permissionId": "principal-a", "me": True}})
         self.calls.append((request.url.path, dict(request.url.params)))
         path, value = self.replies.pop(0)
         assert str(request.url).split("?")[0] == BASE + path
@@ -44,7 +48,7 @@ async def setup(database, source, native, attempt=1):
         auth=StaticTokenProvider("synthetic"),
         logger=MagicMock(),
         http_client=client,
-        config=GoogleDriveConfig(),
+        config=GoogleDriveConfig(expected_permission_id="principal-a"),
     )
     ctx, _, runtime, bus = components(database, source)
     pipeline = CanonicalCapturePipeline(
@@ -91,7 +95,7 @@ async def test_resume_pending_file_and_changes_then_lost_final_ack(database, sou
         ]
     )
     pipeline, ctx, runtime, client = await setup(database, source, native)
-    async with client:
+    async with aclosing(client):
         with pytest.raises(ConnectionError):
             await run(pipeline, ctx, runtime)
     async with database() as db:
@@ -99,11 +103,11 @@ async def test_resume_pending_file_and_changes_then_lost_final_ack(database, sou
         assert cycle.promoted_checkpoint is None
         assert len((await db.scalars(select(Entity))).all()) == 1
     pipeline, ctx, runtime, client = await setup(database, source, native, 2)
-    async with client:
+    async with aclosing(client):
         await pipeline.run_scans(ctx, runtime, no_limits)
     # Crash after final durable page, before publication. No provider call on retry.
     pipeline, ctx, runtime, client = await setup(database, source, native, 3)
-    async with client:
+    async with aclosing(client):
         await run(pipeline, ctx, runtime)
     assert not native.replies
     assert sum(path.endswith("/files") for path, _ in native.calls) == 1
@@ -146,7 +150,7 @@ async def test_resume_pending_file_and_changes_then_lost_final_ack(database, sou
         ]
     )
     pipeline, ctx, runtime, client = await setup(database, (service, next_fence), delta)
-    async with client:
+    async with aclosing(client):
         await run(pipeline, ctx, runtime)
     assert delta.calls[0][1]["pageToken"] == "after"
     assert not delta.replies
@@ -174,7 +178,7 @@ async def test_drive_membership_restart_preserves_records_until_exact_validation
         ]
     )
     pipeline, ctx, runtime, client = await setup(database, source, native)
-    async with client:
+    async with aclosing(client):
         await run(pipeline, ctx, runtime)
     assert not native.replies
     async with database() as db:
@@ -214,7 +218,7 @@ async def test_rejected_inventory_token_restarts_sweep_not_boundary(database, so
         ]
     )
     pipeline, ctx, runtime, client = await setup(database, source, native)
-    async with client:
+    async with aclosing(client):
         await run(pipeline, ctx, runtime)
     assert not native.replies
     assert sum(path.endswith("/startPageToken") for path, _ in native.calls) == 1
@@ -247,7 +251,7 @@ async def test_provider_failure_cannot_promote_or_remove_prior_capture(database,
         ]
     )
     pipeline, ctx, runtime, client = await setup(database, source, native)
-    async with client:
+    async with aclosing(client):
         with pytest.raises(ValueError if failure == "incomplete" else SourceEntityForbiddenError):
             await run(pipeline, ctx, runtime)
     async with database() as db:
