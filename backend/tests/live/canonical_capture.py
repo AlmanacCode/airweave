@@ -320,6 +320,7 @@ async def main():
                 "0008_scope_execution.py",
                 "0009_extraction_coverage.py",
                 "0010_owned_provisioning.py",
+                "0011_retained_projection_text.py",
             ):
                 await connection.run_sync(migrate, migration)
         with TemporaryDirectory(prefix="airweave-private-live-") as directory:
