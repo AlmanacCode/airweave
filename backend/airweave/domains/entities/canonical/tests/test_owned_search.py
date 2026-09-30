@@ -22,6 +22,7 @@ from airweave.domains.search.executor import SearchPlanExecutor
 from airweave.domains.search.owned import OwnedSearchService
 from airweave.domains.search.types import SearchResults
 from airweave.models.collection import Collection
+from airweave.models.entity import Entity
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
 from airweave.models.vector_db_deployment_metadata import VectorDbDeploymentMetadata
@@ -109,6 +110,13 @@ async def http_search(database, indexed):
         async with database() as db:
             yield db
 
+    from airweave.domains.entities.canonical.query import CanonicalQueryService
+    from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
+    from airweave.domains.entities.canonical.store import CanonicalRecordStore
+
+    app.dependency_overrides[deps.get_canonical_query_service] = lambda: CanonicalQueryService(
+        CanonicalRecordStore(), CanonicalQueryStore(), "test-extraction-key"
+    )
     app.dependency_overrides[get_db] = session
     app.dependency_overrides[deps.get_context] = lambda: ctx
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(owned_search=service)
@@ -485,4 +493,64 @@ async def test_capture_discovery_coverage_is_separate_from_retrieval(
         "policies": {"event": "discovery_only"},
         "discovery": "incomplete",
     }
-    assert not body["retrieval_incomplete"]
+    assert body["sources"][0]["extraction_unknown_records"] == 1
+    assert body["retrieval_incomplete"]
+
+
+async def test_partial_extraction_http_hit_original_and_nonindexed_part_gate(
+    database, indexed, http_search
+):
+    from airweave.domains.entities.canonical.extraction_models import (
+        ExtractionCoverage,
+        ExtractionOutcome,
+    )
+    from airweave.models.projection_generation import ProjectionGeneration
+
+    fence, locator, _ = indexed
+    coverage = ExtractionCoverage(
+        parts=(
+            ExtractionOutcome(part_index=0, key="/body", kind="body", outcome="indexed"),
+            ExtractionOutcome(
+                part_index=1,
+                key="/payload/parts/1",
+                kind="file",
+                media_type="video/mp4",
+                extension=".mp4",
+                outcome="unsupported",
+                reason="unsupported_format",
+            ),
+        )
+    )
+    async with database() as db:
+        await db.execute(
+            update(ProjectionGeneration)
+            .where(ProjectionGeneration.id == locator.generation)
+            .values(extraction_coverage=coverage.persisted())
+        )
+        await db.commit()
+    client, vector, _, _, _ = http_search
+    valid = hit(fence, locator.encode())
+    invalid = hit(fence, locator.model_copy(update={"part_index": 1}).encode())
+    invalid.textual_representation = "unsupported attachment must never escape"
+    vector.seed_results(SearchResults(results=[valid, invalid]))
+    response = await client.post(
+        "/sync/search",
+        json={"query": "budget", "sync_ids": [str(fence.sync_id)], "mode": "keyword"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload["items"]) == 1 and payload["retrieval_incomplete"]
+    assert payload["items"][0]["extraction"] == coverage.model_dump(mode="json")
+    assert "unsupported attachment must never escape" not in str(payload["items"])
+    assert payload["sources"][0]["partially_indexed_records"] == 1
+    response = await client.get(f"/sync/{fence.sync_id}/records/{locator.record_id}")
+    assert response.status_code == 200, response.text
+    assert response.json()["completeness"] == "complete"
+    assert response.json()["extraction"] == coverage.model_dump(mode="json")
+    async with database() as db:
+        await db.execute(
+            update(Entity).where(Entity.id == locator.record_id).values(record_revision=2)
+        )
+        await db.commit()
+    response = await client.get(f"/sync/{fence.sync_id}/records/{locator.record_id}")
+    assert response.json()["extraction"] is None

@@ -21,6 +21,9 @@ class ProjectionGeneration(Base):
     revision: Mapped[int] = mapped_column(BigInteger)
     pipeline_version: Mapped[int] = mapped_column(BigInteger)
     documents: Mapped[list] = mapped_column(JSONB)
+    extraction_coverage: Mapped[dict | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_gc_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_gc_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

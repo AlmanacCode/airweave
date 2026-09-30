@@ -13,9 +13,12 @@ from tempfile import TemporaryDirectory
 from pydantic import JsonValue
 
 from airweave.domains.entities.canonical.calendar import is_cancelled_recurring_event
+from airweave.domains.entities.canonical.extraction_models import ExtractionPart
 from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.projection_inputs import ProjectionInput, ProjectionInputs
 from airweave.domains.storage.protocols import StorageBackend
-from airweave.platform.entities._base import BaseEntity
+from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
+from airweave.platform.entities._base import BaseEntity, FileEntity
 from airweave.platform.entities.google_calendar import (
     GoogleCalendarEventEntity,
     GoogleCalendarListEntity,
@@ -238,43 +241,88 @@ async def map_record(
     record: SourceRecord,
     source_name: str,
     storage: StorageBackend,
-) -> AsyncIterator[tuple[BaseEntity, ...]]:
+) -> AsyncIterator[ProjectionInputs]:
     """Keep verified local blob files alive only while strict projection consumes them."""
     if record.deleted_at is not None or record.content_access != "available":
         raise ProjectionMappingError("Unavailable records cannot be projected")
     if excluded_from_search(record, source_name):
-        yield ()
+        yield ProjectionInputs(parts=())
         return
     with TemporaryDirectory(prefix="airweave-projection-") as temporary:
         directory = Path(temporary)
         if source_name == "gmail":
             from airweave.domains.entities.canonical.gmail_projection import map_gmail
 
-            entities = await map_gmail(record, storage, directory)
-        elif source_name == "github":
-            from airweave.domains.entities.canonical.github_projection import map_github
-
-            entities = await map_github(record, storage, directory)
-        elif source_name == "linear":
-            from airweave.domains.entities.canonical.linear_projection import map_linear
-
-            entities = await map_linear(record, storage, directory)
-        elif source_name == "attio":
-            from airweave.domains.entities.canonical.attio_projection import map_attio
-
-            entities = map_attio(record)
-        elif source_name == "notion":
-            from airweave.domains.entities.canonical.notion_projection import map_notion
-
-            entities = map_notion(record)
-        elif source_name == "google_drive":
-            entities = await _drive(record, storage, directory)
-        elif source_name == "google_calendar":
-            entities = _calendar(record)
-        elif source_name == "slack":
-            entities = _slack(record)
-        elif source_name == "wispr":
-            entities = _wispr(record)
+            yield await map_gmail(record, storage, directory)
+            return
         else:
-            raise ProjectionMappingError("Source has no audited search projection mapper")
-        yield entities
+            entities = await _map_entities(record, source_name, storage, directory)
+        parts = tuple(_projection_input(index, entity) for index, entity in enumerate(entities))
+        if (
+            source_name == "github"
+            and record.identity.record_type == "file"
+            and record.completeness != "complete"
+        ):
+            parts += (
+                ProjectionInput(
+                    part=ExtractionPart(
+                        part_index=len(parts),
+                        key="/file/content",
+                        kind="file",
+                        extension=Path(record.identity.native_id).suffix.lower() or None,
+                    ),
+                    entity=None,
+                ),
+            )
+        yield ProjectionInputs(parts=parts)
+
+
+async def _map_entities(
+    record: SourceRecord, source_name: str, storage: StorageBackend, directory: Path
+) -> tuple[BaseEntity, ...]:
+    """Retain existing audited provider mappings with one part per explicit entity."""
+    if source_name == "github":
+        from airweave.domains.entities.canonical.github_projection import map_github
+
+        entities = await map_github(record, storage, directory)
+    elif source_name == "linear":
+        from airweave.domains.entities.canonical.linear_projection import map_linear
+
+        entities = await map_linear(record, storage, directory)
+    elif source_name == "attio":
+        from airweave.domains.entities.canonical.attio_projection import map_attio
+
+        entities = map_attio(record)
+    elif source_name == "notion":
+        from airweave.domains.entities.canonical.notion_projection import map_notion
+
+        entities = map_notion(record)
+    elif source_name == "google_drive":
+        entities = await _drive(record, storage, directory)
+    elif source_name == "google_calendar":
+        entities = _calendar(record)
+    elif source_name == "slack":
+        entities = _slack(record)
+    elif source_name == "wispr":
+        entities = _wispr(record)
+    else:
+        raise ProjectionMappingError("Source has no audited search projection mapper")
+    return entities
+
+
+def _projection_input(index: int, entity: BaseEntity) -> ProjectionInput:
+    """Retain native mapper identity before generation-specific stamping."""
+    populate_base_fields(entity)
+    file = entity if isinstance(entity, FileEntity) else None
+    return ProjectionInput(
+        part=ExtractionPart(
+            part_index=index,
+            key=entity.entity_id,
+            kind="file" if file is not None else "record",
+            media_type=file.mime_type if file is not None else None,
+            extension=Path(file.local_path).suffix.lower()
+            if file is not None and file.local_path
+            else None,
+        ),
+        entity=entity,
+    )

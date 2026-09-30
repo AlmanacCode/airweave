@@ -76,6 +76,7 @@ async def test_plain_charset_body_and_quoted_address_are_preserved(tmp_path):
     )
     before = source.model_dump()
     entities = await map_gmail(source, AsyncMock(), tmp_path)
+    entities = entities.entities
     assert len(entities) == 1
     assert entities[0].to == ['"Doe, Jane" <jane@example.com>', "bob@example.com"]
     assert "café &lt;hello&gt;" in next(tmp_path.glob("*.html")).read_text()
@@ -94,6 +95,7 @@ async def test_alternative_prefers_full_html_not_plain_duplicate_or_snippet(tmp_
         }
     )
     entities = await map_gmail(source, AsyncMock(), tmp_path)
+    entities = entities.entities
     text = next(tmp_path.glob("*.html")).read_text()
     assert text == "<p>Full HTML body</p>"
     assert entities[0].local_path is not None
@@ -118,6 +120,7 @@ async def test_external_blob_and_duplicate_filename_attachments_get_distinct_ide
     storage = AsyncMock()
     storage.read_file.return_value = data
     entities = await map_gmail(source, storage, tmp_path)
+    entities = entities.entities
     assert len(entities) == 3
     assert entities[1].attachment_key != entities[2].attachment_key
     from pathlib import Path
@@ -174,6 +177,7 @@ async def test_missing_attachment_keeps_available_body_searchable_and_original_p
     before = source.model_dump()
     storage = AsyncMock()
     entities = await map_gmail(source, storage, tmp_path)
+    entities = entities.entities
     assert len(entities) == 1
     assert "Available message text" in next(tmp_path.glob("*.html")).read_text()
     assert source.model_dump() == before
@@ -209,6 +213,7 @@ async def test_related_html_branch_does_not_get_replaced_by_plain_alternative(tm
         }
     )
     entities = await map_gmail(source, AsyncMock(), tmp_path)
+    entities = entities.entities
     assert len(entities) == 2
     from pathlib import Path
 

@@ -8,7 +8,12 @@ from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.core.logging import ContextualLogger
+from airweave.domains.entities.canonical.extraction_models import (
+    ExtractionCoverage,
+    ExtractionOutcome,
+)
 from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.projection_inputs import ProjectionInputs
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionBatchResult,
     ProjectionDocument,
@@ -19,6 +24,7 @@ from airweave.domains.entities.canonical.projection_models import (
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.search_metadata import stamp_search_metadata
 from airweave.domains.storage.protocols import StorageBackend
+from airweave.domains.sync_pipeline.file_types import SUPPORTED_FILE_EXTENSIONS
 from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
 from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
 from airweave.platform.destinations.vespa.destination import VespaDestination
@@ -88,34 +94,17 @@ class CanonicalProjector:
 
         generation = uuid4()
         chunks = []
+        coverage = ExtractionCoverage(parts=())
         no_documents = work.record.deleted_at is not None or excluded_from_search(
             work.record, source_name
         )
         if not no_documents:
             async with map_record(work.record, source_name, self._storage) as mapped:
-                if not mapped:
+                if not mapped.parts:
                     raise ValueError("Projection mapper returned no required content")
-                for part_index, entity in enumerate(mapped):
-                    populate_base_fields(entity)
-                    if entity.airweave_system_metadata is None:
-                        entity.airweave_system_metadata = AirweaveSystemMetadata()
-                    locator = ProjectionLocator(
-                        record_id=work.record.id,
-                        revision=work.record.revision,
-                        pipeline_version=work.pipeline_version,
-                        generation=generation,
-                        part_index=part_index,
-                    )
-                    entity.entity_id = locator.encode()
-                    meta = entity.airweave_system_metadata
-                    meta.source_name = source_name
-                    meta.entity_type = type(entity).__name__
-                    meta.sync_id = work.record.sync_id
-                    meta.sync_job_id = None
-                    meta.db_entity_id = work.record.id
-                    stamp_search_metadata(meta, work.record)
+                selected, coverage = _select_inputs(mapped, work, source_name, generation)
                 chunks = await self._processor.process(
-                    list(mapped),
+                    selected,
                     ProjectionContext(logger, source_name),
                     ProjectionRuntime(StrictProjectionTracker()),
                     strict=True,
@@ -134,14 +123,14 @@ class CanonicalProjector:
                 )
                 async with self._sessions() as db:
                     if not await self._store.prepare(
-                        db, work, generation, destination.collection_id, manifest
+                        db, work, generation, destination.collection_id, manifest, coverage=coverage
                     ):
                         return False
                 await destination.feed_prepared(prepared)
         if no_documents:
             async with self._sessions() as db:
                 if not await self._store.prepare(
-                    db, work, generation, destination.collection_id, ()
+                    db, work, generation, destination.collection_id, (), coverage=coverage
                 ):
                     return False
         async with self._sessions() as db:
@@ -190,3 +179,47 @@ class CanonicalProjector:
             superseded=superseded,
             failed=failed,
         )
+
+
+def _select_inputs(
+    mapped: ProjectionInputs, work: ProjectionWork, source_name: str, generation: UUID
+) -> tuple[list[BaseEntity], ExtractionCoverage]:
+    """Classify only deterministic omissions, preserving stable pre-filter part ordinals."""
+    selected = []
+    outcomes = []
+    for item in mapped.parts:
+        part, entity = item.part, item.entity
+        if entity is None:
+            outcome, reason = "unavailable_original", "original_not_captured"
+        elif (
+            part.kind == "file"
+            and part.extension is not None
+            and part.extension not in SUPPORTED_FILE_EXTENSIONS
+        ):
+            outcome, reason = "unsupported", "unsupported_format"
+        else:
+            outcome, reason = "indexed", None
+            selected.append(entity)
+        outcomes.append(ExtractionOutcome(**part.model_dump(), outcome=outcome, reason=reason))
+        if outcome != "indexed":
+            continue
+        part_index = part.part_index
+        populate_base_fields(entity)
+        if entity.airweave_system_metadata is None:
+            entity.airweave_system_metadata = AirweaveSystemMetadata()
+        locator = ProjectionLocator(
+            record_id=work.record.id,
+            revision=work.record.revision,
+            pipeline_version=work.pipeline_version,
+            generation=generation,
+            part_index=part_index,
+        )
+        entity.entity_id = locator.encode()
+        meta = entity.airweave_system_metadata
+        meta.source_name = source_name
+        meta.entity_type = type(entity).__name__
+        meta.sync_id = work.record.sync_id
+        meta.sync_job_id = None
+        meta.db_entity_id = work.record.id
+        stamp_search_metadata(meta, work.record)
+    return selected, ExtractionCoverage(parts=tuple(outcomes))

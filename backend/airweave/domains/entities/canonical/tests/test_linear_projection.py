@@ -72,6 +72,7 @@ async def test_native_issue_and_comment_render_without_provider_or_blob_access()
         record = original(kind, **fields)
         storage = AsyncMock()
         async with map_record(record, "linear", storage) as entities:
+            entities = entities.entities
             assert entities[0].web_url == record.payload["url"]
             assert entities[0].created_at.tzinfo is not None
         storage.read_file.assert_not_called()
@@ -84,6 +85,7 @@ async def test_native_issue_and_comment_render_without_provider_or_blob_access()
 async def test_link_is_explicit_metadata_not_invented_file():
     record = original("attachment", title="Document").model_copy(update={"completeness": "partial"})
     async with map_record(record, "linear", AsyncMock()) as entities:
+        entities = entities.entities
         assert isinstance(entities[0], LinearLinkedAttachmentEntity)
         assert "not retained" in entities[0].content_coverage
 
@@ -111,6 +113,7 @@ async def test_retained_file_verified_and_disposable():
     storage = AsyncMock()
     storage.read_file.return_value = data
     async with map_record(record, "linear", storage) as entities:
+        entities = entities.entities
         path = Path(entities[0].local_path)
         assert path.read_bytes() == data
         assert entities[0].issue_identifier == "ENG-3"

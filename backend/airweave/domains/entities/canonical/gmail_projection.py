@@ -10,9 +10,11 @@ from email.utils import formataddr, getaddresses
 from pathlib import Path
 
 from airweave.domains.entities.canonical.blob_materializer import read_blob, write_blob
+from airweave.domains.entities.canonical.extraction_models import ExtractionPart
 from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.projection_inputs import ProjectionInput, ProjectionInputs
 from airweave.domains.storage.protocols import StorageBackend
-from airweave.platform.entities._base import BaseEntity, Breadcrumb
+from airweave.platform.entities._base import Breadcrumb
 from airweave.platform.entities.gmail import GmailAttachmentEntity, GmailMessageEntity
 
 
@@ -74,45 +76,50 @@ class GmailProjection:
         self.record = record
         self.storage = storage
         self.directory = directory
-        self.attachments: list[GmailAttachmentEntity] = []
+        self.attachments: list[ProjectionInput] = []
 
     async def attachment(self, part: dict, path: str) -> None:
         """Project retained attachment bytes; keep missing bytes explicit on the original."""
+        filename = part.get("filename") or "attachment"
+        mime = part.get("mimeType", "application/octet-stream")
+        suffix = Path(filename).suffix.lower() or mimetypes.guess_extension(mime) or ".bin"
+        descriptor = ExtractionPart(
+            part_index=len(self.attachments) + 1,
+            key=path,
+            kind="file",
+            media_type=mime,
+            extension=suffix,
+        )
         if (
             self.record.completeness == "partial"
             and part.get("body", {}).get("attachmentId")
             and not any(blob.source_path == path + "/body" for blob in self.record.blobs)
         ):
+            self.attachments.append(ProjectionInput(part=descriptor, entity=None))
             return
         content = await _body(part, path, self.record, self.storage)
-        filename = part.get("filename") or "attachment"
-        mime = part.get("mimeType", "application/octet-stream")
-        suffix = Path(filename).suffix.lower() or mimetypes.guess_extension(mime) or ".bin"
         local = await write_blob(content, self.directory, suffix=suffix)
         message_id = self.record.identity.native_id
-        self.attachments.append(
-            GmailAttachmentEntity(
-                breadcrumbs=[
-                    Breadcrumb(
-                        entity_id=f"msg_{message_id}",
-                        name="Email message",
-                        entity_type="GmailMessageEntity",
-                    )
-                ],
-                attachment_key=f"attach_{message_id}_{hashlib.sha256(path.encode()).hexdigest()}",
-                filename=filename,
-                message_id=message_id,
-                attachment_id=part.get("body", {}).get("attachmentId")
-                or part.get("partId")
-                or path,
-                thread_id=self.record.payload["threadId"],
-                url=f"https://mail.google.com/mail/u/0/#inbox/{message_id}",
-                size=len(content),
-                file_type=suffix.lstrip("."),
-                mime_type=mime,
-                local_path=str(local),
-            )
+        entity = GmailAttachmentEntity(
+            breadcrumbs=[
+                Breadcrumb(
+                    entity_id=f"msg_{message_id}",
+                    name="Email message",
+                    entity_type="GmailMessageEntity",
+                )
+            ],
+            attachment_key=f"attach_{message_id}_{hashlib.sha256(path.encode()).hexdigest()}",
+            filename=filename,
+            message_id=message_id,
+            attachment_id=part.get("body", {}).get("attachmentId") or part.get("partId") or path,
+            thread_id=self.record.payload["threadId"],
+            url=f"https://mail.google.com/mail/u/0/#inbox/{message_id}",
+            size=len(content),
+            file_type=suffix.lstrip("."),
+            mime_type=mime,
+            local_path=str(local),
         )
+        self.attachments.append(ProjectionInput(part=descriptor, entity=entity))
 
     async def render(self, part: dict, path: str) -> str:
         """Select MIME alternatives, preserve mixed bodies, and materialize attachments."""
@@ -134,7 +141,7 @@ class GmailProjection:
         text = _decode_text(content, part)
         return text if mime == "text/html" else "<pre>" + html.escape(text) + "</pre>"
 
-    async def map(self) -> tuple[BaseEntity, ...]:
+    async def map(self) -> ProjectionInputs:
         """Produce file entities for strict conversion without any provider network calls."""
         data = self.record.payload
         if self.record.deleted_at is not None or self.record.completeness not in {
@@ -157,13 +164,27 @@ class GmailProjection:
         for field in ("to", "cc", "bcc"):
             addresses = getaddresses([_header(data["payload"], field)])
             setattr(entity, field, [formataddr(address) for address in addresses if address[1]])
-        return (entity, *self.attachments)
+        return ProjectionInputs(
+            parts=(
+                ProjectionInput(
+                    part=ExtractionPart(
+                        part_index=0,
+                        key="/payload/body",
+                        kind="body",
+                        media_type="text/html",
+                        extension=".html",
+                    ),
+                    entity=entity,
+                ),
+                *self.attachments,
+            )
+        )
 
 
 async def map_gmail(
     record: SourceRecord,
     storage: StorageBackend,
     directory: Path,
-) -> tuple[BaseEntity, ...]:
+) -> ProjectionInputs:
     """Map immutable Gmail capture into existing message and attachment entities."""
     return await GmailProjection(record, storage, directory).map()

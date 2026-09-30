@@ -62,6 +62,7 @@ async def test_membership_search_keeps_entry_identity_and_never_fetches_record()
     before = captured.model_dump()
     storage = AsyncMock()
     async with map_record(captured, "attio", storage) as entities:
+        entities = entities.entities
         assert len(entities) == 1
         result = entities[0]
         assert result.native_id == ENTRY
@@ -89,6 +90,7 @@ async def test_note_uses_current_plaintext_field_and_its_record_parent():
         RecordIdentity(record_type="record", native_id=RECORD, container_id=OBJECT),
     )
     async with map_record(captured, "attio", AsyncMock()) as entities:
+        entities = entities.entities
         assert entities[0].text == "Discussed fundraising"
         assert entities[0].title == "Call"
 
@@ -131,6 +133,7 @@ async def test_record_attributes_and_native_url(url):
                 pass
     else:
         async with map_record(captured, "attio", AsyncMock()) as entities:
+            entities = entities.entities
             assert entities[0].title == "Sam Example"
             assert "custom_score" in entities[0].text
             assert entities[0].web_url == url
@@ -149,7 +152,9 @@ async def test_two_memberships_for_one_crm_record_remain_distinct():
         RecordIdentity(record_type="list", native_id=second_list),
     )
     async with map_record(first, "attio", AsyncMock()) as one:
+        one = one.entities
         async with map_record(second, "attio", AsyncMock()) as two:
+            two = two.entities
             assert one[0].native_id != two[0].native_id
             assert RECORD in one[0].text and RECORD in two[0].text
             assert one[0].original_kind == two[0].original_kind == "entry"
@@ -166,6 +171,7 @@ async def test_container_projection_does_not_invent_children(kind):
         payload.update(name="Fundraising")
     captured = original(kind, native_id, payload)
     async with map_record(captured, "attio", AsyncMock()) as entities:
+        entities = entities.entities
         assert len(entities) == 1
         assert "metadata only" in entities[0].content_coverage
         assert entities[0].web_url == ""

@@ -3,11 +3,12 @@
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.calendar import is_cancelled_recurring_event
+from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionDocument,
     ProjectionLocator,
@@ -31,6 +32,18 @@ def publication_matches(locator: ProjectionLocator):
         Entity.indexed_generation == locator.generation,
         Entity.deleted_at.is_(None),
         content_is_available(),
+        exists(
+            select(ProjectionGeneration.id).where(
+                ProjectionGeneration.id == locator.generation,
+                ProjectionGeneration.retired_at.is_(None),
+                or_(
+                    ProjectionGeneration.extraction_coverage.is_(None),
+                    ProjectionGeneration.extraction_coverage.contains(
+                        {"parts": [{"part_index": locator.part_index, "outcome": "indexed"}]}
+                    ),
+                ),
+            )
+        ),
     )
 
 
@@ -121,9 +134,12 @@ class CanonicalProjectionStore:
         generation: UUID,
         collection_id: UUID,
         documents: tuple[ProjectionDocument, ...],
+        *,
+        coverage: ExtractionCoverage | None = None,
     ) -> bool:
         """Commit exact immutable deletion identities before the first remote feed."""
         identities = set()
+        indexed_parts = set()
         for document in documents:
             try:
                 locator = projection_document_locator(
@@ -140,6 +156,12 @@ class CanonicalProjectionStore:
             if not valid or (document.schema_name, document.document_id) in identities:
                 raise ValueError("Projection manifest must contain unique IDs of this generation")
             identities.add((document.schema_name, document.document_id))
+            indexed_parts.add(locator.part_index)
+        if coverage is not None and indexed_parts != {
+            p.part_index for p in coverage.parts if p.outcome == "indexed"
+        }:
+            raise ValueError("Projection documents must cover exactly the indexed parts")
+        extraction = coverage.persisted() if coverage is not None else None
         manifest = [document.model_dump() for document in documents]
         async with UnitOfWork(db):
             if await self._current(db, work) is None:
@@ -148,6 +170,7 @@ class CanonicalProjectionStore:
             if prior is not None:
                 if (
                     prior.documents != manifest
+                    or prior.extraction_coverage != extraction
                     or prior.record_id != work.record.id
                     or prior.revision != work.record.revision
                     or prior.pipeline_version != work.pipeline_version
@@ -166,6 +189,7 @@ class CanonicalProjectionStore:
                     revision=work.record.revision,
                     pipeline_version=work.pipeline_version,
                     documents=manifest,
+                    extraction_coverage=extraction,
                     next_gc_at=datetime.now(timezone.utc) + timedelta(hours=1),
                 )
             )
@@ -183,9 +207,12 @@ class CanonicalProjectionStore:
         exclusion = work.record.identity.record_type == "event" and is_cancelled_recurring_event(
             work.record.payload
         )
-        no_content = (work.record.deleted_at is not None or exclusion
-                      or work.record.identity.record_type == "event_occurrence")
-        if chunk_count < 0 or (not no_content and chunk_count == 0):
+        no_content = (
+            work.record.deleted_at is not None
+            or exclusion
+            or work.record.identity.record_type == "event_occurrence"
+        )
+        if chunk_count < 0:
             raise ValueError("Active records require a nonempty complete projection")
         if no_content and chunk_count != 0:
             raise ValueError("Deleted records and recurrence exclusions must publish no content")
@@ -211,6 +238,21 @@ class CanonicalProjectionStore:
                 or len(attempt.documents) != chunk_count
             ):
                 return False
+            coverage = (
+                ExtractionCoverage.model_validate(attempt.extraction_coverage)
+                if attempt.extraction_coverage is not None
+                else None
+            )
+            if (
+                not no_content
+                and chunk_count == 0
+                and (coverage is None or not coverage.parts or coverage.status != "unavailable")
+            ):
+                raise ValueError(
+                    "Active records require indexed content or explicit unavailable extraction"
+                )
+            if no_content and coverage is not None and coverage.parts:
+                raise ValueError("Excluded records must have empty extraction coverage")
             if work.previous_generation is not None:
                 previous = await db.get(ProjectionGeneration, work.previous_generation)
                 if previous is not None:
@@ -231,3 +273,31 @@ class CanonicalProjectionStore:
             if entity is not None:
                 entity.projection_error = message[:1000]
                 await db.flush()
+
+
+async def current_extraction(
+    db: AsyncSession, organization_id: UUID, sync_id: UUID, record_id: UUID, revision: int
+) -> ExtractionCoverage | None:
+    """Only the visible current revision/pipeline/publication exposes extraction evidence."""
+    raw = await db.scalar(
+        select(ProjectionGeneration.extraction_coverage)
+        .join(Entity, Entity.indexed_generation == ProjectionGeneration.id)
+        .join(Sync, Sync.id == Entity.sync_id)
+        .where(
+            Entity.id == record_id,
+            Entity.record_revision == revision,
+            Entity.organization_id == organization_id,
+            Entity.sync_id == sync_id,
+            Sync.organization_id == organization_id,
+            ProjectionGeneration.organization_id == organization_id,
+            ProjectionGeneration.record_id == Entity.id,
+            ProjectionGeneration.revision == Entity.record_revision,
+            ProjectionGeneration.pipeline_version == Sync.index_pipeline_version,
+            ProjectionGeneration.retired_at.is_(None),
+            Entity.indexed_revision == Entity.record_revision,
+            Entity.indexed_pipeline_version == Sync.index_pipeline_version,
+            Entity.deleted_at.is_(None),
+            content_is_available(),
+        )
+    )
+    return ExtractionCoverage.model_validate(raw) if raw is not None else None

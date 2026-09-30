@@ -49,6 +49,7 @@ async def test_cancelled_exception_read_project_reinstate_and_revoke(database, s
             if w.record.id == row.id
         )
     async with map_record(current, "google_calendar", AsyncMock()) as mapped:
+        mapped = mapped.entities
         assert mapped == ()
     processor = MagicMock()
     processor.process = AsyncMock()
@@ -89,6 +90,7 @@ async def test_cancelled_exception_read_project_reinstate_and_revoke(database, s
         )
         current = await queries.read(db, fence.organization_id, fence.sync_id, row.id)
     async with map_record(current, "google_calendar", AsyncMock()) as mapped:
+        mapped = mapped.entities
         assert len(mapped) == 1 and mapped[0].status == "confirmed"
     async with database() as db:
         await capture.capture(db, CaptureBatch(fence=fence, records=(excluded,)))
@@ -143,8 +145,10 @@ async def test_live_event_cannot_publish_empty_or_exclusion_nonempty(database, s
                 )
             }
         )
-        with pytest.raises(ValueError, match="nonempty"):
-            await store.publish(db, active, uuid4(), 0)
+        generation = uuid4()
+        assert await store.prepare(db, active, generation, uuid4(), ())
+        with pytest.raises(ValueError, match="indexed content"):
+            await store.publish(db, active, generation, 0)
 
 
 async def test_operational_occurrences_publish_zero_documents_without_retry(database, source):

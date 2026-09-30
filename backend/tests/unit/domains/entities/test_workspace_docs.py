@@ -146,6 +146,7 @@ async def test_recursive_tabs_preserve_original_structure_without_edit_revision(
 async def test_projection_reads_native_once_and_never_indexes_export():
     record, storage, _ = capture()
     async with map_record(record, "google_drive", storage) as entities:
+        entities = entities.entities
         assert len(entities) == 1
         entity = entities[0]
         assert entity.file_id == "doc"

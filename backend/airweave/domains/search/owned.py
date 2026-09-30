@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api.context import ApiContext
 from airweave.domains.entities.canonical.coverage import capture_coverage
+from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
 from airweave.domains.entities.canonical.projection_store import publication_matches
 from airweave.domains.entities.canonical.requests import RecordIdentity
@@ -30,6 +31,7 @@ from airweave.domains.search.types.results import SearchResult, SearchResults
 from airweave.domains.sources.protocols import SourceRegistryProtocol
 from airweave.models.collection import Collection
 from airweave.models.entity import Entity
+from airweave.models.projection_generation import ProjectionGeneration
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
 
@@ -110,7 +112,13 @@ class OwnedSearchService:
             or exclusions > 0
             or postfiltered > 0
             or len(ranked) > request.limit
-            or any(row.pending_records for row in sources),
+            or any(
+                row.pending_records
+                or row.partially_indexed_records
+                or row.extraction_unavailable_records
+                or row.extraction_unknown_records
+                for row in sources
+            ),
         )
 
     @staticmethod
@@ -241,6 +249,15 @@ class OwnedSearchService:
             )
         ).all()
         by_id = {record.id: record for record in records}
+        extraction_rows = await db.execute(
+            select(ProjectionGeneration.id, ProjectionGeneration.extraction_coverage).where(
+                ProjectionGeneration.id.in_([r.indexed_generation for r in records])
+            )
+        )
+        extraction = {
+            generation: ExtractionCoverage.model_validate(raw) if raw is not None else None
+            for generation, raw in extraction_rows
+        }
         for rank, result in enumerate(results.results, 1):
             locator = self._locator(result)
             row = by_id.get(locator.record_id) if locator else None
@@ -251,6 +268,13 @@ class OwnedSearchService:
                 or row.indexed_pipeline_version != locator.pipeline_version
                 or str(row.sync_id) != result.airweave_system_metadata.sync_id
                 or scopes[row.sync_id].short_name != result.airweave_system_metadata.source_name
+            ):
+                exclusions += 1
+                continue
+            coverage = extraction.get(row.indexed_generation)
+            if coverage is not None and not any(
+                part.part_index == locator.part_index and part.outcome == "indexed"
+                for part in coverage.parts
             ):
                 exclusions += 1
                 continue
@@ -275,6 +299,7 @@ class OwnedSearchService:
                     source_created_at=row.source_created_at,
                     source_updated_at=row.source_updated_at,
                     completeness=row.completeness,
+                    extraction=extraction.get(row.indexed_generation),
                     email_thread_id=(
                         thread_id
                         if scopes[row.sync_id].short_name == "gmail"
@@ -383,9 +408,25 @@ class OwnedSearchService:
             Entity.indexed_pipeline_version.is_distinct_from(Sync.index_pipeline_version),
             Entity.indexed_generation.is_(None),
         )
+        has_indexed = ProjectionGeneration.extraction_coverage.contains(
+            {"parts": [{"outcome": "indexed"}]}
+        )
+        has_omitted = ProjectionGeneration.extraction_coverage.contains(
+            {"parts": [{"outcome": "unsupported"}]}
+        ) | ProjectionGeneration.extraction_coverage.contains(
+            {"parts": [{"outcome": "unavailable_original"}]}
+        )
         rows = await db.execute(
-            select(Entity.sync_id, func.count(), func.count().filter(pending))
+            select(
+                Entity.sync_id,
+                func.count(),
+                func.count().filter(pending),
+                func.count().filter(~pending & has_indexed & has_omitted),
+                func.count().filter(~pending & ~has_indexed & has_omitted),
+                func.count().filter(~pending & ProjectionGeneration.extraction_coverage.is_(None)),
+            )
             .join(Sync, Sync.id == Entity.sync_id)
+            .outerjoin(ProjectionGeneration, ProjectionGeneration.id == Entity.indexed_generation)
             .where(
                 Entity.organization_id == ctx.organization.id,
                 Sync.organization_id == ctx.organization.id,
@@ -396,7 +437,7 @@ class OwnedSearchService:
             )
             .group_by(Entity.sync_id)
         )
-        counts = {sync: (active, pending) for sync, active, pending in rows}
+        counts = {row[0]: tuple(row[1:]) for row in rows}
         captures = await capture_coverage(db, ctx.organization.id, tuple(request.sync_ids))
         return tuple(
             OwnedSearchCoverage(
@@ -404,6 +445,9 @@ class OwnedSearchService:
                 capture=captures.get(sync),
                 active_records=counts.get(sync, (0, 0))[0],
                 pending_records=counts.get(sync, (0, 0))[1],
+                partially_indexed_records=counts.get(sync, (0, 0, 0, 0, 0))[2],
+                extraction_unavailable_records=counts.get(sync, (0, 0, 0, 0, 0))[3],
+                extraction_unknown_records=counts.get(sync, (0, 0, 0, 0, 0))[4],
             )
             for sync in request.sync_ids
         )

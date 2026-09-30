@@ -7,9 +7,16 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
 
 from airweave.domains.entities.canonical.coverage import CaptureCoverage
+from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.models import ObservedChange, SourceRecord
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.platform.sources.records.workspace_manifest import WorkspaceManifestV1
+
+
+class IndexedRecordRead(SourceRecord):
+    """Current original plus independently attested current extraction coverage."""
+
+    extraction: ExtractionCoverage | None = None
 
 
 class DocumentRead(BaseModel):

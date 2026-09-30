@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from airweave.domains.entities.canonical.coverage import CaptureCoverage
+from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.search.types import RetrievalStrategy
 
@@ -56,6 +57,7 @@ class OwnedSearchHit(BaseModel):
     source_created_at: AwareDatetime | None
     source_updated_at: AwareDatetime | None
     completeness: Literal["complete", "partial", "metadata_only"]
+    extraction: ExtractionCoverage | None = None
 
 
 class OwnedSearchCoverage(BaseModel):
@@ -65,6 +67,9 @@ class OwnedSearchCoverage(BaseModel):
     active_records: int
     capture: CaptureCoverage | None = None
     pending_records: int
+    partially_indexed_records: int = 0
+    extraction_unavailable_records: int = 0
+    extraction_unknown_records: int = 0
 
 
 class OwnedSearchResponse(BaseModel):

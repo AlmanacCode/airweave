@@ -51,6 +51,7 @@ async def test_calendar_keeps_master_recurrence_and_native_container():
     }
     item = record("event", payload, native_id="event", container_id="calendar")
     async with map_record(item, "google_calendar", AsyncMock()) as entities:
+        entities = entities.entities
         assert entities[0].calendar_key == "calendar"
         assert entities[0].recurrence == ["RRULE:FREQ=WEEKLY"]
         assert entities[0].start_date == "2026-10-01"
@@ -67,6 +68,7 @@ async def test_slack_history_shape_uses_container_without_provider_lookup():
     )
     storage = AsyncMock()
     async with map_record(item, "slack", storage) as entities:
+        entities = entities.entities
         assert entities[0].channel_id == "C1"
         assert entities[0].text == "hello"
         assert entities[0].updated_at.timestamp() == 124
@@ -107,6 +109,7 @@ async def test_wispr_ranges_do_not_duplicate_default_content():
         ]
     }
     async with map_record(record("meeting", payload), "wispr", AsyncMock()) as entities:
+        entities = entities.entities
         assert entities[0].notes == "notes"
         assert entities[0].transcript == "abc\ndef"
         assert "guidance" not in entities[0].transcript
@@ -156,6 +159,7 @@ async def test_drive_uses_verified_owned_bytes_and_cleans_materialization():
     storage = AsyncMock()
     storage.read_file.return_value = content
     async with map_record(item, "google_drive", storage) as entities:
+        entities = entities.entities
         path = Path(entities[0].local_path)
         assert path.read_bytes() == content
         assert path.name == digest + ".txt"
@@ -209,6 +213,7 @@ async def test_owned_drive_spreadsheet_uses_real_converter():
     storage = AsyncMock()
     storage.read_file.return_value = content
     async with map_record(item, "google_drive", storage) as entities:
+        entities = entities.entities
         path = entities[0].local_path
         assert Path(path).suffix == ".xlsx"
         tracker = AsyncMock()
@@ -255,6 +260,7 @@ async def test_wispr_scratchpad_retains_all_text_ranges_without_meeting_fields()
     before = original.model_dump()
     storage = AsyncMock()
     async with map_record(original, "wispr", storage) as entities:
+        entities = entities.entities
         assert entities[0].note_id == "note"
         assert entities[0].content == "abc\ndef"
         assert entities[0].web_url == ""

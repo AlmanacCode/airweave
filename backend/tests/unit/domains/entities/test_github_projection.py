@@ -51,6 +51,7 @@ async def test_native_conversation_text_and_exact_kind(kind):
     )
     storage = AsyncMock()
     async with map_record(item, "github", storage) as views:
+        views = views.entities
         assert views[0].text == "Native **Markdown**"
         assert views[0].resource_kind == kind
         assert views[0].state == "APPROVED"
@@ -89,6 +90,7 @@ async def test_code_uses_verified_owned_blob_and_temporary_file():
     storage = AsyncMock()
     storage.read_file.return_value = content
     async with map_record(item, "github", storage) as views:
+        views = views.entities
         local = Path(views[0].local_path)
         assert local.read_bytes() == content
         assert views[0].commit_id == "b" * 40
@@ -121,4 +123,7 @@ async def test_missing_complete_bytes_keeps_projection_pending():
             pass
     partial = item.model_copy(update={"completeness": "partial"})
     async with map_record(partial, "github", AsyncMock()) as views:
+        assert views.parts[-1].entity is None and views.parts[-1].part.kind == "file"
+        assert views.parts[-1].part.key == "/file/content"
+        views = views.entities
         assert views[0].content_coverage == "partial" and views[0].text == ""

@@ -76,6 +76,7 @@ def block(kind, content, **fields):
 async def mapped(record):
     storage = AsyncMock()
     async with map_record(record, "notion", storage) as entities:
+        entities = entities.entities
         assert len(entities) == 1
         entity = entities[0]
     assert not storage.mock_calls

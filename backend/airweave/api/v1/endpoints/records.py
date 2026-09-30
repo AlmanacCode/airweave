@@ -13,10 +13,11 @@ from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
 from airweave.db.session import get_db
 from airweave.domains.entities.canonical.calendar_query import CalendarRangeNotCaptured
-from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.projection_store import current_extraction
 from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.query_models import (
     DocumentRead,
+    IndexedRecordRead,
     MailThreadPage,
     RecordChangePage,
     RecordFilters,
@@ -94,16 +95,20 @@ async def record_changes(
     return await service.changes(db, ctx.organization.id, sync_id, cursor=cursor, limit=limit)
 
 
-@router.get("/{sync_id}/records/{record_id}", response_model=SourceRecord)
+@router.get("/{sync_id}/records/{record_id}", response_model=IndexedRecordRead)
 async def read_record(
     sync_id: UUID,
     record_id: UUID,
     db: AsyncSession = Depends(get_db),
     ctx: ApiContext = Depends(deps.get_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
-) -> SourceRecord:
+) -> IndexedRecordRead:
     """Read current committed provider state, including tombstones and completeness."""
-    return await service.read(db, ctx.organization.id, sync_id, record_id)
+    record = await service.read(db, ctx.organization.id, sync_id, record_id)
+    extraction = await current_extraction(
+        db, ctx.organization.id, sync_id, record_id, record.revision
+    )
+    return IndexedRecordRead(**record.model_dump(), extraction=extraction)
 
 
 @router.get("/{sync_id}/records/{record_id}/document", response_model=DocumentRead)
