@@ -323,3 +323,25 @@ rate failure or exhausted budget can leave the proof inconclusive. Without the o
 flag, Wispr retains its ordinary first/second-cycle trial; that is not a recovery proof.
 Offline PostgreSQL/subprocess tests verify the actual process exits and fresh retry,
 failed-body stop, and aggregate budget. No live recovery result is claimed here.
+
+Live checkpoint, 2026-09-30 (`cf14b4e`): the pipeline constructor had discarded
+`completion_policies` while checking topology; the fix preserves the source policy
+and still rejects incorrect topology. Full orchestrator/subprocess tests now cover
+this integration, rather than only the scan driver.
+
+The subsequent14-request trial used12 requests for253 listing observations and
+three committed meeting bodies, then intentionally exited75. The fresh process
+used its remaining2 requests during account/session setup (last response HTTP201)
+and hit the request guard before validation/body capture. Thus storage and intentional
+interruption are live-verified; recovery remains **unverified**. Together with the
+six prior preflight requests, this exhausted the20-request batch. Private schemas,
+files and code archive were removed; independent schema count was zero. See
+[evidence](evidence/wispr-recovery-budget-incomplete-20260930.json).
+
+A future independently approved trial with a fresh20-request budget is plausibly
+sufficient, not guaranteed: measured first-stage12 + expected fresh setup3 + listing
+refresh2 leaves3 GET/range calls for one additional meeting. A one-call body needs18
+requests total; a body requiring4 calls needs21 and must stop under the current cap.
+Inventory and range sizes can change, and prior rate failures provide no reliable
+reset interval. Keep the current20 maximum and180-second deadline; do not automatically
+raise limits or rerun after a failure. No further live requests were made for this note.
