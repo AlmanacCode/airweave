@@ -54,6 +54,10 @@ from airweave.domains.sources.token_providers.exceptions import (
     TokenProviderAccountGoneError,
 )
 from airweave.domains.sources.token_providers.oauth import OAuthTokenProvider
+from airweave.domains.sources.token_providers.protocol import (
+    ManagedAuthProvider,
+    ManagedToolAuthProvider,
+)
 from airweave.domains.sources.token_providers.static import StaticTokenProvider
 from airweave.domains.sources.types import AuthConfig, SourceConnectionData, SourceRegistryEntry
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
@@ -159,6 +163,7 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
             source_connection_id=source_connection_data.source_connection_id,
             ctx=ctx,
             logger=logger,
+            managed_auth=auth_config.managed_auth,
         )
 
         # 5. Parse config_fields into typed config
@@ -398,6 +403,7 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
 
         return AuthConfig(
             credentials=auth_result.credentials,
+            managed_auth=auth_result.managed_auth,
             auth_provider_instance=auth_provider_instance,
         )
 
@@ -617,7 +623,7 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
     async def _resolve_token_provider(
         self,
         source_connection_data: SourceConnectionData,
-        source_credentials: SourceCredentials,
+        source_credentials: SourceCredentials | None,
         ctx: ApiContext,
         logger: ContextualLogger,
         access_token: Optional[str],
@@ -633,6 +639,9 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
 
         auth_provider_instance: Optional[BaseAuthProvider] = auth_config.auth_provider_instance
         short_name = source_connection_data.short_name
+
+        if auth_config.managed_auth is not None:
+            return auth_config.managed_auth
 
         if access_token is not None:
             return StaticTokenProvider(access_token, source_short_name=short_name)
@@ -708,12 +717,24 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
         source_connection_id: UUID,
         ctx: ApiContext,
         logger: ContextualLogger,
+        managed_auth: ManagedAuthProvider | ManagedToolAuthProvider | None = None,
     ) -> AirweaveHttpClient:
         """Build an AirweaveHttpClient with rate limiting for this source."""
         feature_enabled = ctx.has_feature(FeatureFlag.SOURCE_RATE_LIMITING)
 
+        from airweave.platform.http_client.composio_transport import ComposioTransport
+
+        transport = (
+            ComposioTransport(
+                api_key=managed_auth.api_key.get_secret_value(),
+                connected_account_id=managed_auth.connected_account_id,
+                allowed_hosts=managed_auth.allowed_hosts,
+            )
+            if isinstance(managed_auth, ManagedAuthProvider)
+            else None
+        )
         client = AirweaveHttpClient(
-            wrapped_client=httpx.AsyncClient(),
+            wrapped_client=httpx.AsyncClient(transport=transport),
             org_id=ctx.organization.id,
             source_short_name=source_short_name,
             rate_limiter=self._rate_limiter,

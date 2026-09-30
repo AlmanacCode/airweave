@@ -1183,6 +1183,12 @@ class ComposioConfig(AuthProviderConfig):
         description="Account ID for the Composio connection",
     )
 
+    user_id: str | None = Field(
+        default=None,
+        title="User ID",
+        description="Explicit Composio user binding required for managed tool sessions",
+    )
+
 
 class CustomConfig(AuthProviderConfig):
     """Custom Auth Provider configuration schema."""

@@ -22,6 +22,7 @@ from airweave.core.context import BaseContext
 from airweave.core.exceptions import NotFoundException
 from airweave.core.logging import ContextualLogger, LoggerConfigurator, logger
 from airweave.core.protocols.event_bus import EventBus
+from airweave.db.session import get_db_context
 from airweave.domains.access_control.dispatcher import ACActionDispatcher
 from airweave.domains.access_control.membership_tracker import ACLMembershipTracker
 from airweave.domains.access_control.pipeline import AccessControlPipeline
@@ -31,6 +32,9 @@ from airweave.domains.access_control.resolver import ACActionResolver
 from airweave.domains.arf.protocols import ArfServiceProtocol
 from airweave.domains.browse_tree.protocols import NodeSelectionRepositoryProtocol
 from airweave.domains.browse_tree.types import NodeSelectionData
+from airweave.domains.entities.canonical.service import CanonicalCaptureService
+from airweave.domains.entities.canonical.source import CanonicalSource, ContainerScopedSource
+from airweave.domains.entities.canonical.store import CanonicalRecordStore
 from airweave.domains.entities.protocols import (
     EntityCountRepositoryProtocol,
     EntityRepositoryProtocol,
@@ -43,6 +47,8 @@ from airweave.domains.storage.file_service import FileService
 from airweave.domains.storage.protocols import StorageBackend
 from airweave.domains.sync_pipeline.builders import SyncContextBuilder
 from airweave.domains.sync_pipeline.builders.destinations import DestinationsContextBuilder
+from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
+from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt, resolve_capture_attempt
 from airweave.domains.sync_pipeline.config import SyncConfig
 from airweave.domains.sync_pipeline.contexts.runtime import SyncRuntime
 from airweave.domains.sync_pipeline.contexts.sync import SyncContext
@@ -145,6 +151,7 @@ class SyncFactory(SyncFactoryProtocol):
         force_full_sync: bool = False,
         execution_config: Optional[SyncConfig] = None,
         access_token: Optional[str] = None,
+        capture_attempt: CaptureAttempt | None = None,
     ) -> SyncOrchestrator:
         """Create a dedicated orchestrator instance for a sync run."""
         init_start = time.time()
@@ -185,13 +192,20 @@ class SyncFactory(SyncFactoryProtocol):
             access_token=access_token,
         )
         source_entry = self._source_registry.get(sc.short_name)
-        destinations = await self._build_destinations(
-            db=db,
-            sync=sync,
-            collection=collection,
-            ctx=ctx,
-            execution_config=resolved_config,
-            source_supports_acl=source_entry.supports_access_control,
+        canonical_source = (
+            source_result.source if isinstance(source_result.source, CanonicalSource) else None
+        )
+        destinations = (
+            []
+            if canonical_source is not None
+            else await self._build_destinations(
+                db=db,
+                sync=sync,
+                collection=collection,
+                ctx=ctx,
+                execution_config=resolved_config,
+                source_supports_acl=source_entry.supports_access_control,
+            )
         )
         entity_tracker = await self._build_entity_tracker(
             db=db,
@@ -224,9 +238,24 @@ class SyncFactory(SyncFactoryProtocol):
         logger.debug(f"Context + runtime built in {time.time() - init_start:.2f}s")
 
         # 4. Wire pipelines
-        entity_pipeline = self._build_entity_pipeline(
-            sync_context, runtime, destinations, resolved_config
-        )
+        if canonical_source is not None:
+            runtime.canonical_capture = CanonicalCapturePipeline(
+                service=CanonicalCaptureService(CanonicalRecordStore()),
+                sessions=get_db_context,
+                event_bus=self._event_bus,
+                record_types=canonical_source.canonical_record_types,
+                attempt=resolve_capture_attempt(capture_attempt),
+                container_parents=(
+                    canonical_source.canonical_container_parents
+                    if isinstance(canonical_source, ContainerScopedSource)
+                    else None
+                ),
+            )
+            entity_pipeline = runtime.canonical_capture
+        else:
+            entity_pipeline = self._build_entity_pipeline(
+                sync_context, runtime, destinations, resolved_config
+            )
         access_control_pipeline = self._build_access_control_pipeline(sync_context)
         stream = self._build_stream(runtime, source_result, sync_context)
 
@@ -316,12 +345,20 @@ class SyncFactory(SyncFactoryProtocol):
         sync_context: SyncContext,
     ) -> AsyncSourceStream:
         """Build the async source stream from the source generator."""
-        return AsyncSourceStream(
-            source_generator=runtime.source.generate_entities(
+        if isinstance(runtime.source, CanonicalSource):
+            generator = runtime.source.generate_observations(
                 cursor=runtime.cursor,
                 files=source_result.files,
                 node_selections=source_result.node_selections,
-            ),
+            )
+        else:
+            generator = runtime.source.generate_entities(
+                cursor=runtime.cursor,
+                files=source_result.files,
+                node_selections=source_result.node_selections,
+            )
+        return AsyncSourceStream(
+            source_generator=generator,
             queue_size=10000,
             logger=sync_context.logger,
         )
@@ -344,6 +381,11 @@ class SyncFactory(SyncFactoryProtocol):
     ) -> SourceBuildResult:
         """Build source instance, cursor, file service, and node selections."""
         if execution_config and execution_config.behavior.replay_from_arf:
+            source_class = self._source_registry.get(source_connection.short_name).source_class_ref
+            if isinstance(source_class, CanonicalSource):
+                raise ValueError(
+                    "Canonical records must be reindexed from Postgres, not mutable ARF"
+                )
             return await self._build_arf_replay_source(db=db, sync=sync, ctx=ctx, logger=logger)
 
         self._validate_not_completed_snapshot(source_connection)
@@ -357,7 +399,9 @@ class SyncFactory(SyncFactoryProtocol):
             access_token=access_token,
         )
 
-        files = FileService(sync_job_id=sync_job.id, storage_backend=self._storage_backend)
+        files = FileService(
+            sync_job_id=sync_job.id, sync_id=sync.id, storage_backend=self._storage_backend
+        )
 
         cursor = await self._create_cursor(
             db=db,

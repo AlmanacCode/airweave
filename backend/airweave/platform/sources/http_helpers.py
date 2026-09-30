@@ -27,6 +27,7 @@ from airweave.domains.sources.exceptions import (
     SourceEntityForbiddenError,
     SourceEntityNotFoundError,
     SourceError,
+    SourceGoneError,
     SourceRateLimitError,
     SourceServerError,
 )
@@ -107,6 +108,8 @@ def _handle_redirect(
 def _handle_fallback(
     resp: httpx.Response, status: int, detail: str, ctx: str, sn: str, _tpk: AuthProviderKind
 ) -> None:
+    if status == 410:
+        raise SourceGoneError(f"Resource or continuation expired (410){ctx}", source_short_name=sn)
     if status >= 500:
         raise SourceServerError(
             f"Server error ({status}){ctx}: {detail}",

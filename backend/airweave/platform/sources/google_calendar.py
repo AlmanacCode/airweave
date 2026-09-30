@@ -42,10 +42,15 @@ from tenacity import retry, stop_after_attempt
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
 from airweave.domains.browse_tree.types import NodeSelectionData
-from airweave.domains.sources.token_providers.protocol import TokenProviderProtocol
+from airweave.domains.entities.canonical.source import SourceObservation
+from airweave.domains.sources.token_providers.protocol import (
+    SourceAuthProvider,
+    authorization_headers,
+)
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.syncs.cursors.cursor import SyncCursor
 from airweave.platform.configs.config import GoogleCalendarConfig
+from airweave.platform.cursors.google_calendar import GoogleCalendarCursor
 from airweave.platform.decorators import source
 from airweave.platform.entities._base import BaseEntity, Breadcrumb
 from airweave.platform.entities.google_calendar import (
@@ -57,6 +62,7 @@ from airweave.platform.entities.google_calendar import (
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
 from airweave.platform.sources._base import BaseSource
 from airweave.platform.sources.http_helpers import raise_for_status
+from airweave.platform.sources.records.google_calendar import generate_calendar_observations
 from airweave.platform.sources.retry_helpers import (
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
@@ -77,7 +83,8 @@ from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
     auth_config_class=None,
     config_class=GoogleCalendarConfig,
     labels=["Productivity", "Calendar"],
-    supports_continuous=False,
+    supports_continuous=True,
+    cursor_class=GoogleCalendarCursor,
     rate_limit_level=RateLimitLevel.ORG,
 )
 class GoogleCalendarSource(BaseSource):
@@ -89,6 +96,22 @@ class GoogleCalendarSource(BaseSource):
     Google Calendar scheduling information for productivity and time management insights.
     """
 
+    canonical_record_types = ("calendar", "event")
+    canonical_container_parents = {"event": "calendar"}
+
+    async def generate_observations(
+        self,
+        *,
+        cursor: SyncCursor | None = None,
+        files: FileService | None = None,
+        node_selections: list[NodeSelectionData] | None = None,
+    ) -> AsyncGenerator[SourceObservation, None]:
+        """Capture original masters, exceptions and cancellations; no recurrence expansion."""
+        if node_selections:
+            raise ValueError("Calendar selection scopes are not supported by canonical capture")
+        async for observation in generate_calendar_observations(self._get, cursor):
+            yield observation
+
     # -----------------------
     # Construction / Config
     # -----------------------
@@ -96,7 +119,7 @@ class GoogleCalendarSource(BaseSource):
     async def create(
         cls,
         *,
-        auth: TokenProviderProtocol,
+        auth: SourceAuthProvider,
         logger: ContextualLogger,
         http_client: AirweaveHttpClient,
         config: GoogleCalendarConfig,
@@ -119,13 +142,11 @@ class GoogleCalendarSource(BaseSource):
 
     async def _authed_headers(self) -> Dict[str, str]:
         """Build Authorization headers with a fresh token."""
-        token = await self.auth.get_token()
-        return {"Authorization": f"Bearer {token}"}
+        return await authorization_headers(self.auth)
 
     async def _refresh_and_get_headers(self) -> Dict[str, str]:
         """Force-refresh the token and return updated headers."""
-        new_token = await self.auth.force_refresh()
-        return {"Authorization": f"Bearer {new_token}"}
+        return await authorization_headers(self.auth, refresh=True)
 
     @retry(
         stop=stop_after_attempt(5),

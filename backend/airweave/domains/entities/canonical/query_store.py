@@ -7,7 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query_models import RecordFilters
-from airweave.domains.entities.canonical.store import SourceNotFound, source_record
+from airweave.domains.entities.canonical.store import (
+    SourceNotFound,
+    parent_is_visible,
+    source_record,
+    with_content_access,
+)
 from airweave.models.entity import Entity
 from airweave.models.sync import Sync
 
@@ -35,6 +40,7 @@ class CanonicalQueryStore:
             Entity.organization_id == organization_id,
             Entity.sync_id == sync_id,
             Entity.record_revision > 0,
+            parent_is_visible(),
         )
         if filters.record_type is not None:
             statement = statement.where(Entity.entity_definition_short_name == filters.record_type)
@@ -47,4 +53,9 @@ class CanonicalQueryStore:
         if after_id is not None:
             statement = statement.where(Entity.id > after_id)
         rows = await db.scalars(statement.order_by(Entity.id).limit(limit + 1))
-        return tuple(source_record(row) for row in rows)
+        return tuple(
+            with_content_access(
+                source_record(row), row.removal_reason not in ("access_revoked", "scope_removed")
+            )
+            for row in rows
+        )

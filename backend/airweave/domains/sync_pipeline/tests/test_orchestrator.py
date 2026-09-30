@@ -42,7 +42,7 @@ def _make_orchestrator(**overrides):
         worker_pool=worker_pool,
         stream=overrides.pop("stream", MagicMock()),
         sync_context=sync_context,
-        runtime=overrides.pop("runtime", MagicMock()),
+        runtime=overrides.pop("runtime", MagicMock(canonical_capture=None)),
         access_control_pipeline=overrides.pop("access_control_pipeline", MagicMock()),
         event_bus=overrides.pop("event_bus", MagicMock()),
         usage_checker=usage_checker,
@@ -479,6 +479,7 @@ async def test_checkpoint_failure_prevents_completed_transition():
     ctx = _make_sync_context()
     ctx.execution_config = None
     runtime = MagicMock()
+    runtime.canonical_capture = None
     runtime.cursor = SimpleNamespace(cursor_data={"history_id": "42"}, cursor_field=None)
     orch = _make_orchestrator(
         sync_context=ctx,

@@ -1,6 +1,7 @@
 """Composio Test Auth Provider - provides authentication services for other integrations."""
 
-from typing import Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from urllib.parse import quote
 from uuid import UUID
 
 import httpx
@@ -19,6 +20,9 @@ from airweave.domains.auth_provider.exceptions import (
 from airweave.platform.configs.auth import ComposioAuthConfig
 from airweave.platform.configs.config import ComposioConfig
 from airweave.platform.decorators import auth_provider
+
+if TYPE_CHECKING:
+    from airweave.domains.auth_provider.auth_result import AuthResult
 
 
 @auth_provider(
@@ -53,6 +57,7 @@ class ComposioAuthProvider(BaseAuthProvider):
     # Key: Airweave short name, Value: Composio toolkit slug
     # Only include mappings where names differ between Airweave and Composio
     SLUG_NAME_MAPPING = {
+        "wispr": "wispr_flow_mcp",
         "google_drive": "googledrive",
         "google_calendar": "googlecalendar",
         "google_docs": "googledocs",
@@ -86,8 +91,80 @@ class ComposioAuthProvider(BaseAuthProvider):
         instance.api_key = credentials["api_key"]
         instance.auth_config_id = config.get("auth_config_id")
         instance.account_id = config.get("account_id")
+        instance.user_id = config.get("user_id")
         instance._last_credential_blob = None
         return instance
+
+    async def get_auth_result(
+        self,
+        source_short_name: str,
+        source_auth_config_fields: List[str],
+        optional_fields: Optional[Set[str]] = None,
+        source_config_field_mappings: Optional[Dict[str, str]] = None,
+        source_connection_id: Optional[UUID] = None,
+    ) -> "AuthResult":
+        """Bind managed access without requesting or extracting OAuth tokens."""
+        from airweave.domains.auth_provider.auth_result import AuthResult
+        from airweave.domains.auth_provider.exceptions import AuthProviderConfigError
+        from airweave.domains.sources.token_providers.protocol import (
+            ManagedAuthProvider,
+            ManagedToolAuthProvider,
+        )
+
+        hosts = {
+            "gmail": frozenset({"gmail.googleapis.com"}),
+            "google_calendar": frozenset({"www.googleapis.com"}),
+            "google_drive": frozenset({"www.googleapis.com"}),
+            "slack": frozenset({"slack.com"}),
+        }
+        if source_short_name not in hosts and source_short_name != "wispr":
+            raise AuthProviderConfigError(
+                "Managed Composio requests are not supported for this source yet",
+                provider_name="composio",
+            )
+        if not self.account_id:
+            raise AuthProviderConfigError(
+                "An explicit Composio account is required", provider_name="composio"
+            )
+        async with httpx.AsyncClient() as client:
+            account = await self._get_with_auth(
+                client,
+                "https://backend.composio.dev/api/v3/connected_accounts/"
+                + quote(self.account_id, safe=""),
+            )
+        if account.get("toolkit", {}).get("slug", "").lower() != self._get_composio_slug(
+            source_short_name
+        ):
+            raise AuthProviderConfigError(
+                "Connected account toolkit does not match source", provider_name="composio"
+            )
+        if self.auth_config_id and account.get("auth_config", {}).get("id") != self.auth_config_id:
+            raise AuthProviderConfigError(
+                "Connected account auth config does not match", provider_name="composio"
+            )
+        if account.get("status", "").upper() != "ACTIVE":
+            from airweave.domains.auth_provider.exceptions import AuthProviderAuthError
+
+            raise AuthProviderAuthError(
+                "Connected account requires attention", provider_name="composio"
+            )
+        if source_short_name == "wispr":
+            if not self.user_id:
+                raise AuthProviderConfigError(
+                    "Wispr requires an explicit Composio user binding", provider_name="composio"
+                )
+            return AuthResult(
+                managed_auth=ManagedToolAuthProvider(
+                    api_key=self.api_key, connected_account_id=self.account_id, user_id=self.user_id
+                )
+            )
+        return AuthResult(
+            managed_auth=ManagedAuthProvider(
+                api_key=self.api_key,
+                connected_account_id=self.account_id,
+                allowed_hosts=hosts[source_short_name],
+            )
+        )
 
     def _get_composio_slug(self, airweave_short_name: str) -> str:
         """Get the Composio toolkit slug for an Airweave source short name.
@@ -143,13 +220,20 @@ class ComposioAuthProvider(BaseAuthProvider):
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             self.logger.error(f"HTTP error from Composio API: {status} for {url}")
-            if status == 401:
+            if status in (401, 403):
                 raise AuthProviderAuthError(
                     "Composio API key is invalid or revoked",
                     provider_name="composio",
                 ) from e
+            if status == 404:
+                raise AuthProviderAccountNotFoundError(
+                    "Composio connected account was not found", provider_name="composio"
+                ) from None
             if status == 429:
-                retry_after = float(e.response.headers.get("retry-after", 30))
+                try:
+                    retry_after = float(e.response.headers.get("retry-after", 30))
+                except ValueError:
+                    retry_after = 30.0
                 raise AuthProviderRateLimitError(
                     "Composio API rate-limited",
                     provider_name="composio",
@@ -220,6 +304,7 @@ class ComposioAuthProvider(BaseAuthProvider):
             source_short_name: The short name of the source to get credentials for
             source_auth_config_fields: The fields required for the source auth config
             optional_fields: Fields that can be skipped if not available in Composio
+            source_connection_id: Source connection requesting credentials.
 
         Returns:
             Credentials dictionary for the source

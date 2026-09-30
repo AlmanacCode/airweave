@@ -62,6 +62,7 @@ from .teams import TeamsSource
 from .timed import TimedSource
 from .todoist import TodoistSource
 from .trello import TrelloSource
+from .wispr import WisprSource
 from .word import WordSource
 from .zendesk import ZendeskSource
 from .zoho_crm import ZohoCRMSource
@@ -129,6 +130,7 @@ ALL_SOURCES: list[type] = [
     TimedSource,
     TodoistSource,
     TrelloSource,
+    WisprSource,
     WordSource,
     ZendeskSource,
     ZoomSource,

@@ -16,7 +16,9 @@ All implementations raise exceptions from
 """
 
 from enum import Enum
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 
 class AuthProviderKind(str, Enum):
@@ -81,3 +83,39 @@ class TokenProviderProtocol(SourceAuthProvider, Protocol):
             TokenProviderServerError: If upstream fails during refresh.
         """
         ...
+
+
+class ManagedAuthProvider(BaseModel):
+    """Bound credential custody; deliberately does not expose a bearer token."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    api_key: SecretStr = Field(repr=False)
+    connected_account_id: str = Field(min_length=1)
+    allowed_hosts: frozenset[str] = Field(min_length=1)
+    provider_kind: Literal[AuthProviderKind.AUTH_PROVIDER] = AuthProviderKind.AUTH_PROVIDER
+    supports_refresh: Literal[False] = False
+
+
+class ManagedToolAuthProvider(BaseModel):
+    """Explicit account-bound tool sessions for a provider without a REST proxy."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    api_key: SecretStr = Field(repr=False)
+    connected_account_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    provider_kind: Literal[AuthProviderKind.AUTH_PROVIDER] = AuthProviderKind.AUTH_PROVIDER
+    supports_refresh: Literal[False] = False
+
+
+async def authorization_headers(
+    auth: SourceAuthProvider, *, refresh: bool = False
+) -> dict[str, str]:
+    """Resolve direct credentials or explicitly defer authentication to transport."""
+    if isinstance(auth, ManagedAuthProvider):
+        if refresh:
+            raise ValueError("Managed authentication refresh belongs to the auth provider")
+        return {}
+    if not isinstance(auth, TokenProviderProtocol):
+        raise TypeError("This request requires token or managed authentication")
+    token = await auth.force_refresh() if refresh else await auth.get_token()
+    return {"Authorization": f"Bearer {token}"}

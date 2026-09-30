@@ -25,8 +25,13 @@ from tenacity import retry, stop_after_attempt
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
 from airweave.domains.browse_tree.types import NodeSelectionData
+from airweave.domains.entities.canonical.requests import CaptureRecord
+from airweave.domains.entities.canonical.source import SourceObservation
 from airweave.domains.sources.exceptions import SourceAuthError, SourceError
-from airweave.domains.sources.token_providers.protocol import TokenProviderProtocol
+from airweave.domains.sources.token_providers.protocol import (
+    SourceAuthProvider,
+    authorization_headers,
+)
 from airweave.domains.storage import FileSkippedException
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.syncs.cursors.cursor import SyncCursor
@@ -43,6 +48,8 @@ from airweave.platform.entities.google_drive import (
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
 from airweave.platform.sources._base import BaseSource
 from airweave.platform.sources.http_helpers import raise_for_status
+from airweave.platform.sources.records.google_drive import generate_drive_observations
+from airweave.platform.sources.records.google_drive_content import capture_file_content
 from airweave.platform.sources.retry_helpers import (
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
@@ -77,11 +84,35 @@ class GoogleDriveSource(BaseSource):
     while maintaining proper organization and access permissions.
     """
 
+    canonical_record_types = ("file",)
+
+    async def generate_observations(
+        self,
+        *,
+        cursor: SyncCursor | None = None,
+        files: FileService | None = None,
+        node_selections: list[NodeSelectionData] | None = None,
+    ) -> AsyncGenerator[SourceObservation, None]:
+        """Capture original file metadata; missing body bytes remain explicitly metadata-only."""
+        if self.include_patterns or node_selections:
+            raise ValueError("Drive path selection is not yet supported by canonical capture")
+        async for observation in generate_drive_observations(self._get, cursor):
+            if isinstance(observation, CaptureRecord) and files is not None:
+                observation = await capture_file_content(
+                    observation,
+                    files=files,
+                    get=self._get,
+                    client=self.http_client,
+                    auth=self.auth,
+                    logger=self.logger,
+                )
+            yield observation
+
     @classmethod
     async def create(
         cls,
         *,
-        auth: TokenProviderProtocol,
+        auth: SourceAuthProvider,
         logger: ContextualLogger,
         http_client: AirweaveHttpClient,
         config: GoogleDriveConfig,
@@ -123,13 +154,11 @@ class GoogleDriveSource(BaseSource):
 
         Max 5 attempts with intelligent wait strategy.
         """
-        token = await self.auth.get_token()
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = await authorization_headers(self.auth)
         response = await self.http_client.get(url, headers=headers, params=params, timeout=30.0)
 
         if response.status_code == 401 and self.auth.supports_refresh:
-            new_token = await self.auth.force_refresh()
-            headers = {"Authorization": f"Bearer {new_token}"}
+            headers = await authorization_headers(self.auth, refresh=True)
             response = await self.http_client.get(url, headers=headers, params=params, timeout=30.0)
 
         raise_for_status(

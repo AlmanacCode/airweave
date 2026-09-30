@@ -23,7 +23,7 @@ from airweave.platform.entities._airweave_field import AirweaveField
 from airweave.platform.entities._base import BaseEntity, Breadcrumb, DeletionEntity, FileEntity
 from airweave.platform.entities.utils import _determine_file_type_from_mime
 
-_GOOGLE_EXPORT_MAP: Dict[str, tuple[str, str]] = {
+GOOGLE_EXPORT_FORMATS: Dict[str, tuple[str, str]] = {
     "application/vnd.google-apps.document": (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".docx",
@@ -190,7 +190,7 @@ class GoogleDriveFileEntity(FileEntity):
         file_id = data["id"]
 
         if mime_type.startswith("application/vnd.google-apps."):
-            export_mime_type, file_extension = _GOOGLE_EXPORT_MAP.get(
+            export_mime_type, file_extension = GOOGLE_EXPORT_FORMATS.get(
                 mime_type, ("application/pdf", ".pdf")
             )
             download_url = (

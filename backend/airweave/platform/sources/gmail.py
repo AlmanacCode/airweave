@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
+from contextlib import aclosing
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
@@ -20,8 +22,12 @@ from tenacity import retry, stop_after_attempt
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
 from airweave.domains.browse_tree.types import NodeSelectionData
+from airweave.domains.entities.canonical.source import SourceObservation
 from airweave.domains.sources.exceptions import SourceAuthError
-from airweave.domains.sources.token_providers.protocol import TokenProviderProtocol
+from airweave.domains.sources.token_providers.protocol import (
+    SourceAuthProvider,
+    authorization_headers,
+)
 from airweave.domains.storage import FileSkippedException
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.syncs.cursors.cursor import SyncCursor
@@ -37,6 +43,7 @@ from airweave.platform.entities.gmail import (
 )
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
 from airweave.platform.sources._base import BaseSource
+from airweave.platform.sources.gmail_capture import GmailCapture
 from airweave.platform.sources.http_helpers import raise_for_status
 from airweave.platform.sources.retry_helpers import (
     wait_rate_limit_with_backoff,
@@ -83,6 +90,24 @@ class GmailSource(BaseSource):
     It supports syncing email threads, individual messages, and file attachments.
     """
 
+    canonical_record_types = ("message",)
+
+    async def generate_observations(
+        self,
+        *,
+        cursor: SyncCursor | None = None,
+        files: FileService | None = None,
+        node_selections: list[NodeSelectionData] | None = None,
+    ) -> AsyncGenerator[SourceObservation, None]:
+        """Capture native messages once; thread/search projections are downstream."""
+        if node_selections:
+            raise ValueError("Gmail capture does not support selected node scopes")
+        capture = GmailCapture(
+            self._get, self._build_gmail_query(), files=files, attachment_get=self._get_mime_json
+        )
+        async for observation in capture.generate(cursor):
+            yield observation
+
     # -----------------------
     # Construction / Config
     # -----------------------
@@ -90,7 +115,7 @@ class GmailSource(BaseSource):
     async def create(
         cls,
         *,
-        auth: TokenProviderProtocol,
+        auth: SourceAuthProvider,
         logger: ContextualLogger,
         http_client: AirweaveHttpClient,
         config: GmailConfig,
@@ -230,13 +255,11 @@ class GmailSource(BaseSource):
 
     async def _authed_headers(self) -> Dict[str, str]:
         """Build Authorization headers with a fresh token."""
-        token = await self.auth.get_token()
-        return {"Authorization": f"Bearer {token}"}
+        return await authorization_headers(self.auth)
 
     async def _refresh_and_get_headers(self) -> Dict[str, str]:
         """Force-refresh the token and return updated headers."""
-        new_token = await self.auth.force_refresh()
-        return {"Authorization": f"Bearer {new_token}"}
+        return await authorization_headers(self.auth, refresh=True)
 
     @retry(
         stop=stop_after_attempt(5),
@@ -260,8 +283,7 @@ class GmailSource(BaseSource):
 
         if response.status_code == 429:
             self.logger.warning(
-                f"Got 429 Rate Limited from Gmail API. Headers: {response.headers}. "
-                f"Body: {response.text}."
+                "Gmail rate limit reached"
             )
 
         raise_for_status(
@@ -273,6 +295,27 @@ class GmailSource(BaseSource):
         self.logger.debug(f"Received response from {url} - Status: {response.status_code}")
         self.logger.debug(f"Response data keys: {list(data.keys())}")
         return data
+
+    async def _get_mime_json(self, url: str, *, max_bytes: int) -> dict:
+        """Read bounded attachment JSON through the managed source HTTP transport."""
+        headers = await self._authed_headers()
+        async with self.http_client.stream("GET", url, headers=headers) as response:
+            raise_for_status(
+                response, source_short_name=self.short_name,
+                token_provider_kind=self.auth.provider_kind,
+            )
+            body = bytearray()
+            async with aclosing(response.aiter_bytes()) as chunks:
+                async for chunk in chunks:
+                    if len(body) + len(chunk) > max_bytes:
+                        raise FileSkippedException(
+                            "Encoded MIME body exceeds size limit", "MIME body"
+                        )
+                    body.extend(chunk)
+        value = json.loads(body)
+        if not isinstance(value, dict):
+            raise ValueError("Gmail MIME response must be an object")
+        return value
 
     # -----------------------
     # Cursor helper

@@ -19,9 +19,7 @@ def _make_service(tmpdir: str) -> FileService:
     storage.write_file = AsyncMock()
     storage.delete_directory = AsyncMock()
 
-    with patch(
-        "airweave.domains.storage.file_service.paths.temp_sync_dir", return_value=tmpdir
-    ):
+    with patch("airweave.domains.storage.file_service.paths.temp_sync_dir", return_value=tmpdir):
         svc = FileService(sync_job_id=sync_job_id, storage_backend=storage)
 
     return svc, storage
@@ -128,3 +126,36 @@ class TestCleanupSyncDirectory:
 
         # tmpdir has been deleted by the context manager exit
         await svc.cleanup_sync_directory(logger=MagicMock())
+
+
+class TestCanonicalBlobs:
+    @pytest.mark.asyncio
+    async def test_canonical_capture_keeps_original_bytes_and_cleans_temp(self, tmp_path):
+        from airweave.domains.sources.token_providers.static import StaticTokenProvider
+
+        svc, storage = _make_service(str(tmp_path))
+        svc.sync_id = uuid4()
+        content = b"original unsupported format"
+
+        async def download(client, url, headers, destination, logger):
+            with open(destination, "wb") as output:
+                output.write(content)
+
+        svc._stream_download = download
+        blob = await svc.capture_canonical_url(
+            "https://example.com/file.unknown",
+            MagicMock(),
+            StaticTokenProvider("token"),
+            MagicMock(),
+        )
+        assert blob.key.startswith(f"canonical/{svc.sync_id}/blobs/sha256/")
+        storage.write_file.assert_awaited_once_with(blob.key, content)
+        assert not list(tmp_path.iterdir())
+
+    @pytest.mark.asyncio
+    async def test_storage_failure_does_not_publish_reference(self, tmp_path):
+        svc, storage = _make_service(str(tmp_path))
+        svc.sync_id = uuid4()
+        storage.write_file.side_effect = OSError("storage down")
+        with pytest.raises(OSError, match="storage down"):
+            await svc.store_canonical_blob(b"bytes")

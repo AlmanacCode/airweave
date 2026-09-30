@@ -30,6 +30,9 @@ def upgrade():
     for column in (
         sa.Column("native_id", sa.String(), nullable=True),
         sa.Column("container_id", sa.String(), nullable=True),
+        sa.Column("parent_record_type", sa.String(), nullable=True),
+        sa.Column("parent_native_id", sa.String(), nullable=True),
+        sa.Column("parent_container_id", sa.String(), nullable=True),
         sa.Column("source_payload", postgresql.JSONB(), nullable=True),
         sa.Column("payload_schema_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("record_revision", sa.BigInteger(), nullable=False, server_default="0"),

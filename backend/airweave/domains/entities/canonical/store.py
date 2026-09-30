@@ -5,8 +5,9 @@ import json
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from airweave.domains.entities.canonical.models import (
     CaptureResult,
@@ -20,6 +21,8 @@ from airweave.domains.entities.canonical.requests import (
     CaptureRecord,
     ReconcileScope,
     RecordIdentity,
+    RemovedScope,
+    StartedScope,
     WriterFence,
 )
 from airweave.models.entity import Entity
@@ -72,6 +75,15 @@ def source_record(entity: Entity) -> SourceRecord:
             native_id=entity.native_id,
             container_id=entity.container_id,
         ),
+        parent=(
+            RecordIdentity(
+                record_type=entity.parent_record_type,
+                native_id=entity.parent_native_id,
+                container_id=entity.parent_container_id,
+            )
+            if entity.parent_record_type is not None
+            else None
+        ),
         revision=entity.record_revision,
         payload=entity.source_payload,
         payload_schema_version=entity.payload_schema_version,
@@ -87,6 +99,46 @@ def source_record(entity: Entity) -> SourceRecord:
         indexed_revision=entity.indexed_revision,
         indexed_pipeline_version=entity.indexed_pipeline_version,
     )
+
+
+def active_parent_exists():
+    """Root container visibility; caller still supplies tenant/sync authorization."""
+    parent = aliased(Entity, name="canonical_parent")
+    return exists(
+        select(parent.id).where(
+            parent.organization_id == Entity.organization_id,
+            parent.sync_id == Entity.sync_id,
+            parent.entity_definition_short_name == Entity.parent_record_type,
+            parent.native_id == Entity.parent_native_id,
+            parent.container_id.is_not_distinct_from(Entity.parent_container_id),
+            parent.record_revision > 0,
+            parent.deleted_at.is_(None),
+            parent.parent_record_type.is_(None),
+        )
+    ).correlate(Entity)
+
+
+def parent_is_visible():
+    """Deny children of missing/deleted containers immediately, before cleanup catches up."""
+    return or_(Entity.parent_record_type.is_(None), active_parent_exists())
+
+
+def content_is_available():
+    """Shared SQL gate for read, historical payload access and search postvalidation."""
+    return and_(
+        parent_is_visible(),
+        or_(
+            Entity.removal_reason.is_(None),
+            Entity.removal_reason.not_in(("scope_removed", "access_revoked")),
+        ),
+    )
+
+
+def with_content_access(record: SourceRecord, available: bool) -> SourceRecord:
+    """Retain citation identity/version while explicitly withholding revoked content."""
+    if available:
+        return record
+    return record.model_copy(update={"content_access": "unavailable", "payload": {}, "blobs": ()})
 
 
 class CanonicalRecordStore:
@@ -220,6 +272,13 @@ class CanonicalRecordStore:
             entity.sync_job_id = batch.fence.job_id
             entity.native_id = identity.native_id
             entity.container_id = identity.container_id
+            entity.parent_record_type = (
+                observation.parent.record_type if observation.parent else None
+            )
+            entity.parent_native_id = observation.parent.native_id if observation.parent else None
+            entity.parent_container_id = (
+                observation.parent.container_id if observation.parent else None
+            )
             entity.source_payload = observation.payload
             entity.payload_schema_version = observation.payload_schema_version
             entity.record_revision += 1
@@ -280,6 +339,7 @@ class CanonicalRecordStore:
         observations = tuple(
             CaptureRecord(
                 identity=source_record(entity).identity,
+                parent=source_record(entity).parent,
                 payload=entity.source_payload,
                 payload_schema_version=entity.payload_schema_version,
                 kind="delete",
@@ -297,6 +357,137 @@ class CanonicalRecordStore:
             db, sync, CaptureBatch(fence=request.fence, records=observations)
         )
         return ReconcileResult(capture=result, has_more=len(entities) > request.limit)
+
+    async def start_scope(self, db: AsyncSession, fence: WriterFence, scope: StartedScope) -> None:
+        """Restart a full-scan scope without inheriting partial incremental sightings."""
+        await self._fenced_sync(db, fence)
+        await db.execute(
+            update(Entity)
+            .where(
+                Entity.organization_id == fence.organization_id,
+                Entity.sync_id == fence.sync_id,
+                Entity.entity_definition_short_name == scope.record_type,
+                Entity.container_id.is_not_distinct_from(scope.container_id),
+                Entity.record_revision > 0,
+            )
+            .values(last_seen_run_id=None)
+        )
+        await db.flush()
+
+    async def remove_scope(
+        self,
+        db: AsyncSession,
+        fence: WriterFence,
+        scope: RemovedScope,
+        *,
+        limit: int = 250,
+    ) -> ReconcileResult:
+        """Tombstone a bounded exact scope regardless of this attempt's sightings."""
+        if not 1 <= limit <= 500:
+            raise ValueError("Scope removal batch limit must be between 1 and 500")
+        sync = await self._fenced_sync(db, fence)
+        entities = list(
+            (
+                await db.scalars(
+                    select(Entity)
+                    .where(
+                        Entity.organization_id == fence.organization_id,
+                        Entity.sync_id == fence.sync_id,
+                        Entity.entity_definition_short_name == scope.record_type,
+                        Entity.container_id.is_not_distinct_from(scope.container_id),
+                        Entity.record_revision > 0,
+                        Entity.deleted_at.is_(None),
+                    )
+                    .order_by(Entity.id)
+                    .limit(limit + 1)
+                )
+            ).all()
+        )
+        observations = tuple(
+            CaptureRecord(
+                identity=source_record(entity).identity,
+                parent=source_record(entity).parent,
+                payload=entity.source_payload,
+                payload_schema_version=entity.payload_schema_version,
+                kind="delete",
+                removal_reason=scope.removal_reason,
+                completeness=entity.completeness,
+                content_hash=entity.content_hash,
+                source_created_at=entity.source_created_at,
+                source_updated_at=entity.source_updated_at,
+                observed_at=scope.observed_at,
+                blobs=entity.blob_references or (),
+            )
+            for entity in entities[:limit]
+        )
+        result = await self._capture_locked(
+            db, sync, CaptureBatch(fence=fence, records=observations)
+        )
+        return ReconcileResult(capture=result, has_more=len(entities) > limit)
+
+    async def reconcile_parents(
+        self,
+        db: AsyncSession,
+        fence: WriterFence,
+        *,
+        limit: int = 250,
+    ) -> ReconcileResult:
+        """Durable unfinished removal is derived from child rows, not transient events."""
+        if not 1 <= limit <= 500:
+            raise ValueError("Parent reconciliation limit must be between 1 and 500")
+        sync = await self._fenced_sync(db, fence)
+        rows = list(
+            (
+                await db.scalars(
+                    select(Entity)
+                    .where(
+                        Entity.organization_id == fence.organization_id,
+                        Entity.sync_id == fence.sync_id,
+                        Entity.record_revision > 0,
+                        Entity.deleted_at.is_(None),
+                        Entity.parent_record_type.is_not(None),
+                        ~active_parent_exists(),
+                    )
+                    .order_by(Entity.id)
+                    .limit(limit + 1)
+                )
+            ).all()
+        )
+        observations = []
+        for entity in rows[:limit]:
+            record = source_record(entity)
+            reason = await db.scalar(
+                select(Entity.removal_reason).where(
+                    Entity.organization_id == fence.organization_id,
+                    Entity.sync_id == fence.sync_id,
+                    Entity.entity_definition_short_name == record.parent.record_type,
+                    Entity.native_id == record.parent.native_id,
+                    Entity.container_id.is_not_distinct_from(record.parent.container_id),
+                    Entity.record_revision > 0,
+                )
+            )
+            observations.append(
+                CaptureRecord(
+                    identity=record.identity,
+                    parent=record.parent,
+                    payload=record.payload,
+                    payload_schema_version=record.payload_schema_version,
+                    kind="delete",
+                    removal_reason="access_revoked"
+                    if reason == "access_revoked"
+                    else "scope_removed",
+                    completeness=record.completeness,
+                    content_hash=record.content_hash,
+                    source_created_at=record.source_created_at,
+                    source_updated_at=record.source_updated_at,
+                    observed_at=datetime.now(timezone.utc),
+                    blobs=record.blobs,
+                )
+            )
+        result = await self._capture_locked(
+            db, sync, CaptureBatch(fence=fence, records=tuple(observations))
+        )
+        return ReconcileResult(capture=result, has_more=len(rows) > limit)
 
     async def save_checkpoint(
         self, db: AsyncSession, fence: WriterFence, cursor_data: dict
@@ -326,7 +517,10 @@ class CanonicalRecordStore:
                 Entity.record_revision > 0,
             )
         )
-        return source_record(entity) if entity is not None else None
+        if entity is None:
+            return None
+        available = await db.scalar(select(content_is_available()).where(Entity.id == entity.id))
+        return with_content_access(source_record(entity), bool(available))
 
     async def changes(
         self,
@@ -362,12 +556,30 @@ class CanonicalRecordStore:
         )
         page = rows[:limit]
         more = len(rows) > limit
+        availability = (
+            dict(
+                (
+                    await db.execute(
+                        select(Entity.id, content_is_available()).where(
+                            Entity.organization_id == organization_id,
+                            Entity.sync_id == sync_id,
+                            Entity.id.in_([row.entity_record_id for row in page]),
+                        )
+                    )
+                ).all()
+            )
+            if page
+            else {}
+        )
         return ChangePage(
             changes=tuple(
                 ObservedChange(
                     sequence=row.sequence,
                     kind=row.kind,
-                    record=SourceRecord.model_validate(row.snapshot),
+                    record=with_content_access(
+                        SourceRecord.model_validate(row.snapshot),
+                        bool(availability.get(row.entity_record_id, False)),
+                    ),
                 )
                 for row in page
             ),

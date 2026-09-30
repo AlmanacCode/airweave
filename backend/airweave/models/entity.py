@@ -44,6 +44,9 @@ class Entity(OrganizationBase):
     # Canonical source state. Revision zero identifies legacy metadata-only rows.
     native_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     container_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    parent_record_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    parent_native_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    parent_container_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     source_payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     payload_schema_version: Mapped[int] = mapped_column(default=1, server_default="1")
     record_revision: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")

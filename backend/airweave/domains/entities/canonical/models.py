@@ -16,8 +16,10 @@ class SourceRecord(BaseModel):
     id: UUID
     sync_id: UUID
     identity: RecordIdentity
+    parent: RecordIdentity | None = None
     revision: int
     payload: dict[str, JsonValue]
+    content_access: Literal["available", "unavailable"] = "available"
     payload_schema_version: int
     capture_hash: str
     content_hash: str | None

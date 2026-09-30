@@ -13,6 +13,7 @@ from airweave.domains.sources.exceptions._exceptions import (  # noqa: F401
     SourceEntitySkippedError,
     SourceError,
     SourceFileDownloadError,
+    SourceGoneError,
     SourceNotFoundError,
     SourcePermanentError,
     SourceRateLimitError,

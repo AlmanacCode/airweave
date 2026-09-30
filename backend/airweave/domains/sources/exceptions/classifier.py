@@ -18,6 +18,8 @@ from airweave.domains.auth_provider.exceptions import (
     AuthProviderAccountNotFoundError,
     AuthProviderAuthError,
     AuthProviderError,
+    AuthProviderRateLimitError,
+    AuthProviderServerError,
 )
 from airweave.domains.source_connections.types import ErrorClassification
 from airweave.domains.sources.exceptions import (
@@ -77,6 +79,13 @@ def classify_error(exc: Exception) -> ErrorClassification:  # noqa: C901
             category=SourceConnectionErrorCategory.AUTH_PROVIDER_CREDENTIALS_INVALID,
             message=str(exc),
         )
+
+    if isinstance(exc, AuthProviderRateLimitError):
+        return ErrorClassification(
+            category=SourceConnectionErrorCategory.RATE_LIMITED, message=str(exc)
+        )
+    if isinstance(exc, AuthProviderServerError):
+        return ErrorClassification(category=None, message=None)
 
     # Catch-all for remaining AuthProviderError subtypes (e.g. MissingFieldsError,
     # ConfigError) — these are auth provider issues the user needs to address.

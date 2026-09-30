@@ -6,6 +6,8 @@ from uuid import uuid4
 
 import pytest
 
+from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
+from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
 from airweave.domains.sync_pipeline.factory import SourceBuildResult, SyncFactory
 
 
@@ -132,7 +134,8 @@ async def test_create_orchestrator_raises_when_source_connection_missing():
 
 
 @pytest.mark.asyncio
-async def test_create_orchestrator_passes_entity_repo_to_pipeline():
+@pytest.mark.parametrize("canonical", [False, True])
+async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
     """entity_repo is forwarded to EntityActionResolver and EntityPipeline."""
     entity_repo = MagicMock()
     sc_repo = MagicMock()
@@ -177,6 +180,9 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline():
     ):
         mock_source = MagicMock()
         mock_source.generate_entities = MagicMock(return_value=AsyncMock())
+        if canonical:
+            mock_source.canonical_record_types = ("event",)
+            mock_source.generate_observations = MagicMock(return_value=AsyncMock())
         mock_build_source.return_value = SourceBuildResult(
             source=mock_source, cursor=MagicMock(), files=MagicMock(), node_selections=[]
         )
@@ -194,11 +200,19 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline():
             collection=collection,
             connection=connection,
             ctx=ctx,
+            capture_attempt=CaptureAttempt(id=uuid4(), number=1),
         )
 
         assert orchestrator is not None
-        assert orchestrator.entity_pipeline._entity_repo is entity_repo
-        assert orchestrator.entity_pipeline._resolver._entity_repo is entity_repo
+        if canonical:
+            assert isinstance(orchestrator.entity_pipeline, CanonicalCapturePipeline)
+            mock_build_destinations.assert_not_called()
+            mock_disp_builder.assert_not_called()
+            mock_source.generate_entities.assert_not_called()
+            mock_source.generate_observations.assert_called_once()
+        else:
+            assert orchestrator.entity_pipeline._entity_repo is entity_repo
+            assert orchestrator.entity_pipeline._resolver._entity_repo is entity_repo
 
 
 # ---------------------------------------------------------------------------
@@ -397,10 +411,12 @@ class TestValidateNotCompletedSnapshot:
     def test_passes_for_normal_source_with_invalid_snapshot_config(self):
         """Normal source with config that fails SnapshotConfig parsing → no exception."""
         sc = SimpleNamespace(short_name="github", config_fields={"not": "snapshot"}, name="gh")
-        SyncFactory._validate_not_completed_snapshot(sc)  # should not raise (ValidationError caught)
+        SyncFactory._validate_not_completed_snapshot(
+            sc
+        )  # should not raise (ValidationError caught)
 
     def test_raises_for_restored_snapshot_source(self):
-        """Source with non-snapshot short_name but valid SnapshotConfig fields → SyncFailureError."""
+        """Restored snapshot config on a normal source raises SyncFailureError."""
         from airweave.domains.sync_pipeline.exceptions import SyncFailureError
 
         sc = SimpleNamespace(short_name="github", config_fields={}, name="restored-snap")
@@ -527,9 +543,7 @@ class TestBuildEntityTracker:
         entity_count_repo.get_counts_per_sync_and_type = AsyncMock(return_value=[count_row])
         factory = _build_factory(entity_count_repo=entity_count_repo)
 
-        tracker = await factory._build_entity_tracker(
-            db=db, sync=sync, sync_job=sync_job, ctx=ctx
-        )
+        tracker = await factory._build_entity_tracker(db=db, sync=sync, sync_job=sync_job, ctx=ctx)
 
         assert tracker is not None
         assert tracker.job_id == sync_job.id
@@ -545,9 +559,7 @@ class TestBuildEntityTracker:
         entity_count_repo.get_counts_per_sync_and_type = AsyncMock(return_value={})
         factory = _build_factory(entity_count_repo=entity_count_repo)
 
-        tracker = await factory._build_entity_tracker(
-            db=db, sync=sync, sync_job=sync_job, ctx=ctx
-        )
+        tracker = await factory._build_entity_tracker(db=db, sync=sync, sync_job=sync_job, ctx=ctx)
 
         assert tracker is not None
 

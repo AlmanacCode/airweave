@@ -31,6 +31,9 @@ class BlobReference(BaseModel):
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     size_bytes: int = Field(ge=0)
     media_type: str | None = None
+    source_path: str | None = Field(
+        default=None, description="RFC 6901 JSON Pointer into the unchanged native payload"
+    )
 
 
 class CaptureRecord(BaseModel):
@@ -38,6 +41,7 @@ class CaptureRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     identity: RecordIdentity
+    parent: RecordIdentity | None = None
     payload: dict[str, JsonValue]
     payload_schema_version: int = Field(default=1, ge=1)
     kind: Literal["upsert", "delete"] = "upsert"
@@ -97,3 +101,14 @@ class ReconcileScope(BaseModel):
     scope: CompletedScope
     observed_at: AwareDatetime
     limit: int = Field(default=250, ge=1, le=500)
+
+
+class StartedScope(CompletedScope):
+    """Start/restart exact-scope full enumeration, discarding earlier attempt sightings."""
+
+
+class RemovedScope(CompletedScope):
+    """Provider-confirmed scope loss; applies to children even if seen in this run."""
+
+    removal_reason: Literal["scope_removed", "access_revoked"]
+    observed_at: AwareDatetime
