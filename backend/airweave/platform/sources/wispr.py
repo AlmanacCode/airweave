@@ -192,13 +192,17 @@ class WisprSource(BaseSource):
     def _next_offset(text: JsonValue, field: str) -> int | None:
         if not isinstance(text, str):
             raise ValueError("Wispr meeting text is not a string")
-        match = re.search(
-            rf"\(\.\.\.truncated, \d+ chars remaining; continue with "
-            rf"view_{field}\.start_char=(\d+)\.\.\.\)\s*$",
-            text,
-            re.MULTILINE,
+        matches = list(
+            re.finditer(
+                rf"\(\.\.\.truncated, \d+ chars remaining; continue with "
+                rf"view_{field}\.start_char=(\d+)\.\.\.\)\s*$",
+                text,
+                re.MULTILINE,
+            )
         )
-        return int(match.group(1)) if match else None
+        if len(matches) > 1:
+            raise ValueError("Wispr returned ambiguous continuation markers")
+        return int(matches[0].group(1)) if matches else None
 
     async def _meeting(self, identity: str) -> dict[str, JsonValue]:
         offsets = {"content": 0, "transcript": 0}

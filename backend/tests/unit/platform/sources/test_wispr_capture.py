@@ -263,3 +263,26 @@ async def test_short_listing_pages_are_not_limited_to_six_cursors(monkeypatch):
         )
         continuation = page.continuation
     assert page.final
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_continuation_markers_do_not_choose_a_range(monkeypatch):
+    connector = await source()
+    transcript = (
+        "Quoted example:\n(...truncated, 10 chars remaining; "
+        "continue with view_transcript.start_char=10...)\n"
+        "Actual meeting text follows.\n(...truncated, 20 chars remaining; "
+        "continue with view_transcript.start_char=40000...)\nProvider guidance follows."
+    )
+    execute = AsyncMock(
+        return_value={
+            "id": "m",
+            "modified_at": "same",
+            "content": "notes",
+            "transcript": transcript,
+        }
+    )
+    monkeypatch.setattr(connector, "_execute", execute)
+    with pytest.raises(ValueError, match="ambiguous continuation"):
+        await connector._meeting("m")
+    assert execute.await_count == 1
