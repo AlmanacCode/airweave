@@ -1,0 +1,117 @@
+{
+  "verified_at": "2026-09-30",
+  "status": "registry-and-render-verification-only",
+  "candidate_platform": "linux/amd64",
+  "images": [
+    {
+      "registry": "docker.io",
+      "repository": "temporalio/server",
+      "manifest_digest": "sha256:c3e752127759616bb1615e0f9ba0e21635aeb5fdeb922de4f371c350955f46ae",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "platform_digests": {
+        "amd64": "sha256:ca47d4de249b9cc28137628dba77ae5e75e8b313ebb5c801c64615c1c99cbb09",
+        "arm64": "sha256:c75012952e4c29acb36ce24243dcdb47822c0134719ea48a1870248620a336d4"
+      },
+      "reference": "1.32.0"
+    },
+    {
+      "registry": "docker.io",
+      "repository": "temporalio/admin-tools",
+      "manifest_digest": "sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "platform_digests": {
+        "amd64": "sha256:8bb84e24db4336de48031a66dbda25a7477d300736fe825893e467042135da1f",
+        "arm64": "sha256:2fe54408e988e3b53860f77f06742592f1b50a4256d64f28f02fc73213ed6687"
+      },
+      "reference": "1.32.0"
+    },
+    {
+      "registry": "docker.io",
+      "repository": "library/redis",
+      "manifest_digest": "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "platform_digests": {
+        "amd64": "sha256:ca0acbb137c1dc3339c8b147a58fd6f42775d4599327b50e7b116c23de501af2",
+        "arm64": "sha256:1f09a89a207d794a8c61d9edfc26e7c58427de10ccef7c5d18d638df79a63b85"
+      },
+      "reference": "7.4.11-alpine3.21"
+    },
+    {
+      "registry": "docker.io",
+      "repository": "svix/svix-server",
+      "manifest_digest": "sha256:7ba594c766c882dea9c868cd38957755b1d5c8bc5020f81cf5521ba5ab5adc11",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "platform_digests": {
+        "arm64": "sha256:fc0fb52e82e739bab030b782835e0e539f64e6686076cb6b03f74d0224460b12",
+        "amd64": "sha256:378a15491d525efeaf93257b710aca9e65b80fb995345b13d86a77df763e588a"
+      },
+      "reference": "v1.101.0"
+    },
+    {
+      "registry": "docker.io",
+      "repository": "semitechnologies/transformers-inference",
+      "manifest_digest": "sha256:75359f8b886cf51b1e4d971172da1c22776acca7321043b63a24b8d23b710879",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "platform_digests": {
+        "arm64": "sha256:695dbbeaf67d30a585db42a1c2ecebd8351a08ea11197022db680002095227a2",
+        "amd64": "sha256:c9c13f047ee31488e686c4a7b2ea7ccfcdec16ee825447450dc047cf97791590"
+      },
+      "reference": "sentence-transformers-all-MiniLM-L6-v2"
+    },
+    {
+      "registry": "docker.io",
+      "repository": "vespaengine/vespa",
+      "manifest_digest": "sha256:5c30f5c41e7563498c4f925db6a837a3848f04726a3ed26aed4a7c8ab69f18fd",
+      "media_type": "application/vnd.docker.distribution.manifest.list.v2+json",
+      "platform_digests": {
+        "amd64": "sha256:ded3e50c1b74ffddbef7944c13cfdfb699db238a2ae377539caf515708fd4ac5",
+        "arm64": "sha256:125ea9b64d0b4c31bd84502a6dfc2f3c1e44487b4fbee606959e3c418b1d1964"
+      },
+      "reference": "sha256:5c30f5c41e7563498c4f925db6a837a3848f04726a3ed26aed4a7c8ab69f18fd"
+    },
+    {
+      "registry": "ghcr.io",
+      "repository": "cloudnative-pg/postgresql",
+      "manifest_digest": "sha256:1dd42563007500b94b943f2a1620f724efedfc9eea2d07a50c6db4582c2431fd",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "platform_digests": {
+        "amd64": "sha256:1ac54199af47712e3c17753a7b6feb87ce2c7627362bd45a80f91d9fb9075249",
+        "arm64": "sha256:d825f9b9b11ffd1772504d9cc5a358c7ea524f33aefb38a3f095615acbc04845"
+      },
+      "reference": "16.15-standard-trixie"
+    },
+    {
+      "registry": "ghcr.io",
+      "repository": "cloudnative-pg/cloudnative-pg",
+      "manifest_digest": "sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07",
+      "media_type": "application/vnd.oci.image.index.v1+json",
+      "platform_digests": {
+        "amd64": "sha256:b0f9805bd5f98592e7320b5ea624dd10a7a6ef8e477df5650655c94f0b242497",
+        "arm64": "sha256:9a10dd7d7466310d5d543f618478cb905093cfc7a5463b538f449da626660083"
+      },
+      "reference": "1.30.1"
+    }
+  ],
+  "charts": [
+    {
+      "name": "temporal",
+      "version": "1.7.0",
+      "app_version": "1.32.0",
+      "url": "https://github.com/temporalio/helm-charts/releases/download/temporal-1.7.0/temporal-1.7.0.tgz",
+      "sha256": "f7b443f637b71fcbddd12900e5be9fe4c18cf741495d7b2cb247670681bf57d4"
+    },
+    {
+      "name": "cloudnative-pg",
+      "version": "0.29.1",
+      "app_version": "1.30.1",
+      "url": "https://github.com/cloudnative-pg/charts/releases/download/cloudnative-pg-v0.29.1/cloudnative-pg-0.29.1.tgz",
+      "sha256": "b53d3991fe84bcf38767e7702cae78666265427a127a26fff168ab4207d2b1df"
+    }
+  ],
+  "render_tool": {
+    "version": "3.22.0",
+    "url": "https://get.helm.sh/helm-v3.22.0-darwin-arm64.tar.gz",
+    "sha256": "4c9982a6cdeb458b60258df66b55398ca5b19293f6877faffe2909ad6f23dfe0",
+    "platform": "darwin/arm64"
+  }
+}

@@ -1,0 +1,297 @@
+# REVIEW TEMPLATE: not apply-ready; see README gates.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-headless
+  namespace: REQUIRED_NAMESPACE
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+  - port: 6379
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: REQUIRED_NAMESPACE
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+      - name: redis
+        image: docker.io/library/redis:7.4.11-alpine3.21@sha256:ca0acbb137c1dc3339c8b147a58fd6f42775d4599327b50e7b116c23de501af2
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 256Mi
+        command:
+        - sh
+        - -ec
+        args:
+        - exec redis-server --appendonly yes --appendfsync everysec --requirepass
+          "$REDIS_PASSWORD"
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: source-redis
+              key: password
+        volumeMounts:
+        - name: data
+          mountPath: /data
+  serviceName: redis-headless
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      storageClassName: REQUIRED_STORAGE_CLASS
+      resources:
+        requests:
+          storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: REQUIRED_NAMESPACE
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+  - name: service
+    port: 6379
+    targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minilm
+  namespace: REQUIRED_NAMESPACE
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: minilm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minilm
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+      - name: minilm
+        image: docker.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2@sha256:c9c13f047ee31488e686c4a7b2ea7ccfcdec16ee825447450dc047cf97791590
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1536Mi
+          limits:
+            memory: 1536Mi
+        env:
+        - name: ENABLE_CUDA
+          value: '0'
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minilm
+  namespace: REQUIRED_NAMESPACE
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: minilm
+  ports:
+  - name: service
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svix
+  namespace: REQUIRED_NAMESPACE
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: svix
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: svix
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+      - name: svix
+        image: docker.io/svix/svix-server:v1.101.0@sha256:378a15491d525efeaf93257b710aca9e65b80fb995345b13d86a77df763e588a
+        ports:
+        - containerPort: 8071
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 256Mi
+        command:
+        - svix-server
+        envFrom:
+        - secretRef:
+            name: source-svix-runtime
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svix
+  namespace: REQUIRED_NAMESPACE
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: svix
+  ports:
+  - name: service
+    port: 8071
+    targetPort: 8071
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vespa-headless
+  namespace: REQUIRED_NAMESPACE
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: vespa
+  ports:
+  - port: 8081
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vespa
+  namespace: REQUIRED_NAMESPACE
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vespa
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vespa
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+      - name: vespa
+        image: docker.io/vespaengine/vespa@sha256:ded3e50c1b74ffddbef7944c13cfdfb699db238a2ae377539caf515708fd4ac5
+        ports:
+        - containerPort: 8081
+        - containerPort: 19071
+        resources:
+          requests:
+            cpu: 2000m
+            memory: 8Gi
+          limits:
+            memory: 8Gi
+        env:
+        - name: VESPA_CONFIGSERVERS
+          value: vespa-0.vespa-headless.REQUIRED_NAMESPACE.svc.cluster.local
+        volumeMounts:
+        - name: data
+          mountPath: /opt/vespa/var
+  serviceName: vespa-headless
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      storageClassName: REQUIRED_STORAGE_CLASS
+      resources:
+        requests:
+          storage: 60Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vespa
+  namespace: REQUIRED_NAMESPACE
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: vespa
+  ports:
+  - name: service
+    port: 8081
+    targetPort: 8081
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vespa-config
+  namespace: REQUIRED_NAMESPACE
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: vespa
+  ports:
+  - port: 19071
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: svix-schema-REQUIRED_RELEASE
+  namespace: REQUIRED_NAMESPACE
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: svix-schema
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+      - name: migrate
+        image: docker.io/svix/svix-server:v1.101.0@sha256:378a15491d525efeaf93257b710aca9e65b80fb995345b13d86a77df763e588a
+        command:
+        - svix-server
+        - migrate
+        envFrom:
+        - secretRef:
+            name: source-svix-schema

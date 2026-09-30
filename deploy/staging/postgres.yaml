@@ -1,0 +1,27 @@
+# REVIEW TEMPLATE: resolve every REQUIRED value before any deployment.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: source-postgres
+  namespace: REQUIRED_NAMESPACE
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.15-standard-trixie@sha256:1ac54199af47712e3c17753a7b6feb87ce2c7627362bd45a80f91d9fb9075249
+  storage:
+    storageClass: REQUIRED_STORAGE_CLASS
+    size: 30Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      memory: 3Gi
+  affinity:
+    nodeSelector:
+      kubernetes.io/arch: amd64
+  bootstrap:
+    initdb:
+      database: source_store
+      owner: source_store_schema
+      secret:
+        name: source-store-schema

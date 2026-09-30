@@ -65,9 +65,9 @@ API/worker traffic. The current Compose file's `vespa:8`, `redis:7-alpine`, Svix
 Docling and inference image tags are floating and are not a release lockfile.
 Resolve and record their architecture-specific digests before applying manifests.
 
-The official Temporal chart's current main source identifies chart **1.7.0** and
-server **1.32.0**. This is a candidate requiring published-chart retrieval and
-compatibility verification, not an already tested upgrade. The repository's
+Published official Temporal chart **1.7.0** and server **1.32.0** were retrieved
+and pinned; the chart renders with the proposed values. This is not yet a live
+interoperability test or an already tested upgrade. The repository's
 Compose `auto-setup:1.24.2` is old development configuration; do not reuse it as
 production bootstrap. For a fresh isolated namespace, prefer current official
 server/chart with PostgreSQL default and visibility stores, no Cassandra,
@@ -94,11 +94,11 @@ Bootstrap in this order:
    Vespa query/feed and worker polling. Private service reachability from Almanac
    must be explicitly arranged; cluster-private is not cross-cloud connectivity.
 
-No executable Helm values are included yet: cluster storage class, database
-operator availability, published chart pin and IAM secret references are not
-verified. Inventing them would produce an apparently complete but unusable
-manifest. The next deliverable is a small dependency version lock and rendered
-values against those facts, not a new infrastructure framework.
+Published artifacts are now pinned in `versions.lock.json`; review-only values and
+private service templates are in `staging/`. Official Temporal and CNPG charts
+render locally. Explicit unresolved cluster/storage/IAM/secret inputs prevent a
+deployment-ready claim. See `staging/README.md` for bootstrap ownership and
+remaining gates; no resources were provisioned.
 
 ## Cost envelope and tradeoff
 

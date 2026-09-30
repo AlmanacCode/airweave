@@ -1,0 +1,15 @@
+# REVIEW TEMPLATE: resolve every REQUIRED value before any deployment.
+server:
+  config:
+    persistence:
+      datastores:
+        default:
+          sql:
+            user: temporal_schema
+            existingSecret: temporal-schema
+            manageSchema: true
+        visibility:
+          sql:
+            user: temporal_visibility_schema
+            existingSecret: temporal-visibility-schema
+            manageSchema: true
