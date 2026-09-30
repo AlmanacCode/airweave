@@ -89,3 +89,124 @@ async def test_real_schema_retrieval_collection_isolation_and_delete():
             for url in urls:
                 response = await http.delete(url)
                 assert response.status_code in (200, 404)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.environ.get("OWNED_MINILM_TEST") != "1", reason="requires disposable pinned MiniLM service"
+)
+async def test_real_minilm_paraphrase_retrieval_and_exact_keyword():
+    """Small synthetic retrieval baseline, not a general search-quality benchmark."""
+    import asyncio
+
+    from airweave.domains.embedders.dense.local import LocalDenseEmbedder
+
+    corpus = [
+        (
+            "funding",
+            "Investors and venture capital",
+            "We are raising a seed round to finance the startup. "
+            "Venture investors will purchase equity in the company.",
+        ),
+        (
+            "travel",
+            "Summer holiday",
+            "Book a seaside hotel for our family vacation. We will swim and relax on the beach.",
+        ),
+        (
+            "incident",
+            "Database incident ZXQ4829",
+            "The database connection pool exhausted its limit. "
+            "Restarting the server restored normal query latency.",
+        ),
+        (
+            "food",
+            "Dinner recipe",
+            "Roast potatoes with olive oil and garlic. Serve the vegetables with fresh bread.",
+        ),
+    ]
+    collection, foreign = str(uuid4()), str(uuid4())
+    embedder = LocalDenseEmbedder(inference_url="http://localhost:8080", dimensions=384)
+    urls = []
+    async with httpx.AsyncClient(timeout=120) as http:
+        try:
+            for _attempt in range(60):
+                try:
+                    health = await http.get("http://localhost:8080/health", timeout=5)
+                    if health.status_code == 200:
+                        break
+                except httpx.HTTPError:
+                    pass
+                await asyncio.sleep(2)
+            else:
+                pytest.fail("Pinned MiniLM service did not become healthy")
+            await deploy_schema(http)
+            vectors = await embedder.embed_many([title + "\n" + text for _, title, text in corpus])
+            identities = {}
+            for (key, title, text), vector in zip(corpus, vectors, strict=True):
+                assert len(vector.vector) == 384 and any(vector.vector)
+                identity = f"quality-{uuid4()}"
+                identities[key] = identity
+                # A duplicate in another collection must not become a result.
+                for scope, suffix in ((collection, ""), (foreign, "-foreign")):
+                    document_id = identity + suffix
+                    url = f"http://localhost:8081/document/v1/airweave/base_entity/docid/{document_id}"
+                    urls.append(url)
+                    response = await http.post(
+                        url,
+                        json={
+                            "fields": {
+                                "entity_id": document_id,
+                                "name": title,
+                                "textual_representation": text,
+                                "payload": "{}",
+                                "airweave_system_metadata_collection_id": scope,
+                                "airweave_system_metadata_sync_id": str(uuid4()),
+                                "airweave_system_metadata_source_name": "gmail",
+                                "airweave_system_metadata_entity_type": "GmailMessageEntity",
+                                "airweave_system_metadata_original_entity_id": document_id,
+                                "dense_embedding": {"values": vector.vector},
+                            }
+                        },
+                    )
+                    assert response.status_code == 200, response.text
+            contextual = logger.with_context(request_id="synthetic-minilm-baseline")
+            engine = VespaVectorDB(
+                app=Vespa(url="http://localhost", port=8081),
+                logger=contextual,
+                filter_translator=FilterTranslator(logger=contextual),
+            )
+            for query, expected, mode in (
+                (
+                    "How are we obtaining money from equity investors?",
+                    "funding",
+                    RetrievalStrategy.SEMANTIC,
+                ),
+                ("How was the database outage resolved?", "incident", RetrievalStrategy.SEMANTIC),
+                ("ZXQ4829", "incident", RetrievalStrategy.KEYWORD),
+            ):
+                embeddings = QueryEmbeddings(
+                    dense_embeddings=[await embedder.embed(query)]
+                    if mode == RetrievalStrategy.SEMANTIC
+                    else None,
+                )
+                compiled = await engine.compile_query(
+                    SearchPlan(
+                        query=SearchQuery(primary=query), retrieval_strategy=mode, limit=4, offset=0
+                    ),
+                    embeddings,
+                    collection,
+                )
+                results = await engine.execute_query(compiled)
+                assert not results.engine_partial
+                assert results.results, (query, "no matches")
+                assert results.results[0].entity_id == identities[expected], (
+                    query,
+                    [hit.name for hit in results.results],
+                )
+                assert all(hit.entity_id in identities.values() for hit in results.results)
+        finally:
+            await embedder.close()
+            for url in urls:
+                response = await http.delete(url)
+                assert response.status_code in (200, 404)

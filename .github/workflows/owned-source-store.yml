@@ -37,6 +37,13 @@ jobs:
           --hostname vespa
           --health-cmd "curl -f http://localhost:19071/state/v1/health"
           --health-interval 10s --health-timeout 5s --health-retries 30
+      minilm:
+        image: semitechnologies/transformers-inference@sha256:c9c13f047ee31488e686c4a7b2ea7ccfcdec16ee825447450dc047cf97791590
+        env:
+          ENABLE_CUDA: '0'
+        ports:
+          - 8080:8080
+        options: --memory=2g --cpus=2
       postgres:
         image: postgres:16.15
         env:
@@ -78,6 +85,7 @@ jobs:
       - name: Verify real Vespa schema and retrieval
         env:
           OWNED_VESPA_TEST: '1'
+          OWNED_MINILM_TEST: '1'
           EMBEDDING_DIMENSIONS: '384'
         run: make test-index
 
