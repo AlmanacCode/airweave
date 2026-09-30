@@ -27,7 +27,10 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from airweave.adapters.event_bus.fake import FakeEventBus
-from airweave.domains.entities.canonical.page_source import CanonicalPageSource
+from airweave.domains.entities.canonical.page_source import (
+    CanonicalPageSource,
+    InvalidScanContinuation,
+)
 from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope, StartedScope
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
 from airweave.domains.entities.canonical.store import CanonicalRecordStore
@@ -76,14 +79,22 @@ class BoundedStorage(harness.FilesystemBackend):
 class BoundedPageSource:
     """Test budget around the real page adapter; production driver still owns all progress."""
 
-    def __init__(self, source, counters, record_limit):
+    def __init__(self, source, counters, record_limit, resume_probe=None):
         self.source, self.counters, self.record_limit = source, counters, record_limit
+        self.resume_probe = resume_probe
         self.canonical_record_types = source.canonical_record_types
         self.canonical_container_parents = source.canonical_container_parents
         self.capture_cycle_configuration = source.capture_cycle_configuration
 
     async def capture_page(self, scope, continuation):
-        page = await self.source.capture_page(scope, continuation)
+        if self.resume_probe is not None:
+            await self.resume_probe.before_page(scope, continuation)
+        try:
+            page = await self.source.capture_page(scope, continuation)
+        except InvalidScanContinuation:
+            if self.resume_probe is not None:
+                self.resume_probe.cursor_expired()
+            raise
         self.counters["records_observed"] += len(page.records)
         if self.counters["records_observed"] > self.record_limit:
             raise BudgetExceeded("records")
@@ -185,6 +196,42 @@ def validate_checkpoint(name, manifest, counters, saved, previous, loaded, attem
     assert saved != previous
 
 
+async def prepare_job(db, organization_id, sync_id, job_id, attempt_number):
+    """Only an explicit retry may reuse a still-running job in the private schema."""
+    if attempt_number == 1:
+        job = SyncJob(id=job_id, organization_id=organization_id, sync_id=sync_id, status="pending")
+        db.add(job)
+        await db.commit()
+        return job
+    job = await db.get(SyncJob, job_id)
+    if (
+        job is None
+        or job.sync_id != sync_id
+        or job.organization_id != organization_id
+        or job.status != "running"
+    ):
+        raise ValueError("Resume requires the same interrupted running job")
+    return job
+
+
+def prepare_resume_probe(manifest, sessions, organization_id, sync_id, job_id, attempt, counters):
+    """Fault injection is opt-in for the two explicit cross-process trial stages."""
+    if manifest.get("resume_stage") not in {"interrupt", "resume"}:
+        return None
+    from capture_resume import PageResumeProbe
+
+    return PageResumeProbe(
+        sessions,
+        organization_id,
+        sync_id,
+        job_id,
+        attempt.id,
+        Path(manifest["root"]) / "resume-target.json",
+        manifest["resume_stage"],
+        counters,
+    )
+
+
 async def child(manifest):
     engine = create_async_engine(
         harness.test_database_url(),
@@ -192,7 +239,8 @@ async def child(manifest):
     )
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     organization_id, sync_id = UUID(manifest["organization_id"]), UUID(manifest["sync_id"])
-    job_id = uuid4()
+    job_id = UUID(manifest["job_id"]) if "job_id" in manifest else uuid4()
+    attempt_number = manifest.get("attempt_number", 1)
     counters = {"provider_requests": 0, "records_observed": 0, "started": 0, "completed": 0}
     result = {"failed": True}
     previous = {}
@@ -202,6 +250,7 @@ async def child(manifest):
     counters["resumed_changes_requests"] = 0
     last_operation = "identity"
     rate_limits = []
+    resume_probe = None
 
     async def observe_slack_rate_limit(response):
         await response.aread()
@@ -248,11 +297,8 @@ async def child(manifest):
         async with sessions() as db:
             organization = await db.get(Organization, organization_id)
             sync = await db.get(Sync, sync_id)
-            job = SyncJob(
-                id=job_id, organization_id=organization_id, sync_id=sync_id, status="pending"
-            )
-            db.add(job)
-            await db.commit()
+            job = await prepare_job(db, organization_id, sync_id, job_id, attempt_number)
+
         config = SyncConfig()
         config.behavior.skip_guardrails = True
         logger = logging.getLogger("private-lifecycle")
@@ -321,9 +367,12 @@ async def child(manifest):
         ):
             assert source.cursor_class == cursor_schema
             bus = FakeEventBus()
-            attempt = CaptureAttempt(id=uuid4(), number=1)
+            attempt = CaptureAttempt(id=uuid4(), number=attempt_number)
+            resume_probe = prepare_resume_probe(
+                manifest, sessions, organization_id, sync_id, job_id, attempt, counters
+            )
             page_source = (
-                BoundedPageSource(source, counters, manifest["record_limit"])
+                BoundedPageSource(source, counters, manifest["record_limit"], resume_probe)
                 if isinstance(source, CanonicalPageSource)
                 else None
             )
@@ -417,6 +466,10 @@ async def child(manifest):
             )
         result = {
             "failed": False,
+            "full_scope_completed": name != "wispr",
+            "counters_complete": True,
+            "resumed_saved_page": resume_probe.resumed_saved_page if resume_probe else False,
+            "saved_cursor_expired": resume_probe.saved_cursor_expired if resume_probe else False,
             "provider": name,
             "identity_verification": identity_verification,
             "almanac_consumer": consumer_result,
@@ -451,6 +504,10 @@ async def child(manifest):
             status = await db.scalar(select(SyncJob.status).where(SyncJob.id == job_id))
         result = {
             "failed": True,
+            "full_scope_completed": False,
+            "counters_complete": True,
+            "resumed_saved_page": resume_probe.resumed_saved_page if resume_probe else False,
+            "saved_cursor_expired": resume_probe.saved_cursor_expired if resume_probe else False,
             "error_type": type(error).__name__,
             "safe_reason": safe_failure_reason(error),
             "last_operation": last_operation,
@@ -471,6 +528,108 @@ def check_free_disk(provider):
     if provider == "google_drive" and available < 2 * 1024**3:
         raise BudgetExceeded("free_disk")
     return available
+
+
+async def execute_trial(path, timeout):
+    """Return only sanitized child evidence; forced termination has unknown usage."""
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(Path(__file__).absolute()),
+        str(path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return -9, {
+            "failed": True,
+            "safe_reason": "aggregate_deadline",
+            "full_scope_completed": False,
+            "counters_complete": False,
+        }
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+    lines = [json.loads(line) for line in stdout.decode().splitlines() if line.startswith("{")]
+    if not lines:
+        return process.returncode, {
+            "failed": True,
+            "safe_reason": "child_no_result",
+            "full_scope_completed": False,
+            "counters_complete": False,
+        }
+    return process.returncode, lines[-1]
+
+
+async def run_trials(manifest, evidence_reader=None):
+    """One parent-owned aggregate budget across interruption, retry, and new-job proof."""
+    path = Path(manifest["root"]) / "manifest.json"
+    results = []
+    name = manifest["provider"]
+    resume_trial = name == "slack"
+    stages = ("interrupt", "resume", "new_cycle") if resume_trial else ("first", "second")
+    total_requests, total_records = manifest["request_limit"], manifest["record_limit"]
+    deadline = time.monotonic() + manifest["timeout"] if resume_trial else None
+    interrupted_job_id = str(uuid4())
+    for stage in stages:
+        check_free_disk(name)
+        if resume_trial:
+            remaining = deadline - time.monotonic()
+            requests_left = total_requests - sum(
+                item.get("provider_requests", 0) for item in results
+            )
+            records_left = total_records - sum(item.get("records_observed", 0) for item in results)
+            if remaining <= 0 or requests_left <= 0 or records_left <= 0:
+                results.append(
+                    {
+                        "failed": True,
+                        "safe_reason": "aggregate_budget",
+                        "full_scope_completed": False,
+                    }
+                )
+                break
+            manifest.update(
+                resume_stage=stage,
+                job_id=interrupted_job_id if stage != "new_cycle" else str(uuid4()),
+                attempt_number=2 if stage == "resume" else 1,
+                request_limit=requests_left,
+                record_limit=records_left,
+                timeout=remaining,
+            )
+        path.write_text(json.dumps(manifest))
+        code, result = await execute_trial(
+            path,
+            max(0.001, deadline - time.monotonic()) if resume_trial else manifest["timeout"] + 60,
+        )
+        if stage == "resume" and evidence_reader is not None:
+            result.update(await evidence_reader())
+            result["resumed_partial"] = bool(
+                result.get("resumed_page_committed") and not result.get("full_scope_completed")
+            )
+        results.append(result)
+        print(json.dumps({"run": len(results), "stage": stage, **result}), flush=True)
+        if stage == "interrupt":
+            if code != 75 or not result.get("intentional_interruption"):
+                break
+        elif code:
+            break
+    return results
+
+
+def trial_counter_summary(results):
+    """A killed child has unknown usage; known values are only a lower bound."""
+    complete = all(item.get("counters_complete", True) for item in results)
+    requests = sum(item.get("provider_requests", 0) for item in results)
+    records = sum(item.get("records_observed", 0) for item in results)
+    return {
+        "aggregate_counters_complete": complete,
+        "aggregate_provider_requests": requests if complete else None,
+        "aggregate_records_observed": records if complete else None,
+        "known_provider_requests": requests,
+        "known_records_observed": records,
+    }
 
 
 async def main():
@@ -557,36 +716,20 @@ async def main():
                         "end": (now + timedelta(days=7)).isoformat(),
                     },
                 }
-            path = root / "manifest.json"
-            path.write_text(json.dumps(manifest))
-            for _ in range(2):
-                check_free_disk(name)
-                process = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    str(Path(__file__).absolute()),
-                    str(path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+
+            async def resume_evidence():
+                from capture_resume import inspect_resume_progress
+
+                return await inspect_resume_progress(
+                    sessions,
+                    organization_id,
+                    sync_id,
+                    UUID(manifest["job_id"]),
+                    root / "resume-target.json",
                 )
-                try:
-                    stdout, _ = await asyncio.wait_for(
-                        process.communicate(), timeout=manifest["timeout"] + 60
-                    )
-                finally:
-                    if process.returncode is None:
-                        process.kill()
-                        await process.wait()
-                lines = [
-                    json.loads(line)
-                    for line in stdout.decode().splitlines()
-                    if line.startswith("{")
-                ]
-                if not lines:
-                    raise RuntimeError("Child failed without sanitized result")
-                results.append(lines[-1])
-                print(json.dumps({"run": len(results), **lines[-1]}), flush=True)
-                if process.returncode:
-                    break
+
+            results = await run_trials(manifest, resume_evidence if name == "slack" else None)
+
     finally:
         os.umask(old_umask)
         await engine.dispose()
@@ -594,6 +737,15 @@ async def main():
             async with admin.begin() as connection:
                 await connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
         await admin.dispose()
+    completed = [item for item in results if item.get("full_scope_completed")]
+    resume_verified = (
+        name == "slack"
+        and len(results) == 3
+        and results[0].get("intentional_interruption")
+        and results[1].get("resumed_page_committed")
+        and results[1].get("full_scope_completed")
+        and results[2].get("full_scope_completed")
+    )
     print(
         json.dumps(
             {
@@ -601,13 +753,23 @@ async def main():
                 "free_disk_bytes_before": free_disk_bytes,
                 "schema_removed": True,
                 "blob_directory_removed": True,
-                "identical_second_read": len(results) == 2
-                and results[0].get("payload_revision_digest")
-                == results[1].get("payload_revision_digest"),
+                "resume_verified": bool(resume_verified),
+                "resumed_page_committed": any(
+                    item.get("resumed_page_committed", False) for item in results
+                ),
+                "resumed_partial": any(item.get("resumed_partial", False) for item in results),
+                "saved_cursor_reused": bool(
+                    resume_verified and not results[1].get("saved_cursor_expired")
+                ),
+                **trial_counter_summary(results),
+                "identical_second_read": len(completed) == 2
+                and completed[0].get("payload_revision_digest")
+                == completed[1].get("payload_revision_digest"),
             }
         )
     )
-    return 0 if len(results) == 2 and not any(r["failed"] for r in results) else 1
+    success = resume_verified if name == "slack" else len(results) == 2
+    return 0 if success and not any(item["failed"] for item in results) else 1
 
 
 if __name__ == "__main__":

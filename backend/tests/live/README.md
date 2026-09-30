@@ -76,17 +76,19 @@ venv-launch failure and successful rerun, independent checks found 0 retained
 `canonical_live_*` schemas and 0 private live directories. No complete-source
 coverage, checkpoint, hosted authentication, or deployed product proof is claimed.
 
-## Slack and Wispr durable samples
+## Historical Slack sample and current Wispr sampler
 
-`LIVE_PROVIDERS=slack,wispr` selects the existing source adapters. Set
-`LIVE_SLACK_ACCOUNT_ID`, `LIVE_WISPR_ACCOUNT_ID` and `LIVE_WISPR_USER_ID` for
-previously connected, authorized accounts. Slack verifies `auth.test` identity
-and the matching `users.info` email against `LIVE_EXPECTED_EMAIL`. Wispr verifies
+The earlier Slack sample below used the old observation adapter. Slack now uses
+durable pages and the sampler explicitly directs it to `provider_lifecycle.py`;
+there is no second capture implementation. `LIVE_PROVIDERS=wispr` remains supported,
+with `LIVE_WISPR_ACCOUNT_ID` and `LIVE_WISPR_USER_ID` for a previously connected
+account. Slack's lifecycle verifies `auth.test` and the matching `users.info`
+email against `LIVE_EXPECTED_EMAIL`. Wispr verifies
 exact ACTIVE Composio account ID, toolkit and principal; this is weaker than a
 provider mailbox/profile check and is not an Almanac user binding. A Wispr-only
 run does not require the email variable.
 
-Slack/Wispr stop after three distinct records containing a message/meeting, or
+The historical Slack and current Wispr sampler stop after three distinct records, or
 25 observations. No file/blob presence is required. Repeated native identities
 are reduced to their latest raw observation in this bounded sample before
 capture and replay; Slack history/replies can return the same parent twice.
@@ -217,9 +219,10 @@ The earlier smaller-budget failure evidence remains unchanged. Sanitized result:
 
 ### Slack and Wispr full lifecycle attempts
 
-Both modes use the real canonical orchestrator and production `cursor=None`.
-Slack reconciles only completed channel/message scopes; Wispr has no deletion
-scope or durable provider checkpoint. Neither is described as delta resume.
+These historical attempts used the real canonical orchestrator and production
+`cursor=None`. Slack's current durable-page trial is described below. Wispr still
+has no deletion scope or durable provider checkpoint; its enumeration is not a
+delta-resume guarantee.
 Actual network requests are metered, including Wispr session/account operations.
 
 The first Slack full-accessible-history attempt stopped on a rate limit after
@@ -236,8 +239,9 @@ became cancelled; two scopes started, none completed, and the checkpoint stayed
 unchanged. Cancellation telemetry then accessed missing fixture connection
 metadata, masking the timeout with AttributeError. The fixture is corrected;
 this was not rerun. No second process started, and private schema/files were
-removed. Full Slack coverage remains unverified. A durable per-scope sweep and
-continuation design is needed before repeatedly rescanning this history.
+removed. Full Slack coverage remains unverified. The durable per-scope recovery
+implementation below addresses this retry limitation; it has only synthetic
+HTTP/PostgreSQL and local cross-process verification so far.
 See `evidence/slack-lifecycle-backoff-incomplete-20260930.json`.
 
 Wispr enumeration and one diagnostic retry each failed after 18 requests and nine
@@ -250,3 +254,40 @@ attempts cleaned private storage. This is additional failure evidence alongside
 the earlier successful three-record sample, not a replacement for that sample.
 See `evidence/slack-lifecycle-incomplete-20260930.json` and
 `evidence/wispr-lifecycle-incomplete-20260930.json`.
+
+
+### Current Slack cross-process recovery trial (not yet run live)
+
+`LIVE_LIFECYCLE_PROVIDER=slack` uses the production page adapter, capture pipeline,
+SQL state, and job state machine. It has three stages within **one aggregate cap**:
+600 provider requests, 10,000 observed records, and 1,800 seconds including all
+Retry-After waits and subprocess startup.
+
+1. Start a new job. After a history page commits pending thread IDs, the test-only
+   wrapper verifies the exact SQL continuation, active cycle, current attempt and
+   running job. It writes private UUID/version evidence, flushes sanitized counters,
+   and exits 75 before another provider request. This simulates process loss without
+   marking the job failed or cancelled.
+2. Start a fresh process using the same job and attempt 2. The production driver
+   refreshes membership, then resumes the saved child state. A rejected cursor is
+   reported separately from successful cursor reuse; the normal one-restart bound
+   still applies. No complete-scope claim is made until actual finalization.
+3. Only after completion, start a genuinely new job and verify its new cycle.
+
+The parent subtracts each child's counters from the remaining limits and enforces
+one wall-clock deadline even while a child sleeps. No pending thread found, changed
+scope, or exhausted budget leaves the requested resume proof incomplete. A forcibly
+killed child's counters are unknown: aggregate exact counts are null and known
+counts are reported only as lower bounds. No further stage follows that failure.
+After the resumed child exits (including a forced timeout), the parent reads the
+saved scan directly from SQL. Same tenant, sync, job, attempt 2, cycle and sweep,
+with an advanced revision, proves a resumed page committed. This is reported as
+`resumed_page_committed`; `resumed_partial` means that proof exists but the cycle
+has not completed. Scope withdrawal and expired-cursor restarts cannot satisfy
+this proof. Full-cycle and subsequent-new-cycle completion remain separate checks.
+Private schema, downloaded files, and resume evidence are removed by the parent.
+
+`test_resume_probe.py` verifies the actual special process exit and fresh-process
+resume using synthetic Slack responses and isolated PostgreSQL. Its budget tests
+use fake child processes to check decreasing limits and unknown killed-child usage.
+These are harness tests, not evidence of live Slack coverage or throughput.
