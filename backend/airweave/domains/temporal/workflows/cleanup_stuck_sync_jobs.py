@@ -9,6 +9,9 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from airweave.domains.temporal.activities import cleanup_stuck_sync_jobs_activity
+    from airweave.domains.temporal.activities.cleanup_projection_generations import (
+        CleanupProjectionGenerationsActivity,
+    )
 
 _CLEANUP_TIMEOUT = timedelta(minutes=5)
 _CLEANUP_RETRY = RetryPolicy(
@@ -35,3 +38,10 @@ class CleanupStuckSyncJobsWorkflow:
             start_to_close_timeout=_CLEANUP_TIMEOUT,
             retry_policy=_CLEANUP_RETRY,
         )
+
+        if workflow.patched("canonical-generation-gc-v1"):
+            await workflow.execute_activity(
+                CleanupProjectionGenerationsActivity.run,
+                start_to_close_timeout=_CLEANUP_TIMEOUT,
+                retry_policy=_CLEANUP_RETRY,
+            )

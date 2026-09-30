@@ -7,7 +7,7 @@ from sqlalchemy import update
 
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
-from airweave.domains.entities.canonical.tests.helpers import capture, observation
+from airweave.domains.entities.canonical.tests.helpers import capture, observation, publish_prepared
 from airweave.domains.search.canonical_visibility import visible_results
 from airweave.domains.search.types.results import (
     SearchAccessControl,
@@ -73,7 +73,7 @@ async def test_search_rejects_stale_foreign_malformed_and_legacy_publications(da
         work = (await store.pending(db, fence.organization_id, fence.sync_id))[0]
     generation = uuid4()
     async with database() as db:
-        assert await store.publish(db, work, generation, 1)
+        assert await publish_prepared(store, db, work, generation, 1)
     locator = ProjectionLocator(
         record_id=work.record.id,
         revision=1,

@@ -37,6 +37,9 @@ def create_activities() -> list:
     from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
     from airweave.domains.entities.canonical.projector import CanonicalProjector
     from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
+    from airweave.domains.temporal.activities.cleanup_projection_generations import (
+        CleanupProjectionGenerationsActivity,
+    )
     from airweave.domains.temporal.activities.project_canonical_records import (
         ProjectCanonicalRecordsActivity,
     )
@@ -58,6 +61,7 @@ def create_activities() -> list:
     logger.debug("Wiring activities with container dependencies")
 
     return [
+        CleanupProjectionGenerationsActivity().run,
         ProjectCanonicalRecordsActivity(
             projector=CanonicalProjector(
                 CanonicalProjectionStore(),

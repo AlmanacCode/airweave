@@ -160,7 +160,7 @@ async def test_drive_uses_verified_owned_bytes_and_cleans_materialization():
         assert path.name == digest + ".txt"
         assert entities[0].mime_type == "text/plain"
     assert not path.exists()
-    storage.read_file.assert_awaited_once_with(blob.key)
+    storage.read_file.assert_awaited_once_with(blob.key, max_bytes=blob.size_bytes)
 
 
 def test_added_typed_entities_are_registered():

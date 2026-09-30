@@ -3,6 +3,7 @@
 import uuid
 
 import pytest
+from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
@@ -27,13 +28,17 @@ TASK_QUEUE = "test-cleanup"
 
 @pytest.mark.unit
 async def test_cleanup_stuck_sync_jobs_calls_activity():
+    @activity.defn(name="cleanup_projection_generations_activity")
+    async def cleanup_generations():
+        recorder.record("cleanup_generations", ())
+
     recorder = ActivityRecorder()
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue=TASK_QUEUE,
             workflows=[CleanupStuckSyncJobsWorkflow],
-            activities=[mock_cleanup_stuck_sync_jobs(recorder)],
+            activities=[mock_cleanup_stuck_sync_jobs(recorder), cleanup_generations],
         ):
             await env.client.execute_workflow(
                 CleanupStuckSyncJobsWorkflow.run,
@@ -41,6 +46,7 @@ async def test_cleanup_stuck_sync_jobs_calls_activity():
                 task_queue=TASK_QUEUE,
             )
 
+    assert recorder.called("cleanup_generations")
     assert recorder.called("cleanup_stuck")
     assert recorder.call_count("cleanup_stuck") == 1
 

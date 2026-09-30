@@ -39,6 +39,7 @@ __all__ = [
     "Collection",
     "Entity",
     "EntityChange",
+    "ProjectionGeneration",
     "EntityCount",
     "Connection",
     "ConnectionInitSession",
@@ -63,3 +64,5 @@ __all__ = [
     "UserOrganization",
     "VectorDbDeploymentMetadata",
 ]
+
+from .projection_generation import ProjectionGeneration

@@ -12,6 +12,7 @@ from airweave.core.logging import logger
 from airweave.domains.storage.exceptions import (
     StorageException,
     StorageNotFoundError,
+    StorageReadLimitExceeded,
 )
 from airweave.domains.storage.protocols import StorageBackend
 
@@ -127,15 +128,30 @@ class S3Backend(StorageBackend):
         except Exception as e:
             raise StorageException(f"Failed to write file to {path}: {e}")
 
-    async def read_file(self, path: str) -> bytes:
+    async def read_file(self, path: str, *, max_bytes: int | None = None) -> bytes:
         """Read binary content from S3."""
+        from aiohttp import ClientError as HttpClientError
+        from botocore.exceptions import BotoCoreError, ClientError
+
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("max_bytes must be nonnegative")
         key = self._resolve(path)
         try:
             client = await self._get_client()
             response = await client.get_object(Bucket=self.bucket, Key=key)
             async with response["Body"] as stream:
-                return await stream.read()
-        except Exception as e:
+                if max_bytes is None:
+                    return await stream.read()
+                content = bytearray()
+                while len(content) <= max_bytes:
+                    chunk = await stream.read(min(65536, max_bytes + 1 - len(content)))
+                    if not chunk:
+                        return bytes(content)
+                    content.extend(chunk)
+                raise StorageReadLimitExceeded("Stored object exceeds read limit")
+        except StorageReadLimitExceeded:
+            raise
+        except (OSError, HttpClientError, BotoCoreError, ClientError) as e:
             if "NoSuchKey" in str(e) or "404" in str(e):
                 raise StorageNotFoundError(f"Path not found: {path}")
             raise StorageException(f"Failed to read file from {path}: {e}")

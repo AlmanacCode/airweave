@@ -63,7 +63,7 @@ async def test_full_pagination_retains_sparse_cancellation_and_container():
         if isinstance(item, CaptureRecord) and item.identity.record_type == "event"
     ]
     assert all(item.identity.container_id == "team/a@example.com" for item in events)
-    assert events[1].kind == "delete" and events[1].payload["recurringEventId"] == "series"
+    assert events[1].kind == "upsert" and events[1].payload["recurringEventId"] == "series"
     assert "%2F" in get.calls[1][0]
     assert get.calls[2][1]["pageToken"] == "page2"
     assert state.data["calendar_tokens"] == {"team/a@example.com": "boundary"}
@@ -120,3 +120,24 @@ async def test_missing_calendar_removes_only_previous_calendar_children():
         ("event", "removed", "scope_removed")
     ]
     assert state.data["calendar_tokens"] == {"kept": "new"}
+
+
+def test_only_recurring_cancellations_are_retained_and_reinstatement_keeps_identity():
+    from airweave.platform.sources.records.google_calendar import record
+
+    cancelled = {
+        "id": "exception",
+        "status": "cancelled",
+        "recurringEventId": "series",
+        "originalStartTime": {"dateTime": "2026-10-01T10:00:00Z"},
+    }
+    exclusion = record("event", cancelled, "calendar")
+    active = record("event", {**cancelled, "status": "confirmed"}, "calendar")
+    assert exclusion.kind == active.kind == "upsert"
+    assert exclusion.identity == active.identity
+    assert exclusion.payload == cancelled
+    assert record("event", {"id": "single", "status": "cancelled"}, "calendar").kind == "delete"
+    with pytest.raises(ValueError, match="original occurrence"):
+        record(
+            "event", {"id": "bad", "status": "cancelled", "recurringEventId": "series"}, "calendar"
+        )

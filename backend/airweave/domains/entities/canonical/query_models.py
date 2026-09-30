@@ -1,5 +1,6 @@
 """Typed exact-record queries; search ranking is a separate index concern."""
 
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -60,3 +61,31 @@ class RecordCursor(BaseModel):
     after_id: UUID | None = None
     after_sequence: int = Field(default=0, ge=0)
     high_watermark: int | None = Field(default=None, ge=0)
+
+
+class MailThreadPage(BaseModel):
+    """Observed messages only; neither a complete thread nor a provider snapshot."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    thread_id: str
+    messages: tuple[SourceRecord, ...]
+    next_cursor: str | None
+    has_more: bool
+    consistency: Literal["live"] = "live"
+    order: Literal["source_created_at_asc_nulls_last_id_asc"] = (
+        "source_created_at_asc_nulls_last_id_asc"
+    )
+    coverage: Literal["stored_messages_only"] = "stored_messages_only"
+
+
+class MailThreadCursor(BaseModel):
+    """Signed thread and account traversal position, independent of capture containers."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    purpose: Literal["canonical_mail_thread"] = "canonical_mail_thread"
+    version: Literal[1] = 1
+    organization_id: UUID
+    sync_id: UUID
+    thread_id: str
+    after_created_at: datetime | None
+    after_id: UUID

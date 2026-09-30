@@ -1,8 +1,9 @@
 """Read-only SQL for exact canonical record listing."""
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, literal_column, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.models import SourceRecord
@@ -80,3 +81,49 @@ class CanonicalQueryStore:
             )
             for row in rows
         )
+
+    async def mail_thread(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        sync_id: UUID,
+        thread_id: str,
+        *,
+        after_id: UUID | None,
+        after_created_at: datetime | None,
+        limit: int,
+    ) -> tuple[SourceRecord, ...]:
+        """Use native Gmail thread identity, keeping mailbox capture containers unchanged."""
+        scope = await db.scalar(
+            select(Sync.id).where(Sync.id == sync_id, Sync.organization_id == organization_id)
+        )
+        if scope is None:
+            raise SourceNotFound("Source does not exist in this organization")
+        statement = select(Entity).where(
+            Entity.organization_id == organization_id,
+            Entity.sync_id == sync_id,
+            Entity.entity_definition_short_name == "message",
+            Entity.record_revision > 0,
+            Entity.deleted_at.is_(None),
+            content_is_available(),
+            Entity.source_payload.op("->>")(literal_column("'threadId'")) == thread_id,
+        )
+        if after_id is not None:
+            if after_created_at is None:
+                statement = statement.where(
+                    Entity.source_created_at.is_(None), Entity.id > after_id
+                )
+            else:
+                statement = statement.where(
+                    or_(
+                        Entity.source_created_at > after_created_at,
+                        Entity.source_created_at.is_(None),
+                        and_(Entity.source_created_at == after_created_at, Entity.id > after_id),
+                    )
+                )
+        rows = await db.scalars(
+            statement.order_by(Entity.source_created_at.asc().nulls_last(), Entity.id).limit(
+                limit + 1
+            )
+        )
+        return tuple(source_record(row) for row in rows)

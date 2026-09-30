@@ -1,5 +1,6 @@
 """Typed immutable search publication identities, independent of provider identity."""
 
+import re
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -59,3 +60,47 @@ class ProjectionBatchResult(BaseModel):
     published: int = 0
     superseded: int = 0
     failed: int = 0
+
+
+class ProjectionDocument(BaseModel):
+    """Exact remote identifier, without searchable text or embeddings."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_name: str = Field(min_length=1)
+    document_id: str = Field(min_length=1)
+
+
+class ProjectionCleanupPage(BaseModel):
+    """One idempotent deletion page of an irrevocably retired generation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    generation: UUID
+    attempt: UUID
+    cursor: int
+    documents: tuple[ProjectionDocument, ...]
+
+
+def scope_projection_document_id(sync_id: UUID, collection_id: UUID, document_id: str) -> str:
+    """Bind canonical remote IDs to the destination without changing search locators."""
+    scoped = f"{sync_id}_{collection_id}_{document_id}"
+    projection_document_locator(scoped, sync_id, collection_id)
+    return scoped
+
+
+def projection_document_locator(
+    document_id: str, sync_id: UUID, collection_id: UUID
+) -> ProjectionLocator:
+    """Reject foreign prefixes and ambiguous substring matches before manifest commit."""
+    prefix = f"{sync_id}_{collection_id}_"
+    if not document_id.startswith(prefix):
+        raise ValueError("Projection document scope does not match destination")
+    match = re.fullmatch(
+        r"[A-Za-z][A-Za-z0-9_]*_(canonical:v1:[^_]+)__chunk_(0|[1-9][0-9]*)",
+        document_id[len(prefix) :],
+    )
+    if match is None:
+        raise ValueError("Invalid canonical remote document ID")
+    locator = ProjectionLocator.parse(match[1])
+    if locator is None or locator.encode() != match[1]:
+        raise ValueError("Noncanonical projection locator encoding")
+    return locator

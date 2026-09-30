@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from airweave.domains.entities.canonical.calendar import is_cancelled_recurring_event
 from airweave.domains.entities.canonical.requests import (
     CaptureRecord,
     CompletedScope,
@@ -47,7 +48,19 @@ def record(
     native_id = payload.get("id")
     if not isinstance(native_id, str) or not native_id:
         raise ValueError("Calendar returned a resource without an ID")
-    deleted = payload.get("status") == "cancelled" or payload.get("deleted") is True
+    recurring_cancellation = kind == "event" and is_cancelled_recurring_event(payload)
+    if (
+        kind == "event"
+        and payload.get("status") == "cancelled"
+        and payload.get("recurringEventId")
+        and not recurring_cancellation
+    ):
+        raise ValueError("Cancelled recurring event lacks its original occurrence identity")
+    # Google requires clients to retain this exclusion for the lifetime of its series.
+    # Keep its native ID/container so cancellation and reinstatement update the same row.
+    deleted = (payload.get("status") == "cancelled" and not recurring_cancellation) or payload.get(
+        "deleted"
+    ) is True
     return CaptureRecord(
         identity=RecordIdentity(record_type=kind, native_id=native_id, container_id=calendar_id),
         payload=payload,

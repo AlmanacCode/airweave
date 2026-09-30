@@ -10,8 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from airweave.core.logging import ContextualLogger
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionBatchResult,
+    ProjectionDocument,
     ProjectionLocator,
     ProjectionWork,
+    scope_projection_document_id,
 )
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.storage.protocols import StorageBackend
@@ -69,11 +71,17 @@ class CanonicalProjector:
         logger: ContextualLogger,
     ) -> bool:
         """Never feed native capture JSON; mapper emits explicit safe projection entities."""
-        from airweave.domains.entities.canonical.projection_mappers import map_record
+        from airweave.domains.entities.canonical.projection_mappers import (
+            excluded_from_search,
+            map_record,
+        )
 
         generation = uuid4()
         chunks = []
-        if work.record.deleted_at is None:
+        no_documents = work.record.deleted_at is not None or excluded_from_search(
+            work.record, source_name
+        )
+        if not no_documents:
             async with map_record(work.record, source_name, self._storage) as mapped:
                 if not mapped:
                     raise ValueError("Projection mapper returned no required content")
@@ -101,7 +109,29 @@ class CanonicalProjector:
                     ProjectionRuntime(StrictProjectionTracker()),
                     strict=True,
                 )
-                await destination.bulk_insert(chunks, strict=True)
+                prepared = destination.prepare_documents(chunks)
+                for group in prepared.values():
+                    for document in group:
+                        document.id = scope_projection_document_id(
+                            work.record.sync_id, destination.collection_id, document.id
+                        )
+                manifest = tuple(
+                    ProjectionDocument(schema_name=doc.schema_name, document_id=doc.id)
+                    for group in prepared.values()
+                    for doc in group
+                )
+                async with self._sessions() as db:
+                    if not await self._store.prepare(
+                        db, work, generation, destination.collection_id, manifest
+                    ):
+                        return False
+                await destination.feed_prepared(prepared)
+        if no_documents:
+            async with self._sessions() as db:
+                if not await self._store.prepare(
+                    db, work, generation, destination.collection_id, ()
+                ):
+                    return False
         async with self._sessions() as db:
             return await self._store.publish(db, work, generation, len(chunks))
 

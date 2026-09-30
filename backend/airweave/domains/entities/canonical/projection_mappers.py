@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 
 from pydantic import JsonValue
 
+from airweave.domains.entities.canonical.calendar import is_cancelled_recurring_event
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.storage.protocols import StorageBackend
 from airweave.platform.entities._base import BaseEntity
@@ -196,6 +197,15 @@ def _wispr(record: SourceRecord) -> tuple[BaseEntity, ...]:
     )
 
 
+def excluded_from_search(record: SourceRecord, source_name: str) -> bool:
+    """Retained calendar exclusions intentionally publish no searchable meeting."""
+    return (
+        source_name == "google_calendar"
+        and record.identity.record_type == "event"
+        and is_cancelled_recurring_event(record.payload)
+    )
+
+
 @asynccontextmanager
 async def map_record(
     record: SourceRecord,
@@ -205,6 +215,9 @@ async def map_record(
     """Keep verified local blob files alive only while strict projection consumes them."""
     if record.deleted_at is not None or record.content_access != "available":
         raise ProjectionMappingError("Unavailable records cannot be projected")
+    if excluded_from_search(record, source_name):
+        yield ()
+        return
     with TemporaryDirectory(prefix="airweave-projection-") as temporary:
         directory = Path(temporary)
         if source_name == "gmail":

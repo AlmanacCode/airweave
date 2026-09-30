@@ -420,10 +420,18 @@ class VespaClient:
         schema = prefix_parts[2]
         return schema, doc_id
 
+    async def delete_documents(self, doc_ids: List[Tuple[str, str]]) -> None:
+        """Strict idempotent exact-ID deletion, with bounded HTTP concurrency."""
+        if any(schema not in ALL_VESPA_SCHEMAS for schema, _ in doc_ids):
+            raise ValueError("Unknown Vespa schema in deletion manifest")
+        async with httpx.AsyncClient(timeout=settings.VESPA_TIMEOUT) as client:
+            await self._delete_by_doc_ids(doc_ids, http_client=client, strict=True)
+
     async def _delete_by_doc_ids(
         self,
         doc_ids: List[Tuple[str, str]],
         http_client: httpx.AsyncClient,
+        *, strict: bool = False,
     ) -> int:
         """Delete documents by their Vespa document IDs using parallel direct DELETEs.
 
@@ -432,6 +440,7 @@ class VespaClient:
         Args:
             doc_ids: List of (schema, doc_id) tuples
             http_client: httpx client for issuing DELETE requests
+            strict: Fail partial deletion and accept already-absent documents as complete.
 
         Returns:
             Number of successfully deleted documents
@@ -448,7 +457,7 @@ class VespaClient:
             url = f"{base_url}/document/v1/airweave/{schema}/docid/{quote(doc_id, safe='')}"
             async with semaphore:
                 resp = await http_client.delete(url)
-                return resp.status_code == 200
+                return resp.status_code in (200, 404) if strict else resp.status_code == 200
 
         start = time.perf_counter()
         tasks = [_delete_one(schema, doc_id) for schema, doc_id in doc_ids]
@@ -461,6 +470,8 @@ class VespaClient:
             else:
                 failed += 1
 
+        if failed > 0 and strict:
+            raise RuntimeError(f"Vespa deletion incomplete: {failed} documents failed")
         if failed > 0:
             self._logger.warning(
                 f"[VespaClient] Direct delete: {deleted} ok, {failed} failed "

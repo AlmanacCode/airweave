@@ -12,18 +12,22 @@ from airweave.domains.storage.limits import MAX_FILE_SIZE_BYTES
 from airweave.domains.storage.protocols import StorageBackend
 
 
+class BlobIntegrityError(ValueError):
+    """Committed reference or bytes violate canonical ownership/integrity."""
+
+
 async def read_blob(record: SourceRecord, ref: BlobReference, storage: StorageBackend) -> bytes:
     """Read only this sync's content-addressed bytes; reject corrupt references/content."""
     expected = f"canonical/{record.sync_id}/blobs/sha256/{ref.sha256}"
     if ref.key != expected:
-        raise ValueError("Canonical blob key does not match source scope and digest")
+        raise BlobIntegrityError("Canonical blob key does not match source scope and digest")
     if ref not in record.blobs:
-        raise ValueError("Canonical blob reference does not belong to the source record")
+        raise BlobIntegrityError("Canonical blob reference does not belong to the source record")
     if ref.size_bytes > MAX_FILE_SIZE_BYTES:
-        raise ValueError("Canonical blob exceeds projection size limit")
-    content = await storage.read_file(ref.key)
+        raise BlobIntegrityError("Canonical blob exceeds projection size limit")
+    content = await storage.read_file(ref.key, max_bytes=ref.size_bytes)
     if len(content) != ref.size_bytes or hashlib.sha256(content).hexdigest() != ref.sha256:
-        raise ValueError("Canonical blob bytes do not match recorded size and digest")
+        raise BlobIntegrityError("Canonical blob bytes do not match recorded size and digest")
     return content
 
 

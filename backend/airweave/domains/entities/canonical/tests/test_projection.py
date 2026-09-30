@@ -11,7 +11,7 @@ from airweave.domains.entities.canonical.projection_store import (
     publication_matches,
 )
 from airweave.domains.entities.canonical.requests import RecordIdentity
-from airweave.domains.entities.canonical.tests.helpers import capture, observation
+from airweave.domains.entities.canonical.tests.helpers import capture, observation, publish_prepared
 from airweave.models import Entity, Sync
 
 pytestmark = pytest.mark.integration
@@ -29,9 +29,9 @@ async def test_publication_compare_and_swap_revision_generation_and_pipeline(dat
     store = CanonicalProjectionStore()
     generation = uuid4()
     async with database() as db:
-        assert await store.publish(db, work, generation, 3)
+        assert await publish_prepared(store, db, work, generation, 3)
     async with database() as db:
-        assert not await store.publish(db, work, uuid4(), 3)  # timed-out prior feed
+        assert not await publish_prepared(store, db, work, uuid4(), 3)  # timed-out prior feed
     assert not await pending(database, fence)
     locator = ProjectionLocator(
         record_id=work.record.id,
@@ -52,13 +52,13 @@ async def test_publication_compare_and_swap_revision_generation_and_pipeline(dat
             await db.scalar(select(Entity.id).join(Sync).where(publication_matches(locator)))
             is None
         )
-        assert not await store.publish(db, work, uuid4(), 3)
+        assert not await publish_prepared(store, db, work, uuid4(), 3)
     changed = (await pending(database, fence))[0]
     async with database() as db:
         await db.execute(update(Sync).values(index_pipeline_version=2))
         await db.commit()
     async with database() as db:
-        assert not await store.publish(db, changed, uuid4(), 3)
+        assert not await publish_prepared(store, db, changed, uuid4(), 3)
     assert (await pending(database, fence))[0].pipeline_version == 2
 
 
@@ -78,11 +78,11 @@ async def test_parent_access_loss_fences_publication_and_tombstone_is_empty(data
     )
     store = CanonicalProjectionStore()
     async with database() as db:
-        assert not await store.publish(db, child_work, uuid4(), 2)
+        assert not await publish_prepared(store, db, child_work, uuid4(), 2)
     rows = await pending(database, fence)
     assert len(rows) == 1 and rows[0].record.deleted_at is not None
     async with database() as db:
-        assert await store.publish(db, rows[0], uuid4(), 0)
+        assert await publish_prepared(store, db, rows[0], uuid4(), 0)
     assert not await pending(database, fence)
 
 
@@ -95,7 +95,7 @@ async def test_failed_work_retries_and_stale_failure_preserves_publication(datab
         await store.fail(db, work, "conversion failed")
     assert len(await pending(database, fence)) == 1
     async with database() as db:
-        assert await store.publish(db, work, uuid4(), 1)
+        assert await publish_prepared(store, db, work, uuid4(), 1)
     async with database() as db:
         await store.fail(db, work, "late failure")
     async with database() as db:
@@ -113,6 +113,7 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
     from unittest.mock import AsyncMock, MagicMock
 
     from airweave.domains.entities.canonical.projector import CanonicalProjector
+    from airweave.platform.destinations.vespa.transformer import EntityTransformer
 
     service, fence = source
     await capture(
@@ -140,10 +141,33 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
 
     processor.process = process
     destination = MagicMock()
-    destination.bulk_insert = AsyncMock()
+    destination.collection_id = uuid4()
+    destination.prepare_documents = lambda chunks: {
+        "base_entity": [
+            EntityTransformer(collection_id=destination.collection_id).transform(chunk)
+            for chunk in chunks
+        ]
+    }
+
+    async def feed_prepared(documents):
+        from airweave.models.projection_generation import ProjectionGeneration
+
+        async with database() as db:
+            manifest = await db.scalar(select(ProjectionGeneration))
+            assert manifest is not None
+            assert manifest.documents[0]["document_id"] == documents["base_entity"][0].id
+            assert (await db.get(Entity, work.record.id)).indexed_generation is None
+            document = documents["base_entity"][0]
+            assert document.id.startswith(f"{fence.sync_id}_{destination.collection_id}_")
+            # Direct reads/navigation query entity fields, not the remote feed key.
+            original = document.fields["airweave_system_metadata_original_entity_id"]
+            assert ProjectionLocator.parse(original).record_id == work.record.id
+            assert document.fields["entity_id"] == original + "__chunk_0"
+            assert document.fields["airweave_system_metadata_sync_id"] == str(fence.sync_id)
+
+    destination.feed_prepared = AsyncMock(side_effect=feed_prepared)
     storage = MagicMock()
     projector = CanonicalProjector(CanonicalProjectionStore(), database, processor, storage)
     assert await projector.project_one(work, "slack", destination, MagicMock())
-    destination.bulk_insert.assert_awaited_once()
-    assert destination.bulk_insert.call_args.kwargs == {"strict": True}
+    destination.feed_prepared.assert_awaited_once()
     assert not await pending(database, fence)

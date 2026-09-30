@@ -105,6 +105,8 @@ async def database(request):
                 await connection.run_sync(seed_legacy)
             await connection.run_sync(migrate, "0001_canonical_records.py")
             await connection.run_sync(migrate, "0002_projection_publication.py")
+            await connection.run_sync(migrate, "0003_mail_thread_index.py")
+            await connection.run_sync(migrate, "0004_projection_generation.py")
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()

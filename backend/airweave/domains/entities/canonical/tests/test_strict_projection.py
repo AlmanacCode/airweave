@@ -45,3 +45,26 @@ async def test_strict_destination_cannot_ack_dropped_transformations():
     with pytest.raises(RuntimeError, match="dropped required"):
         await destination.bulk_insert([MagicMock()], strict=True)
     destination._client.feed_documents.assert_not_called()
+
+
+async def test_strict_delete_retries_partial_http_failure_and_accepts_absence():
+    from airweave.platform.destinations.vespa.client import VespaClient
+
+    client = VespaClient(MagicMock())
+    transport = MagicMock()
+    transport.delete = AsyncMock(
+        side_effect=[
+            SimpleNamespace(status_code=200),
+            SimpleNamespace(status_code=503),
+        ]
+    )
+    documents = [("base_entity", "first"), ("base_entity", "second")]
+    with pytest.raises(RuntimeError, match="deletion incomplete"):
+        await client._delete_by_doc_ids(documents, transport, strict=True)
+    transport.delete = AsyncMock(
+        side_effect=[
+            SimpleNamespace(status_code=404),
+            SimpleNamespace(status_code=200),
+        ]
+    )
+    assert await client._delete_by_doc_ids(documents, transport, strict=True) == 2

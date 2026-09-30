@@ -12,6 +12,7 @@ from airweave.core.logging import logger
 from airweave.domains.storage.exceptions import (
     StorageException,
     StorageNotFoundError,
+    StorageReadLimitExceeded,
 )
 from airweave.domains.storage.protocols import StorageBackend
 
@@ -133,19 +134,30 @@ class AzureBlobBackend(StorageBackend):
         except Exception as e:
             raise StorageException(f"Failed to write file to {path}: {e}")
 
-    async def read_file(self, path: str) -> bytes:
+    async def read_file(self, path: str, *, max_bytes: int | None = None) -> bytes:
         """Read binary content from Azure Blob."""
+        from azure.core.exceptions import AzureError
+
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("max_bytes must be nonnegative")
         blob_path = self._resolve(path)
         try:
             container_client = await self._get_container_client()
             blob_client = container_client.get_blob_client(blob_path)
             if not await blob_client.exists():
                 raise StorageNotFoundError(f"Path not found: {path}")
-            download_stream = await blob_client.download_blob()
-            return await download_stream.readall()
+            download_stream = await blob_client.download_blob(
+                **({"offset": 0, "length": max_bytes + 1} if max_bytes is not None else {})
+            )
+            content = await download_stream.readall()
+            if max_bytes is not None and len(content) > max_bytes:
+                raise StorageReadLimitExceeded("Stored object exceeds read limit")
+            return content
         except StorageNotFoundError:
             raise
-        except Exception as e:
+        except StorageReadLimitExceeded:
+            raise
+        except (OSError, AzureError) as e:
             raise StorageException(f"Failed to read file from {path}: {e}")
 
     async def exists(self, path: str) -> bool:

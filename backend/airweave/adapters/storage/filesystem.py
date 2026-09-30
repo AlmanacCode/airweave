@@ -19,6 +19,7 @@ import aiofiles.os
 from airweave.domains.storage.exceptions import (
     StorageException,
     StorageNotFoundError,
+    StorageReadLimitExceeded,
 )
 from airweave.domains.storage.protocols import StorageBackend
 
@@ -95,8 +96,10 @@ class FilesystemBackend(StorageBackend):
         except Exception as e:
             raise StorageException(f"Failed to write file to {path}: {e}")
 
-    async def read_file(self, path: str) -> bytes:
+    async def read_file(self, path: str, *, max_bytes: int | None = None) -> bytes:
         """Read binary content from filesystem."""
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("max_bytes must be nonnegative")
         full_path = self._resolve(path)
 
         if not full_path.exists():
@@ -104,8 +107,13 @@ class FilesystemBackend(StorageBackend):
 
         try:
             async with aiofiles.open(full_path, "rb") as f:
-                return await f.read()
-        except Exception as e:
+                content = await f.read() if max_bytes is None else await f.read(max_bytes + 1)
+                if max_bytes is not None and len(content) > max_bytes:
+                    raise StorageReadLimitExceeded("Stored object exceeds read limit")
+                return content
+        except StorageReadLimitExceeded:
+            raise
+        except OSError as e:
             raise StorageException(f"Failed to read file from {path}: {e}")
 
     async def exists(self, path: str) -> bool:
