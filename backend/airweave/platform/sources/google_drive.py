@@ -102,7 +102,7 @@ class GoogleDriveSource(BaseSource):
         if self.include_patterns:
             raise ValueError("Drive path selection is not yet supported by canonical capture")
         return CycleConfiguration(
-            fingerprint=hashlib.sha256(b"drive-all-accessible-v1").hexdigest(),
+            fingerprint=hashlib.sha256(b"drive-all-accessible-docs-native-v2").hexdigest(),
             parents={"file": (None,)},
             known_object_validation=("file",),
         )

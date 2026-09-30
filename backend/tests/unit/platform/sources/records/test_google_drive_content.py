@@ -62,16 +62,16 @@ async def test_storage_failure_is_not_silently_a_partial_success(inputs):
         await capture_file_content(record, **inputs)
 
 
-async def test_native_document_uses_existing_export_format(inputs):
+async def test_native_spreadsheet_keeps_existing_export_only_format(inputs):
     record = file_record(
-        {"id": "doc", "mimeType": "application/vnd.google-apps.document", "version": "7"}
+        {"id": "doc", "mimeType": "application/vnd.google-apps.spreadsheet", "version": "7"}
     )
     await capture_file_content(record, **inputs)
     call = inputs["files"].capture_canonical_url.call_args.kwargs
     assert "/export?" in call["url"]
     assert (
         call["media_type"]
-        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 
@@ -89,7 +89,7 @@ async def test_provider_export_limit_is_narrow_and_preserves_native_payload(inpu
     )
     inputs["files"].capture_canonical_url.side_effect = failure
     record = file_record(
-        {"id": "doc", "mimeType": "application/vnd.google-apps.document", "version": "7"}
+        {"id": "doc", "mimeType": "application/vnd.google-apps.spreadsheet", "version": "7"}
     )
     if reason != "exportSizeLimitExceeded":
         with pytest.raises(httpx.HTTPStatusError):

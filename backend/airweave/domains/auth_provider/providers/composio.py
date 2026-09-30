@@ -114,7 +114,7 @@ class ComposioAuthProvider(BaseAuthProvider):
         hosts = {
             "gmail": frozenset({"gmail.googleapis.com"}),
             "google_calendar": frozenset({"www.googleapis.com"}),
-            "google_drive": frozenset({"www.googleapis.com"}),
+            "google_drive": frozenset({"www.googleapis.com", "docs.googleapis.com"}),
             "slack": frozenset({"slack.com"}),
             "linear": frozenset({"api.linear.app", "uploads.linear.app"}),
             "github": frozenset({"api.github.com"}),

@@ -5,13 +5,15 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from airweave.core.logging import ContextualLogger
-from airweave.domains.entities.canonical.requests import CaptureRecord
+from airweave.domains.entities.canonical.requests import BlobReference, CaptureRecord
 from airweave.domains.sources.token_providers.protocol import SourceAuthProvider
 from airweave.domains.storage.exceptions import FileSkippedException
 from airweave.domains.storage.file_service import FileService
 from airweave.platform.entities.google_drive import GOOGLE_EXPORT_FORMATS
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+from airweave.platform.sources.records.google_docs_content import capture_document_parts
 from airweave.platform.sources.records.google_drive import BASE, GetJSON
+from airweave.platform.sources.records.workspace_manifest import DOCS_MIME, ExportState
 
 
 async def capture_file_content(
@@ -44,26 +46,54 @@ async def capture_file_content(
     else:
         media_type = mime
         download_url = url + "?alt=media&supportsAllDrives=true"
-    try:
-        blob = await files.capture_canonical_url(
-            url=download_url, client=client, auth=auth, logger=logger, media_type=media_type
+    blob, export_state = await _download_representation(
+        download_url, media_type, mime, files=files, client=client, auth=auth, logger=logger
+    )
+    if mime == DOCS_MIME:
+        record = await capture_document_parts(
+            record,
+            export=export_state,
+            export_blob=blob,
+            files=files,
+            client=client,
+            auth=auth,
         )
-    except httpx.HTTPStatusError as error:
-        if not _export_limit_reached(error, mime):
-            raise
-        logger.info("Drive export exceeds provider size limit; retained metadata only")
-        return record
-    except FileSkippedException:
-        # Declared/streamed size limits are a visible metadata-only record, not absent data.
+    elif blob is None:
         return record
     latest = await get(url, params={"fields": "version", "supportsAllDrives": "true"})
     if latest.get("version") != version:
         raise ValueError(
             "Drive file changed during content capture; retry before advancing checkpoint"
         )
+    if mime == DOCS_MIME:
+        return record
     return record.model_copy(
         update={"blobs": (blob,), "content_hash": blob.sha256, "completeness": "complete"}
     )
+
+
+async def _download_representation(
+    url: str,
+    media_type: str,
+    mime: str,
+    *,
+    files: FileService,
+    client: AirweaveHttpClient,
+    auth: SourceAuthProvider,
+    logger: ContextualLogger,
+) -> tuple[BlobReference | None, ExportState]:
+    """Export-size limits are supported gaps; unrelated provider failures propagate."""
+    try:
+        blob = await files.capture_canonical_url(
+            url=url, client=client, auth=auth, logger=logger, media_type=media_type
+        )
+    except httpx.HTTPStatusError as error:
+        if not _export_limit_reached(error, mime):
+            raise
+        return None, ExportState(status="unavailable", reason="export_size_limit")
+    except FileSkippedException:
+        return None, ExportState(status="unavailable", reason="read_size_limit")
+    return blob, ExportState(status="retained", blob=blob.sha256)
 
 
 def _export_limit_reached(error: httpx.HTTPStatusError, mime: str) -> bool:

@@ -308,3 +308,27 @@ async def test_proxy_envelope_is_bounded_before_json_decode():
     import asyncio
 
     await asyncio.get_running_loop().shutdown_asyncgens()
+
+
+@pytest.mark.asyncio
+async def test_drive_binding_allows_native_docs_only_with_same_verified_toolkit(monkeypatch):
+    from airweave.domains.auth_provider.providers.composio import ComposioAuthProvider
+
+    provider = await ComposioAuthProvider.create(
+        credentials={"api_key": "key"}, config={"account_id": "ca_drive"}
+    )
+    monkeypatch.setattr(
+        provider,
+        "_get_with_auth",
+        AsyncMock(
+            return_value={
+                "id": "ca_drive",
+                "toolkit": {"slug": "googledrive"},
+                "status": "ACTIVE",
+            }
+        ),
+    )
+    result = await provider.get_auth_result("google_drive", ["access_token"])
+    assert result.managed_auth.connected_account_id == "ca_drive"
+    assert result.managed_auth.allowed_hosts == {"www.googleapis.com", "docs.googleapis.com"}
+    assert "sheets.googleapis.com" not in result.managed_auth.allowed_hosts
