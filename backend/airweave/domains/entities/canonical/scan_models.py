@@ -18,6 +18,7 @@ from airweave.domains.entities.canonical.requests import (
     ScanVersion,
     WriterFence,
 )
+from airweave.domains.entities.canonical.scope_execution import ScopeExecution, ScopePlan
 
 
 class ScanContinuation(BaseModel):
@@ -47,6 +48,9 @@ class BeginScan(BaseModel):
     fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
     expected: ScanVersion | None = None
     restart: bool = False
+    plan: ScopePlan | None = None
+    expected_parent_epoch: int | None = Field(default=None, ge=1)
+    expected_parent_revision: int | None = Field(default=None, ge=1)
     continuation: ScanContinuation = Field(default_factory=ScanContinuation)
 
 
@@ -67,6 +71,7 @@ class ScanState(BaseModel):
     completion_policy: CompletionPolicy = "exhaustive"
     mode: Literal["full", "changes"] = "full"
     provider_checkpoint: ProviderCheckpoint | None = None
+    execution: ScopeExecution | None = None
 
 
 class CommitScanPage(BaseModel):

@@ -9,6 +9,7 @@ from airweave.domains.entities.canonical.cycle_models import (
     CaptureMode,
     CycleConfiguration,
     ProviderCheckpoint,
+    SourcePlan,
 )
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.requests import (
@@ -16,7 +17,8 @@ from airweave.domains.entities.canonical.requests import (
     CompletedScope,
     ScopeRemovalReason,
 )
-from airweave.domains.entities.canonical.scan_models import ScanContinuation
+from airweave.domains.entities.canonical.scan_models import ScanContinuation, ScanState
+from airweave.domains.entities.canonical.scope_execution import ScopePlan
 from airweave.domains.storage.file_service import FileService
 
 
@@ -41,6 +43,7 @@ class CapturePlan(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     mode: CaptureMode = "full"
     starting_checkpoint: ProviderCheckpoint | None = None
+    source_plan: SourcePlan = Field(default_factory=dict)
 
 
 class InvalidCaptureCheckpoint(Exception):
@@ -112,4 +115,35 @@ class KnownObjectSource(Protocol):
 
     async def refresh_known(self, record: SourceRecord, *, files: FileService) -> CaptureRecord:
         """Return exact fresh state or explicit unavailability; errors never mean absence."""
+        ...
+
+
+class InvalidScopeCheckpoint(Exception):
+    """Native evidence requires a full restart of one scope, not the whole forest."""
+
+
+@runtime_checkable
+class ScopedPageSource(Protocol):
+    """Mixed sources select immutable per-scope requests; the store attests authority."""
+
+    async def prepare_cycle(self, previous: CaptureCycle | None) -> CapturePlan:
+        """Freeze source parameters once before cycle creation."""
+        ...
+
+    async def prepare_scope(
+        self,
+        scope: CompletedScope,
+        cycle: CaptureCycle,
+        previous: ScanState | None,
+        *,
+        parent: SourceRecord | None,
+        force_full: bool,
+    ) -> ScopePlan:
+        """Called outside SQL only when starting or explicitly restarting a sweep."""
+        ...
+
+    def initial_scope_continuation(
+        self, scope: CompletedScope, cycle: CaptureCycle, plan: ScopePlan
+    ) -> ScanContinuation:
+        """Derive progress from immutable persisted scope and cycle parameters."""
         ...

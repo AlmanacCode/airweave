@@ -16,8 +16,10 @@ from airweave.domains.entities.canonical.page_source import (
     CheckpointedPageSource,
     InvalidCaptureCheckpoint,
     InvalidScanContinuation,
+    InvalidScopeCheckpoint,
     KnownObjectSource,
     ScopeAccessLost,
+    ScopedPageSource,
     ScopeRemovalReason,
 )
 from airweave.domains.entities.canonical.requests import (
@@ -33,6 +35,7 @@ from airweave.domains.entities.canonical.scan_models import (
     ScanContinuation,
     ScanState,
 )
+from airweave.domains.entities.canonical.scope_execution import ScopePlan
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
 from airweave.domains.storage.file_service import FileService
 
@@ -71,19 +74,27 @@ class CanonicalScanDriver:
             expected = None
         if (
             self.force_full
-            and isinstance(self.source, CheckpointedPageSource)
+            and isinstance(self.source, (CheckpointedPageSource, ScopedPageSource))
             and current is not None
             and current.phase == "active"
-            and (current.mode == "changes" or current.configuration != configuration)
+            and (
+                current.mode == "changes"
+                or (current.mode == "mixed" and not current.force_full_scopes)
+                or current.configuration != configuration
+            )
         ):
             cycle = await self.fresh_full(current)
         else:
             plan = (
-                CapturePlan(mode=current.mode, starting_checkpoint=current.starting_checkpoint)
+                CapturePlan(
+                    mode=current.mode,
+                    starting_checkpoint=current.starting_checkpoint,
+                    source_plan=current.source_plan,
+                )
                 if current is not None and current.phase == "active"
                 else (
                     await self.source.prepare_cycle(None if self.force_full else current)
-                    if isinstance(self.source, CheckpointedPageSource)
+                    if isinstance(self.source, (CheckpointedPageSource, ScopedPageSource))
                     else CapturePlan()
                 )
             )
@@ -96,13 +107,23 @@ class CanonicalScanDriver:
                         expected=expected,
                         mode=plan.mode,
                         starting_checkpoint=plan.starting_checkpoint,
+                        source_plan=plan.source_plan,
+                        force_full_scopes=(
+                            current.force_full_scopes
+                            if current and current.phase == "active"
+                            else self.force_full
+                        )
+                        if plan.mode == "mixed"
+                        else False,
                     ),
                 )
         for restart in range(2):
             try:
                 return await self.run_cycle(cycle)
             except InvalidCaptureCheckpoint:
-                if restart or not isinstance(self.source, CheckpointedPageSource):
+                if restart or not isinstance(
+                    self.source, (CheckpointedPageSource, ScopedPageSource)
+                ):
                     raise
                 await self.check_limits()
                 cycle = await self.fresh_full(cycle)
@@ -110,10 +131,12 @@ class CanonicalScanDriver:
 
     async def fresh_full(self, previous: CaptureCycle) -> CaptureCycle:
         """Explicit full requests and native expiry share the same exact-cycle restart."""
-        if not isinstance(self.source, CheckpointedPageSource):
+        if not isinstance(self.source, (CheckpointedPageSource, ScopedPageSource)):
             raise CycleConflict("Source has no checkpoint recovery contract")
         plan = await self.source.prepare_cycle(None)
-        if plan.mode != "full":
+        if plan.mode != "full" and not (
+            plan.mode == "mixed" and isinstance(self.source, ScopedPageSource)
+        ):
             raise CycleConflict("Checkpoint recovery requires a fresh full capture")
         async with self.sessions() as db:
             current = await self.service.read_cycle(db, self.fence)
@@ -127,6 +150,8 @@ class CanonicalScanDriver:
                     configuration=self.source.capture_cycle_configuration,
                     mode=plan.mode,
                     starting_checkpoint=plan.starting_checkpoint,
+                    source_plan=plan.source_plan,
+                    force_full_scopes=plan.mode == "mixed",
                 ),
             )
 
@@ -179,29 +204,7 @@ class CanonicalScanDriver:
         parent_epoch: int | None = None,
     ) -> None:
         """Only a provider invalid-cursor response permits one explicit sweep restart."""
-        async with self.sessions() as db:
-            previous = await self.service.read_scan(db, self.fence, scope)
-        restart = bool(
-            previous
-            and previous.cycle_id == cycle.version.cycle_id
-            and (
-                (refresh_membership and previous.membership_attempt_id != self.fence.attempt_id)
-                or previous.parent_visibility_epoch != parent_epoch
-            )
-        )
-        async with self.sessions() as db:
-            state = await self.service.begin_scan(
-                db,
-                BeginScan(
-                    fence=self.fence,
-                    scope=scope,
-                    cycle_id=cycle.version.cycle_id,
-                    fingerprint=cycle.configuration.fingerprint,
-                    expected=previous.version if previous else None,
-                    restart=restart,
-                    continuation=self.initial_continuation(cycle),
-                ),
-            )
+        state = await self.begin_scope(cycle, scope, parent, parent_epoch, refresh_membership)
         restarts = 0
         while state.phase == "collecting":
             await self.check_limits()
@@ -209,23 +212,11 @@ class CanonicalScanDriver:
                 page = await self.source.capture_page(
                     scope, state.continuation, files=self.files, parent=parent
                 )
-            except InvalidScanContinuation:
+            except (InvalidScanContinuation, InvalidScopeCheckpoint) as error:
                 if restarts >= 1:
                     raise
                 restarts += 1
-                async with self.sessions() as db:
-                    state = await self.service.begin_scan(
-                        db,
-                        BeginScan(
-                            fence=self.fence,
-                            scope=scope,
-                            cycle_id=state.cycle_id,
-                            fingerprint=state.fingerprint,
-                            expected=state.version,
-                            restart=True,
-                            continuation=self.initial_continuation(cycle),
-                        ),
-                    )
+                state = await self.restart_scope(cycle, scope, state, parent, error)
                 continue
             # Never split a page or retry an uncertain commit with this old version.
             async with self.sessions() as db:
@@ -253,6 +244,115 @@ class CanonicalScanDriver:
             elif state.completion_policy == "exhaustive" and refresh_membership:
                 await self.confirm_omissions(state)
         await self.reconcile(state)
+
+    async def begin_scope(
+        self,
+        cycle: CaptureCycle,
+        scope: CompletedScope,
+        parent: SourceRecord | None,
+        parent_epoch: int | None,
+        refresh_membership: bool,
+    ) -> ScanState:
+        """Select a plan outside SQL, then attest prior version and owner under the fence."""
+        async with self.sessions() as db:
+            previous = await self.service.read_scan(db, self.fence, scope)
+        restart = bool(
+            previous
+            and previous.cycle_id == cycle.version.cycle_id
+            and (
+                (refresh_membership and previous.membership_attempt_id != self.fence.attempt_id)
+                or previous.parent_visibility_epoch != parent_epoch
+            )
+        )
+        scoped = isinstance(self.source, ScopedPageSource)
+        if cycle.mode == "mixed" and not scoped:
+            raise CycleConflict("Mixed capture requires source scope planning")
+        if scoped and cycle.force_full_scopes and previous and previous.mode == "changes":
+            restart = True
+        plan = None
+        if scoped:
+            if previous and previous.cycle_id == cycle.version.cycle_id and not restart:
+                if previous.execution is None:
+                    raise CycleConflict("Mixed scope lost its persisted plan")
+                plan = previous.execution.plan
+            else:
+                plan = await self.source.prepare_scope(
+                    scope,
+                    cycle,
+                    previous,
+                    parent=parent,
+                    force_full=cycle.force_full_scopes
+                    or bool(previous and previous.parent_visibility_epoch != parent_epoch),
+                )
+        initial = self.scope_initial(scope, cycle, plan)
+        async with self.sessions() as db:
+            return await self.service.begin_scan(
+                db,
+                BeginScan(
+                    fence=self.fence,
+                    scope=scope,
+                    cycle_id=cycle.version.cycle_id,
+                    fingerprint=cycle.configuration.fingerprint,
+                    expected=previous.version if previous else None,
+                    restart=restart,
+                    continuation=initial,
+                    plan=plan,
+                    expected_parent_epoch=parent_epoch if cycle.mode == "mixed" else None,
+                    expected_parent_revision=parent.revision
+                    if parent and cycle.mode == "mixed"
+                    else None,
+                ),
+            )
+
+    async def restart_scope(
+        self,
+        cycle: CaptureCycle,
+        scope: CompletedScope,
+        state: ScanState,
+        parent: SourceRecord | None,
+        error: Exception,
+    ) -> ScanState:
+        """Native cursor expiry can reset one sweep; native sync expiry forces full scope mode."""
+        plan = state.execution.plan if state.execution else None
+        if isinstance(error, InvalidScopeCheckpoint):
+            if not isinstance(self.source, ScopedPageSource):
+                raise error
+            plan = await self.source.prepare_scope(
+                scope, cycle, state, parent=parent, force_full=True
+            )
+            if plan.mode != "full":
+                raise CycleConflict("Invalid scope checkpoint requires a full scope restart")
+        initial = self.scope_initial(scope, cycle, plan)
+        async with self.sessions() as db:
+            return await self.service.begin_scan(
+                db,
+                BeginScan(
+                    fence=self.fence,
+                    scope=scope,
+                    cycle_id=state.cycle_id,
+                    fingerprint=state.fingerprint,
+                    expected=state.version,
+                    restart=True,
+                    continuation=initial,
+                    plan=plan,
+                    expected_parent_epoch=state.parent_visibility_epoch
+                    if cycle.mode == "mixed"
+                    else None,
+                    expected_parent_revision=parent.revision
+                    if parent and cycle.mode == "mixed"
+                    else None,
+                ),
+            )
+
+    def scope_initial(
+        self, scope: CompletedScope, cycle: CaptureCycle, plan: ScopePlan | None
+    ) -> ScanContinuation:
+        """Sources receive exactly the plan that will be committed with the new sweep."""
+        if isinstance(self.source, ScopedPageSource):
+            if plan is None:
+                raise CycleConflict("Mixed source requires a scope plan")
+            return self.source.initial_scope_continuation(scope, cycle, plan)
+        return self.initial_continuation(cycle)
 
     def initial_continuation(self, cycle: CaptureCycle) -> ScanContinuation:
         """Sources without a native changes contract retain the empty initial cursor."""

@@ -277,6 +277,7 @@ async def database(request):
             ):
                 await connection.run_sync(seed_flat_scan, request.param)
             await connection.run_sync(migrate, "0007_scan_scope_owner.py")
+            await connection.run_sync(migrate, "0008_scope_execution.py")
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()

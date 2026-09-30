@@ -18,6 +18,7 @@ from airweave.domains.entities.canonical.models import CaptureResult
 from airweave.domains.entities.canonical.page_source import (
     CanonicalPageSource,
     CheckpointedPageSource,
+    ScopedPageSource,
 )
 from airweave.domains.entities.canonical.requests import (
     CaptureBatch,
@@ -73,6 +74,7 @@ class CanonicalCapturePipeline:
                 container_parents=self._container_parents,
                 completion_policies=config.completion_policies,
                 known_object_validation=config.known_object_validation,
+                scope_changes=config.scope_changes,
             )
             if config != declared:
                 raise ValueError("Page source cycle must match its declared container topology")
@@ -138,7 +140,7 @@ class CanonicalCapturePipeline:
             force_full=(
                 sync_context.force_full_sync or sync_context.execution_config.cursor.skip_load
             )
-            if isinstance(self.page_source, CheckpointedPageSource)
+            if isinstance(self.page_source, (CheckpointedPageSource, ScopedPageSource))
             else False,
         ).run()
 

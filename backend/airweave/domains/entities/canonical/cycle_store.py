@@ -74,6 +74,12 @@ def next_cycle(previous: CaptureCycle | None, request: BeginCycle | RestartCycle
         evidence = None
     if promoted is not None and promoted.configuration_digest != digest:
         promoted = None
+    if request.mode == "mixed":
+        if not request.configuration.scope_changes or request.starting_checkpoint is not None:
+            raise CycleConflict("Mixed capture requires declared scope changes and no global token")
+        evidence = promoted = None
+    elif request.configuration.scope_changes:
+        raise CycleConflict("Scoped changes require explicit mixed cycle execution")
     starting = request.starting_checkpoint
     if request.mode == "changes":
         if len(request.configuration.parents) != 1 or next(
@@ -94,9 +100,26 @@ def next_cycle(previous: CaptureCycle | None, request: BeginCycle | RestartCycle
         configuration=request.configuration,
         mode=request.mode,
         starting_checkpoint=starting,
+        source_plan=request.source_plan,
+        force_full_scopes=request.force_full_scopes,
         promoted_checkpoint=promoted,
         last_full_capture=evidence,
     )
+
+
+def attest_active_plan(state: CaptureCycle, request: BeginCycle) -> None:
+    """Resume never changes the already persisted execution intent."""
+    if state.configuration != request.configuration:
+        raise CycleConflict("Active cycle configuration changed; explicit abandonment required")
+    if state.force_full_scopes != request.force_full_scopes:
+        raise CycleConflict("Active cycle force-full intent changed")
+    if state.source_plan != request.source_plan:
+        raise CycleConflict("Active cycle source plan changed; explicit restart required")
+    if state.mode != request.mode or (
+        request.starting_checkpoint is not None
+        and request.starting_checkpoint != state.starting_checkpoint
+    ):
+        raise CycleConflict("Active cycle execution plan changed; explicit restart required")
 
 
 async def begin_cycle(db: AsyncSession, request: BeginCycle) -> CaptureCycle:
@@ -107,17 +130,7 @@ async def begin_cycle(db: AsyncSession, request: BeginCycle) -> CaptureCycle:
         if request.expected is not None and request.expected != state.version:
             raise CycleConflict("Cycle changed; reload durable progress")
         if state.phase == "active":
-            if state.configuration != request.configuration:
-                raise CycleConflict(
-                    "Active cycle configuration changed; explicit abandonment required"
-                )
-            if state.mode != request.mode or (
-                request.starting_checkpoint is not None
-                and request.starting_checkpoint != state.starting_checkpoint
-            ):
-                raise CycleConflict(
-                    "Active cycle execution plan changed; explicit restart required"
-                )
+            attest_active_plan(state, request)
             return state
         if request.expected is None:
             return state
@@ -334,6 +347,10 @@ async def terminal_checkpoint(
 ) -> PromotedCheckpoint | None:
     """Attest the source's terminal scan before publishing its provider boundary."""
     terminal = request.terminal_checkpoint
+    if state.mode == "mixed":
+        if terminal is not None:
+            raise CycleConflict("Mixed capture has no global provider checkpoint")
+        return None
     if (state.starting_checkpoint is not None or state.mode == "changes") and terminal is None:
         raise CycleConflict("Checkpoint-bearing capture requires its terminal scan boundary")
     promoted = state.promoted_checkpoint if state.mode == "changes" else None

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.cycle_models import (
     TERMINAL_CHECKPOINT_KEY,
+    CaptureCycle,
     CaptureMode,
     CycleVersion,
     ProviderCheckpoint,
@@ -41,6 +42,11 @@ from airweave.domains.entities.canonical.scan_models import (
     ScanResult,
     ScanState,
     ScanVersion,
+)
+from airweave.domains.entities.canonical.scope_execution import (
+    ScopeEvidence,
+    ScopeExecution,
+    ScopePlan,
 )
 from airweave.domains.entities.canonical.store import (
     CanonicalRecordStore,
@@ -94,6 +100,9 @@ def scan_state(row: CaptureScan, parent: Entity | None = None) -> ScanState:
         completed_at=row.completed_at,
         parent_visibility_epoch=row.parent_visibility_epoch,
         membership_attempt_id=row.membership_attempt_id,
+        execution=ScopeExecution.model_validate(row.execution_state)
+        if row.execution_state
+        else None,
     )
 
 
@@ -109,6 +118,98 @@ def page_continuation(request: CommitScanPage, mode: CaptureMode) -> dict[str, J
     if request.provider_checkpoint is not None:
         continuation[TERMINAL_CHECKPOINT_KEY] = request.provider_checkpoint.model_dump(mode="json")
     return continuation
+
+
+def effective_mode(row: CaptureScan, cycle: CaptureCycle) -> str:
+    """A mixed cycle never supplies a default cleanup mode for its scopes."""
+    if cycle.mode != "mixed":
+        return cycle.mode
+    if row.execution_state is None and row.cycle_id != cycle.version.cycle_id:
+        return "full"  # Legacy evidence is unknown; prepare a new full scope.
+    if row.execution_state is None:
+        raise ScanConflict("Mixed scope is missing its immutable execution plan")
+    return ScopeExecution.model_validate(row.execution_state).plan.mode
+
+
+def publish_scope(row: CaptureScan, cycle: CaptureCycle) -> None:
+    """Completed evidence is derived only from this row's committed terminal state."""
+    if cycle.mode != "mixed" or row.phase != "complete":
+        return
+    execution = ScopeExecution.model_validate(row.execution_state)
+    checkpoint = row.continuation.get(TERMINAL_CHECKPOINT_KEY)
+    evidence = ScopeEvidence(
+        cycle_id=row.cycle_id,
+        sweep_id=row.sweep_id,
+        completed_at=row.completed_at,
+        parent_visibility_epoch=row.parent_visibility_epoch,
+        request_context=execution.plan.request_context,
+        policy=cycle.configuration.policy(row.record_type),
+        checkpoint=ProviderCheckpoint.model_validate(checkpoint) if checkpoint else None,
+    )
+    row.execution_state = execution.model_copy(
+        update={
+            "published": evidence,
+            "last_full": evidence if execution.plan.mode == "full" else execution.last_full,
+        }
+    ).model_dump(mode="json")
+
+
+def begin_execution(
+    row: CaptureScan, cycle: CaptureCycle, request: BeginScan, epoch: int | None
+) -> None:
+    """Previous completion survives replacement; mismatching owner/request invalidates it."""
+    if cycle.mode != "mixed":
+        if request.plan is not None:
+            raise ScanConflict("Scope plans require mixed execution")
+        row.execution_state = None
+        return
+    plan = request.plan
+    if plan is None:
+        raise ScanConflict("Mixed capture requires an explicit scope plan")
+    previous = (
+        ScopeExecution.model_validate(row.execution_state)
+        if row.execution_state and row.fingerprint == cycle.configuration.fingerprint
+        else None
+    )
+    full = previous.last_full if previous else None
+    published = previous.published if previous else None
+    policy = cycle.configuration.policy(request.scope.record_type)
+    if full and (not full.matches(plan, epoch) or full.policy != policy):
+        full = None
+    if published and (not published.matches(plan, epoch) or published.policy != policy):
+        published = None
+    validate_scope_changes(cycle, request.scope.record_type, plan, full, published)
+    row.execution_state = ScopeExecution(plan=plan, last_full=full, published=published).model_dump(
+        mode="json"
+    )
+
+
+def validate_scope_changes(
+    cycle: CaptureCycle,
+    kind: str,
+    plan: ScopePlan,
+    full: ScopeEvidence | None,
+    published: ScopeEvidence | None,
+) -> None:
+    """Only compatible completed evidence authorizes an incremental scope."""
+    if plan.mode == "changes":
+        if cycle.force_full_scopes:
+            raise ScanConflict("This cycle requires full scope scans")
+        if kind not in cycle.configuration.scope_changes:
+            raise ScanConflict("Scope kind does not permit native changes")
+        if full is None or published is None or published.checkpoint is None:
+            raise ScanConflict("Scope changes require compatible full evidence and checkpoint")
+        if plan.starting_checkpoint != published.checkpoint:
+            raise ScanConflict("Scope changes must start at its last published checkpoint")
+
+
+def attest_planned_owner(cycle: CaptureCycle, request: BeginScan, parent: Entity | None) -> None:
+    """The post-I/O plan must still describe the captured owner used to select it."""
+    if cycle.mode == "mixed" and (
+        request.expected_parent_epoch != (parent.visibility_epoch if parent else None)
+        or request.expected_parent_revision != (parent.record_revision if parent else None)
+    ):
+        raise ScanConflict("Scope owner changed during plan selection")
 
 
 class CanonicalScanStore:
@@ -161,7 +262,7 @@ class CanonicalScanStore:
                 "completion_policy": cycle.configuration.policy(row.record_type)
                 if cycle
                 else "exhaustive",
-                "mode": cycle.mode if cycle else "full",
+                "mode": effective_mode(row, cycle) if cycle else "full",
             }
         )
 
@@ -195,6 +296,7 @@ class CanonicalScanStore:
         cursor, cycle = await attest_cycle(db, request.fence, request.cycle_id)
         await attest_scope(db, request.fence, cycle, request.scope)
         parent = await scope_owner(db, request.fence, cycle, request.scope)
+        attest_planned_owner(cycle, request, parent)
         inventory = bool(cycle.configuration.children_of(request.scope.record_type))
         if request.fingerprint != cycle.configuration.fingerprint:
             raise CycleConflict("Scan configuration differs from the active cycle")
@@ -229,12 +331,18 @@ class CanonicalScanStore:
                 and not request.restart
             ):
                 self._check_parent_epoch(row, parent)
+                if request.plan is not None and (
+                    not row.execution_state
+                    or ScopeExecution.model_validate(row.execution_state).plan != request.plan
+                ):
+                    raise ScanConflict("Active scope plan changed; explicit restart required")
                 return await self._state(db, row)
             if request.expected is None:
                 raise ScanConflict("Replacing a scan requires its current version")
             if row.cycle_id == request.cycle_id and not request.restart:
                 raise ScanConflict("Changed scope configuration requires an explicit restart")
             row.revision += 1
+        begin_execution(row, cycle, request, parent.visibility_epoch if parent else None)
         row.parent_visibility_epoch = parent.visibility_epoch if parent else None
         row.membership_attempt_id = request.fence.attempt_id if inventory else None
         row.cycle_id = request.cycle_id
@@ -262,11 +370,12 @@ class CanonicalScanStore:
         """Capture and advance the page as one transaction, never a partial acknowledgement."""
         sync = await self.records._fenced_sync(db, request.fence)
         _, cycle = await attest_cycle(db, request.fence, request.cycle_id)
-        continuation = page_continuation(request, cycle.mode)
         await attest_scope(db, request.fence, cycle, request.scope)
         row = self._expect(
             await self._row(db, request.fence, request.scope), request.expected, request.cycle_id
         )
+        mode = effective_mode(row, cycle)
+        continuation = page_continuation(request, mode)
         parent = await scope_owner(db, request.fence, cycle, request.scope)
         if row.parent_visibility_epoch != (parent.visibility_epoch if parent else None):
             raise ScanConflict("Scope owner changed; restart from its current epoch")
@@ -323,8 +432,9 @@ class CanonicalScanStore:
         row.continuation = continuation
         row.revision += 1
         if request.final:
-            row.phase = "complete" if cycle.mode == "changes" else "reconciling"
-            row.completed_at = datetime.now(timezone.utc) if cycle.mode == "changes" else None
+            row.phase = "complete" if mode == "changes" else "reconciling"
+            row.completed_at = datetime.now(timezone.utc) if mode == "changes" else None
+            publish_scope(row, cycle)
         await db.flush()
         return ScanResult(state=await self._state(db, row), capture=captured)
 
@@ -384,6 +494,8 @@ class CanonicalScanStore:
             raise ScanConflict("Changes scans cannot reconcile or validate enumeration absence")
         await attest_scope(db, fence, cycle, state.scope)
         row = self._expect(await self._row(db, fence, state.scope), state.version, state.cycle_id)
+        if effective_mode(row, cycle) == "changes":
+            raise ScanConflict("Changes scans cannot validate enumeration absence")
         parent = await scope_owner(db, fence, cycle, state.scope)
         if (
             row.phase != "reconciling"
@@ -473,6 +585,8 @@ class CanonicalScanStore:
         row = self._expect(
             await self._row(db, request.fence, request.scope), request.expected, request.cycle_id
         )
+        if effective_mode(row, cycle) == "changes":
+            raise ScanConflict("Changes scans cannot reconcile enumeration absence")
         parent = await scope_owner(db, request.fence, cycle, request.scope)
         if row.parent_visibility_epoch != (parent.visibility_epoch if parent else None):
             raise ScanConflict("Scope owner changed; restart from its current epoch")
@@ -493,6 +607,7 @@ class CanonicalScanStore:
             row.phase = "complete"
             row.completed_at = datetime.now(timezone.utc)
             row.revision += 1
+            publish_scope(row, cycle)
             await db.flush()
             return ScanResult(
                 state=await self._state(db, row),
@@ -521,5 +636,6 @@ class CanonicalScanStore:
         if not result.has_more:
             row.phase = "complete"
             row.completed_at = datetime.now(timezone.utc)
+            publish_scope(row, cycle)
         await db.flush()
         return ScanResult(state=await self._state(db, row), capture=result.capture)

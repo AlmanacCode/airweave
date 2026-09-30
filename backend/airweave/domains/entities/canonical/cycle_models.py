@@ -2,10 +2,11 @@
 
 import hashlib
 import json
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     AwareDatetime,
     BaseModel,
     ConfigDict,
@@ -20,11 +21,21 @@ from airweave.domains.entities.canonical.requests import RecordKind, ScanVersion
 
 CompletionPolicy = Literal["exhaustive", "discovery_only", "discovery_with_validation"]
 
-CaptureMode = Literal["full", "changes"]
+CaptureMode = Literal["full", "changes", "mixed"]
 CompletedDiscovery = Literal["incomplete", "scope_enumeration_complete"]
 
 CYCLE_KEY = "canonical_cycle"
 TERMINAL_CHECKPOINT_KEY = "_canonical_terminal_checkpoint"
+
+
+def bounded_source_plan(value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """Immutable cycle parameters must not become a response archive."""
+    if len(json.dumps(value, allow_nan=False).encode()) > 65536:
+        raise ValueError("Cycle source plan exceeds64KiB")
+    return value
+
+
+SourcePlan = Annotated[dict[str, JsonValue], AfterValidator(bounded_source_plan)]
 
 
 class CycleConfiguration(BaseModel):
@@ -35,12 +46,15 @@ class CycleConfiguration(BaseModel):
     parents: dict[RecordKind, tuple[RecordKind | None, ...]]
     completion_policies: dict[RecordKind, CompletionPolicy] = Field(default_factory=dict)
     known_object_validation: tuple[RecordKind, ...] = ()
+    scope_changes: tuple[RecordKind, ...] = ()
 
     def digest(self) -> str:
         """Bind history to scope, topology and guarantees, including default policies."""
         value = self.model_dump(mode="json")
         if not self.known_object_validation:
             value.pop("known_object_validation")  # Preserve existing default configuration digests.
+        if not self.scope_changes:
+            value.pop("scope_changes")
         value["completion_policies"] = {kind: self.policy(kind) for kind in self.parents}
         return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
@@ -57,6 +71,7 @@ class CycleConfiguration(BaseModel):
         container_parents: dict[str, str | tuple[str | None, ...]],
         completion_policies: dict[RecordKind, CompletionPolicy] | None = None,
         known_object_validation: tuple[RecordKind, ...] = (),
+        scope_changes: tuple[RecordKind, ...] = (),
     ) -> "CycleConfiguration":
         """Snapshot the existing source declaration; no second topology registry."""
         if len(set(record_types)) != len(record_types):
@@ -72,6 +87,7 @@ class CycleConfiguration(BaseModel):
             parents=parents,
             completion_policies=completion_policies or {},
             known_object_validation=known_object_validation,
+            scope_changes=scope_changes,
         )
 
     @model_validator(mode="before")
@@ -97,6 +113,10 @@ class CycleConfiguration(BaseModel):
             set(self.known_object_validation) - set(self.parents)
         ):
             raise ValueError("Known-object validation requires unique declared kinds")
+        if len(set(self.scope_changes)) != len(self.scope_changes) or any(
+            kind not in self.parents or self.children_of(kind) for kind in self.scope_changes
+        ):
+            raise ValueError("Scope changes require unique declared leaf kinds")
         if set(self.completion_policies) - set(self.parents):
             raise ValueError("Completion policy has an undeclared record kind")
         if not self.parents or any(not kind or not values for kind, values in self.parents.items()):
@@ -195,6 +215,8 @@ class CaptureCycle(BaseModel):
     completed_job_id: UUID | None = None
     mode: CaptureMode = "full"
     starting_checkpoint: ProviderCheckpoint | None = None
+    source_plan: SourcePlan = Field(default_factory=dict)
+    force_full_scopes: bool = False
     promoted_checkpoint: PromotedCheckpoint | None = None
     last_full_capture: FullCaptureEvidence | None = None
 
@@ -218,6 +240,8 @@ class BeginCycle(BaseModel):
     expected: CycleVersion | None = None
     mode: CaptureMode = "full"
     starting_checkpoint: ProviderCheckpoint | None = None
+    source_plan: SourcePlan = Field(default_factory=dict)
+    force_full_scopes: bool = False
 
 
 class CompleteCycle(BaseModel):
@@ -238,6 +262,8 @@ class RestartCycle(BaseModel):
     configuration: CycleConfiguration
     mode: CaptureMode = "full"
     starting_checkpoint: ProviderCheckpoint | None = None
+    source_plan: SourcePlan = Field(default_factory=dict)
+    force_full_scopes: bool = False
 
 
 class ScopeWork(BaseModel):
