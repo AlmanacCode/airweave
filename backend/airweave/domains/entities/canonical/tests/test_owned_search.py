@@ -342,10 +342,12 @@ async def test_final_gate_drops_early_hit_changed_during_later_collection(
         await db.commit()
     execute = executor.execute
     calls = 0
+    prepared_queries = []
 
     async def later_edit(**kwargs):
         nonlocal calls
         calls += 1
+        prepared_queries.append(kwargs["prepared_query"])
         if calls == 2:
             await capture(database, capture_service, fence, observation(payload={"updated": True}))
             return SearchResults(results=[])
@@ -373,6 +375,7 @@ async def test_final_gate_drops_early_hit_changed_during_later_collection(
             "mode": "keyword",
         },
     )
+    assert prepared_queries[0] is not None and prepared_queries[0] is prepared_queries[1]
     assert calls == 2 and response.status_code == 200
     assert response.json()["items"] == [] and response.json()["excluded_candidates"] == 1
     assert "Private original text" not in response.text

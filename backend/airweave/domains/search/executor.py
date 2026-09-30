@@ -29,6 +29,7 @@ from airweave.domains.search.types import (
     SearchPlan,
     SearchResults,
 )
+from airweave.domains.search.types.embeddings import PreparedQueryEmbeddings
 from airweave.domains.search.types.filters import FilterableField, FilterCondition, FilterOperator
 from airweave.domains.search.types.results import (
     SearchAccessControl,
@@ -90,6 +91,7 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         collection_readable_id: str,
         user_principal: Optional[str] = None,
         indexed_only: bool = False,
+        prepared_query: PreparedQueryEmbeddings | None = None,
     ) -> SearchResults:
         """Execute the full search pipeline including federated sources."""
         # 0. Resolve access control principals
@@ -122,7 +124,9 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         fetch_limit = original_offset + original_limit
 
         vector_task = asyncio.create_task(
-            self._execute_vector_search(complete_plan, collection_id, acl_principals)
+            self._execute_vector_search(
+                complete_plan, collection_id, acl_principals, prepared_query
+            )
         )
 
         fed_task = None
@@ -186,17 +190,8 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
             excluded_candidates=excluded,
         )
 
-    async def _execute_vector_search(
-        self,
-        plan: SearchPlan,
-        collection_id: str,
-        acl_principals: Optional[list[str]] = None,
-    ) -> SearchResults:
-        """Embed, compile, and execute vector DB search.
-
-        Adapter exceptions (EmbedderError, VectorDBError) propagate directly
-        to the caller — no wrapping needed since adapters own their error types.
-        """
+    async def prepare_query(self, plan: SearchPlan) -> PreparedQueryEmbeddings:
+        """Prepare embeddings for this executor only; no source data or authorization cached."""
         dense_embeddings = None
         sparse_embedding = None
 
@@ -217,6 +212,30 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
             dense_embeddings=dense_embeddings,
             sparse_embedding=sparse_embedding,
         )
+
+        prepared = PreparedQueryEmbeddings(
+            primary=plan.query.primary,
+            variations=tuple(plan.query.variations),
+            strategy=plan.retrieval_strategy,
+            embeddings=embeddings,
+        )
+        prepared._owner = self
+        return prepared
+
+    async def _execute_vector_search(
+        self,
+        plan: SearchPlan,
+        collection_id: str,
+        acl_principals: Optional[list[str]] = None,
+        prepared_query: PreparedQueryEmbeddings | None = None,
+    ) -> SearchResults:
+        """Embed, compile, and execute vector DB search.
+
+        Adapter exceptions (EmbedderError, VectorDBError) propagate directly
+        to the caller — no wrapping needed since adapters own their error types.
+        """
+        prepared = prepared_query if prepared_query is not None else await self.prepare_query(plan)
+        embeddings = prepared.require_match(plan, self)
 
         compiled_query = await self._vector_db.compile_query(
             plan=plan,

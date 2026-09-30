@@ -13,6 +13,7 @@ from airweave.domains.search.types import (
     SearchPlan,
     SearchResults,
 )
+from airweave.domains.search.types.embeddings import PreparedQueryEmbeddings
 
 if TYPE_CHECKING:
     from airweave.schemas.search_v2 import (
@@ -33,6 +34,10 @@ class SearchPlanExecutorProtocol(Protocol):
     Used by all three tiers (instant, classic, agentic).
     """
 
+    async def prepare_query(self, plan: SearchPlan) -> PreparedQueryEmbeddings:
+        """Compute pure query work once for serial collection searches in one request."""
+        ...
+
     async def execute(
         self,
         plan: SearchPlan,
@@ -43,6 +48,7 @@ class SearchPlanExecutorProtocol(Protocol):
         collection_readable_id: str,
         user_principal: Optional[str] = None,
         indexed_only: bool = False,
+        prepared_query: PreparedQueryEmbeddings | None = None,
     ) -> SearchResults:
         """Execute a search plan and return results."""
         ...

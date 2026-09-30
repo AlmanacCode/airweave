@@ -1215,3 +1215,78 @@ async def test_executor_returns_only_publication_gate_survivors(monkeypatch):
     assert result.retrieval_incomplete is True
     assert result.excluded_candidates == 1
     assert gate.await_args.args[3] == [fresh, stale]
+
+
+@pytest.mark.parametrize("mode,dense_calls", [("hybrid", 1), ("keyword", 0)])
+async def test_prepared_query_reuses_only_embeddings_across_collection_scopes(mode, dense_calls):
+    executor = _build_executor()
+    executor._dense_embedder.embed_many = AsyncMock(wraps=executor._dense_embedder.embed_many)
+    executor._sparse_embedder.embed = AsyncMock(wraps=executor._sparse_embedder.embed)
+    executor._vector_db.compile_query = AsyncMock(wraps=executor._vector_db.compile_query)
+    executor._resolve_acl_principals = AsyncMock(side_effect=[["alice"], ["bob"]])
+    plan = SearchPlan(
+        query=SearchQuery(primary="meeting", variations=["discussion"]),
+        limit=200,
+        offset=0,
+        retrieval_strategy=mode,
+    )
+    prepared = await executor.prepare_query(plan)
+    ctx = MagicMock()
+    for collection in ("first", "second"):
+        filters = [
+            FilterGroup(
+                conditions=[
+                    FilterCondition(
+                        field="airweave_system_metadata.sync_id",
+                        operator="equals",
+                        value=collection,
+                    )
+                ]
+            )
+        ]
+        result = await executor.execute(
+            plan,
+            filters,
+            collection,
+            MagicMock(),
+            ctx,
+            collection,
+            indexed_only=True,
+            prepared_query=prepared,
+        )
+        assert result.results == []
+    assert executor._dense_embedder.embed_many.await_count == dense_calls
+    executor._sparse_embedder.embed.assert_awaited_once_with("meeting")
+    calls = executor._vector_db.compile_query.await_args_list
+    assert [call.kwargs["collection_id"] for call in calls] == ["first", "second"]
+    assert [call.kwargs["acl_principals"] for call in calls] == [["alice"], ["bob"]]
+    assert all(call.kwargs["plan"].limit == 200 for call in calls)
+    assert [call.kwargs["plan"].filter_groups[0].conditions[0].value for call in calls] == [
+        "first",
+        "second",
+    ]
+    # A new request has no shared cache, including an identical query.
+    fresh = await executor.prepare_query(plan)
+    assert fresh is not prepared
+    assert executor._sparse_embedder.embed.await_count == 2
+
+
+async def test_prepared_query_rejects_other_executor_query_variation_and_mode():
+    executor = _build_executor()
+    plan = SearchPlan(
+        query=SearchQuery(primary="meeting"), limit=200, offset=0, retrieval_strategy="keyword"
+    )
+    prepared = await executor.prepare_query(plan)
+    other = _build_executor()
+    for candidate, candidate_plan in [
+        (other, plan),
+        (executor, plan.model_copy(update={"query": SearchQuery(primary="other")})),
+        (
+            executor,
+            plan.model_copy(update={"query": SearchQuery(primary="meeting", variations=["x"])}),
+        ),
+        (executor, plan.model_copy(update={"retrieval_strategy": "semantic"})),
+    ]:
+        with pytest.raises(ValueError, match="Prepared query"):
+            await candidate._execute_vector_search(candidate_plan, "collection", None, prepared)
+    assert executor._vector_db._calls == other._vector_db._calls == []

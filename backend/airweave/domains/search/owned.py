@@ -68,14 +68,17 @@ class OwnedSearchService:
         scope_snapshot = self._scope_identity(scopes)
         hits, scores, exclusions, postfiltered = {}, {}, 0, 0
         engine_partial, full = False, False
+        plan = SearchPlan(
+            query=SearchQuery(primary=request.query),
+            limit=200,
+            offset=0,
+            retrieval_strategy=request.mode,
+        )
+        prepared_query = await self._executor.prepare_query(plan) if groups else None
         for (collection_id, readable_id), sync_ids in groups.items():
             results = await self._executor.execute(
-                plan=SearchPlan(
-                    query=SearchQuery(primary=request.query),
-                    limit=200,
-                    offset=0,
-                    retrieval_strategy=request.mode,
-                ),
+                plan=plan,
+                prepared_query=prepared_query,
                 user_filter=[FilterGroup(conditions=self._prefilters(request, sync_ids))],
                 collection_id=str(collection_id),
                 db=db,
