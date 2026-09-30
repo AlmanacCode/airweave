@@ -35,7 +35,7 @@ async def synthetic_source(name, account, expected_email, key, fence, **options)
         connector = await GoogleCalendarSource.create(auth=StaticTokenProvider('synthetic'),
             logger=MagicMock(), http_client=client, config=options['calendar_config'].model_copy(
                 update={'expected_primary_calendar_id': expected_email}))
-        yield connector, 'provider_email'
+        yield connector, 'provider_primary_calendar_id'
         assert not native.replies
 
 lifecycle.rest_source = synthetic_source
