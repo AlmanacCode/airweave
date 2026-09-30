@@ -14,11 +14,12 @@ Usage:
         ...
 """
 
-from airweave.core.config.enums import Environment, StorageBackendType
+from airweave.core.config.enums import AuthMode, Environment, StorageBackendType
 from airweave.core.config.settings import MISTRAL_DEFAULT_BASE_URL, Settings
 
 __all__ = [
     "Settings",
+    "AuthMode",
     "StorageBackendType",
     "Environment",
     "settings",

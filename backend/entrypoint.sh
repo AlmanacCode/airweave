@@ -46,11 +46,10 @@ except Exception as e:
     sys.exit(1)
 "
 
-# Run migrations using our existing Alembic setup
-echo "Running database migrations..."
-cd /app && poetry run alembic upgrade head
-# cd /app #dev time to not rerun alembic on conflicting branches
+echo "Starting against the provisioned database..."
+cd /app
+# Migrations and bootstrap are explicit deployment jobs, never replica startup.
 
 # Start application
 echo "Starting application..."
-poetry run uvicorn airweave.main:app --host 0.0.0.0 --port 8001 --reload
+poetry run uvicorn airweave.main:app --host 0.0.0.0 --port 8001

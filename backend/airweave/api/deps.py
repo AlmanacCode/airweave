@@ -17,13 +17,16 @@ from airweave.api.context import ApiContext  # noqa: F401 — re-exported for ba
 from airweave.api.context_resolver import ContextResolver
 from airweave.api.inject import Inject  # noqa: F401 — re-exported for backward compat
 from airweave.core import container as container_mod
-from airweave.core.config import settings
+from airweave.core.config import AuthMode, settings
 from airweave.core.container import Container
 from airweave.core.logging import ContextualLogger
 from airweave.core.protocols.cache import ContextCache
 from airweave.core.protocols.rate_limiter import RateLimiter
 from airweave.core.shared_models import AuthMethod
 from airweave.db.session import get_db
+from airweave.domains.entities.canonical.query import CanonicalQueryService
+from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
+from airweave.domains.entities.canonical.store import CanonicalRecordStore
 from airweave.domains.organizations.repository import ApiKeyRepository, OrganizationRepository
 from airweave.domains.users.repository import UserRepository
 
@@ -139,7 +142,7 @@ async def get_user_from_token(token: str, db: AsyncSession) -> Optional[schemas.
         if token.startswith("Bearer "):
             token = token[7:]
 
-        if not settings.AUTH_ENABLED:
+        if settings.AUTH_MODE == AuthMode.LOCAL:
             user = await crud.user.get_by_email(db, email=settings.FIRST_SUPERUSER)
             if user:
                 return schemas.User.model_validate(user)
@@ -230,3 +233,10 @@ async def get_connect_session(
         )
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=401, detail="Invalid session token payload") from e
+
+
+def get_canonical_query_service() -> CanonicalQueryService:
+    """Wire stateless exact-record reads with the deployment's cursor signing key."""
+    return CanonicalQueryService(
+        CanonicalRecordStore(), CanonicalQueryStore(), settings.STATE_SECRET
+    )

@@ -4,7 +4,7 @@ Verifies:
 - Auth method dispatch (system / Auth0 / API key / none)
 - Auth0 cache hit returns cached user without DB call
 - Auth0 cache miss populates cache after DB call
-- API key cache hit returns org_id without DB call
+- Cached key mappings never bypass credential validation
 - No auth raises 401
 """
 
@@ -38,14 +38,17 @@ class TestAuthDispatch:
     @pytest.mark.asyncio
     @patch("airweave.api.context_resolver.settings")
     async def test_auth_disabled_uses_system(self, mock_settings):
-        mock_settings.AUTH_ENABLED = False
+        mock_settings.AUTH_MODE = "local"
         mock_settings.FIRST_SUPERUSER = "admin@test.com"
         resolver = _make_resolver()
 
         with patch.object(resolver, "_authenticate_system", new_callable=AsyncMock) as mock_sys:
             mock_sys.return_value = AuthResult(method=AuthMethod.SYSTEM)
             result = await resolver._authenticate(
-                db=AsyncMock(), auth0_user=None, x_api_key=None, request=MagicMock(),
+                db=AsyncMock(),
+                auth0_user=None,
+                x_api_key=None,
+                request=MagicMock(),
             )
             mock_sys.assert_called_once()
             assert result.method == AuthMethod.SYSTEM
@@ -53,7 +56,7 @@ class TestAuthDispatch:
     @pytest.mark.asyncio
     @patch("airweave.api.context_resolver.settings")
     async def test_auth0_user_takes_priority_over_api_key(self, mock_settings):
-        mock_settings.AUTH_ENABLED = True
+        mock_settings.AUTH_MODE = "auth0"
         resolver = _make_resolver()
 
         auth0_user = MagicMock(email="user@test.com", id="auth0|123")
@@ -61,7 +64,10 @@ class TestAuthDispatch:
         with patch.object(resolver, "_authenticate_auth0", new_callable=AsyncMock) as mock_auth0:
             mock_auth0.return_value = AuthResult(method=AuthMethod.AUTH0)
             result = await resolver._authenticate(
-                db=AsyncMock(), auth0_user=auth0_user, x_api_key="some-key", request=MagicMock(),
+                db=AsyncMock(),
+                auth0_user=auth0_user,
+                x_api_key="some-key",
+                request=MagicMock(),
             )
             mock_auth0.assert_called_once()
             assert result.method == AuthMethod.AUTH0
@@ -69,15 +75,19 @@ class TestAuthDispatch:
     @pytest.mark.asyncio
     @patch("airweave.api.context_resolver.settings")
     async def test_api_key_used_when_no_auth0_user(self, mock_settings):
-        mock_settings.AUTH_ENABLED = True
+        mock_settings.AUTH_MODE = "auth0"
         resolver = _make_resolver()
 
         with patch.object(resolver, "_authenticate_api_key", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = AuthResult(
-                method=AuthMethod.API_KEY, api_key_org_id=str(ORG_ID),
+                method=AuthMethod.API_KEY,
+                api_key_org_id=str(ORG_ID),
             )
             result = await resolver._authenticate(
-                db=AsyncMock(), auth0_user=None, x_api_key="key-123", request=MagicMock(),
+                db=AsyncMock(),
+                auth0_user=None,
+                x_api_key="key-123",
+                request=MagicMock(),
             )
             mock_api.assert_called_once()
             assert result.method == AuthMethod.API_KEY
@@ -85,12 +95,15 @@ class TestAuthDispatch:
     @pytest.mark.asyncio
     @patch("airweave.api.context_resolver.settings")
     async def test_no_auth_raises_401(self, mock_settings):
-        mock_settings.AUTH_ENABLED = True
+        mock_settings.AUTH_MODE = "auth0"
         resolver = _make_resolver()
 
         with pytest.raises(HTTPException) as exc:
             await resolver._authenticate(
-                db=AsyncMock(), auth0_user=None, x_api_key=None, request=MagicMock(),
+                db=AsyncMock(),
+                auth0_user=None,
+                x_api_key=None,
+                request=MagicMock(),
             )
         assert exc.value.status_code == 401
 
@@ -151,19 +164,22 @@ class TestAuth0CacheIntegration:
         assert "ghost@test.com" not in cache._users
 
 
-class TestApiKeyCacheIntegration:
-    """Verify API key auth uses the cache correctly."""
+class TestApiKeyValidation:
+    """A cached org mapping is not authorization after key revocation."""
 
     @pytest.mark.asyncio
-    async def test_cache_hit_returns_org_id(self):
+    async def test_stale_cache_does_not_authorize_revoked_key(self):
+        from airweave.core.exceptions import NotFoundException
+
         cache = FakeContextCache()
         cache._api_keys["my-secret-key"] = ORG_ID
-
         resolver = _make_resolver(cache=cache)
-        result = await resolver._authenticate_api_key(
-            db=AsyncMock(), api_key="my-secret-key", request=MagicMock(),
-        )
-
-        assert result.method == AuthMethod.API_KEY
-        assert result.api_key_org_id == str(ORG_ID)
-        assert result.metadata["api_key_id"] == "cached"
+        resolver._api_keys.get_by_key = AsyncMock(side_effect=NotFoundException("revoked"))
+        with pytest.raises(HTTPException) as error:
+            await resolver._authenticate_api_key(
+                db=AsyncMock(),
+                api_key="my-secret-key",
+                request=MagicMock(),
+            )
+        assert error.value.status_code == 403
+        resolver._api_keys.get_by_key.assert_awaited_once()

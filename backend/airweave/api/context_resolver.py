@@ -18,8 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from airweave import schemas
 from airweave.analytics.service import analytics
 from airweave.api.context import ApiContext, RequestHeaders
-from airweave.core.config import settings
-from airweave.core.exceptions import NotFoundException, RateLimitExceededException
+from airweave.core.config import AuthMode, settings
+from airweave.core.exceptions import (
+    NotFoundException,
+    PermissionException,
+    RateLimitExceededException,
+)
 from airweave.core.logging import logger
 from airweave.core.protocols.cache import ContextCache
 from airweave.core.protocols.rate_limiter import RateLimiter
@@ -105,14 +109,14 @@ class ContextResolver:
 
         Used by ``deps.get_user``.
         """
-        if not settings.AUTH_ENABLED:
+        if settings.AUTH_MODE == AuthMode.LOCAL:
             user = await self._fetch_system_user(db)
             if user:
                 return user
             raise HTTPException(status_code=401, detail="User not found")
 
-        if not auth0_user:
-            raise HTTPException(status_code=401, detail="User email not found in Auth0")
+        if settings.AUTH_MODE != AuthMode.AUTH0 or not auth0_user:
+            raise HTTPException(status_code=401, detail="User authentication is required")
 
         user = await self._fetch_auth0_user(db, auth0_user)
         if not user:
@@ -130,9 +134,9 @@ class ContextResolver:
         x_api_key: Optional[str],
         request: Request,
     ) -> AuthResult:
-        if not settings.AUTH_ENABLED:
+        if settings.AUTH_MODE == AuthMode.LOCAL:
             return await self._authenticate_system(db)
-        if auth0_user:
+        if settings.AUTH_MODE == AuthMode.AUTH0 and auth0_user:
             return await self._authenticate_auth0(db, auth0_user)
         if x_api_key:
             return await self._authenticate_api_key(db, x_api_key, request)
@@ -165,14 +169,6 @@ class ContextResolver:
         self, db: AsyncSession, api_key: str, request: Request
     ) -> AuthResult:
         try:
-            org_id = await self._cache.get_api_key_org_id(api_key)
-            if org_id:
-                return AuthResult(
-                    method=AuthMethod.API_KEY,
-                    metadata={"api_key_id": "cached", "created_by": None},
-                    api_key_org_id=str(org_id),
-                )
-
             api_key_obj = await self._api_keys.get_by_key(db, key=api_key)
             org_id = api_key_obj.organization_id
 
@@ -183,8 +179,6 @@ class ContextResolver:
                 f"endpoint={request.url.path} created_by={api_key_obj.created_by_email}"
             )
 
-            await self._cache.set_api_key_org_id(api_key, org_id)
-
             return AuthResult(
                 method=AuthMethod.API_KEY,
                 metadata={
@@ -194,7 +188,7 @@ class ContextResolver:
                 api_key_org_id=str(org_id),
             )
 
-        except (ValueError, NotFoundException) as e:
+        except (ValueError, NotFoundException, PermissionException) as e:
             logger.error(f"API key validation failed: {e}")
             if "expired" in str(e):
                 raise HTTPException(status_code=403, detail="API key has expired") from e
@@ -291,8 +285,7 @@ class ContextResolver:
                 )
 
         elif auth.method == AuthMethod.API_KEY and x_api_key:
-            api_key_obj = await self._api_keys.get_by_key(db, key=x_api_key)
-            if str(api_key_obj.organization_id) != organization_id:
+            if auth.api_key_org_id != organization_id:
                 raise HTTPException(
                     status_code=403,
                     detail=f"API key does not have access to organization {organization_id}",

@@ -21,11 +21,10 @@ def check_db():
 check_db()
 "
 
-# Run migrations using our existing Alembic setup
-echo "Running database migrations..."
-cd /app && poetry run alembic upgrade head
-# cd /app #dev time to not rerun alembic on conflicting branches
+echo "Starting against the provisioned database..."
+cd /app
+# Migrations and bootstrap are explicit deployment jobs, never replica startup.
 
 # Start application with hot reloading enabled
 echo "Starting application with hot reloading..."
-poetry run uvicorn airweave.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir /app/airweave
+poetry run uvicorn airweave.main:app --host 0.0.0.0 --port 8001-dir /app/airweave

@@ -38,6 +38,7 @@ class EntityUpdate(BaseModel):
 class EntityInDBBase(EntityBase):
     """Base schema for Entity stored in DB."""
 
+    sync_job_id: UUID | None
     id: UUID
     organization_id: UUID
     created_at: datetime

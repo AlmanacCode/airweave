@@ -4,9 +4,6 @@ This module sets up the FastAPI application and the middleware to log incoming r
 and unhandled exceptions.
 """
 
-import os
-import subprocess
-import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -34,6 +31,7 @@ from airweave.api.middleware import (
 )
 from airweave.api.router import TrailingSlashRouter
 from airweave.api.v1.api import api_router
+from airweave.api.v1.endpoints.records import record_error_response
 from airweave.core.config import settings
 from airweave.core.exceptions import (
     AirweaveException,
@@ -44,16 +42,16 @@ from airweave.core.exceptions import (
     RateLimitExceededException,
 )
 from airweave.core.logging import logger
-from airweave.db.init_db import init_db
 from airweave.db.session import AsyncSessionLocal
 from airweave.domains.embedders.config import validate_embedding_config
+from airweave.domains.entities.canonical.store import CanonicalStoreError
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events.
 
-    Initializes the DI container, runs alembic migrations, and syncs platform components.
+    Initialize runtime dependencies against an explicitly provisioned database.
     """
     # Initialize the dependency injection container (fail fast if wiring is broken)
     from airweave.core import container as container_mod
@@ -64,19 +62,6 @@ async def lifespan(app: FastAPI):
     logger.info("Container initialized successfully")
 
     async with AsyncSessionLocal() as db:
-        if settings.RUN_ALEMBIC_MIGRATIONS:
-            logger.info("Running alembic migrations...")
-            env = os.environ.copy()
-            backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            env["PYTHONPATH"] = backend_dir
-            subprocess.run(
-                [sys.executable, "-m", "alembic", "upgrade", "head"],
-                check=True,
-                cwd=backend_dir,
-                env=env,
-            )
-        await init_db(db)
-
         # Reconcile embedding config against DB deployment metadata
         await validate_embedding_config(db)
 
@@ -141,6 +126,7 @@ app.exception_handler(InvalidInputError)(invalid_input_exception_handler)
 
 # Register custom Airweave exception handlers
 app.exception_handler(AirweaveException)(airweave_exception_handler)
+app.exception_handler(CanonicalStoreError)(record_error_response)
 
 # Default CORS origins - white labels and environment variables can extend this
 CORS_ORIGINS = [

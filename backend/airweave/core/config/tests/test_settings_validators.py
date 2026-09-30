@@ -8,6 +8,7 @@ from pydantic import ValidationError
 # can override *only* the field under test and trigger the expected error.
 _BASE_ENV: dict[str, str] = {
     "ENVIRONMENT": "local",
+    "AUTH_MODE": "api_key",
     "FIRST_SUPERUSER": "test@example.com",
     "FIRST_SUPERUSER_PASSWORD": "testpassword123",
     "ENCRYPTION_KEY": "SpgLrrEEgJ/7QdhSMSvagL1juEY5eoyCG0tZN7OSQV0=",
@@ -21,6 +22,8 @@ _BASE_ENV: dict[str, str] = {
 
 def _build_settings(monkeypatch, overrides: dict[str, str]):
     """Set env vars from _BASE_ENV + overrides, then construct Settings."""
+    # These field-validator tests must not inherit insecure local auth from conftest.
+    monkeypatch.delenv("AUTH_ENABLED", raising=False)
     for key, value in {**_BASE_ENV, **overrides}.items():
         monkeypatch.setenv(key, value)
 

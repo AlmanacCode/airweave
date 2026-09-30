@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
-from sqlalchemy import JSON, DateTime, String, event, text
+from sqlalchemy import JSON, BigInteger, DateTime, String, event, text
 from sqlalchemy import Connection as SAConnection
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -40,6 +40,13 @@ class Sync(OrganizationBase, UserMixin):
     sync_type: Mapped[str] = mapped_column(String(50), default="full")
     sync_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     sync_config: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    observed_change_sequence: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    writer_epoch: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    writer_job_id: Mapped[Optional[UUID]] = mapped_column(nullable=True)
+    writer_attempt_id: Mapped[Optional[UUID]] = mapped_column(nullable=True)
+    writer_attempt_number: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    index_pipeline_version: Mapped[int] = mapped_column(BigInteger, default=1, server_default="1")
 
     jobs: Mapped[list["SyncJob"]] = relationship(
         "SyncJob",

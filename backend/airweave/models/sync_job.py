@@ -50,7 +50,6 @@ class SyncJob(OrganizationBase, UserMixin):
         "Entity",
         back_populates="sync_job",
         lazy="noload",
-        cascade="all, delete-orphan",
         passive_deletes=True,
     )
 

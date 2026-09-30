@@ -1079,7 +1079,7 @@ def _create_usage_ledger(settings: Settings, billing_deps: dict) -> UsageLedgerP
 
 def _create_identity_provider(settings: Settings) -> IdentityProvider:
     """Create identity provider: Auth0 if enabled, otherwise null implementation."""
-    if settings.AUTH_ENABLED:
+    if settings.AUTH_MODE == "auth0":
         from airweave.adapters.identity.auth0 import auth0_management_client
 
         if auth0_management_client:

@@ -8,6 +8,7 @@ from .collection import Collection
 from .connection import Connection
 from .connection_init_session import ConnectionInitSession
 from .entity import Entity
+from .entity_change import EntityChange
 from .entity_count import EntityCount
 from .entity_definition import EntityDefinition
 from .entity_relation import EntityRelation
@@ -37,6 +38,7 @@ __all__ = [
     "BillingPeriod",
     "Collection",
     "Entity",
+    "EntityChange",
     "EntityCount",
     "Connection",
     "ConnectionInitSession",

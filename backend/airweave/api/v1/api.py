@@ -14,6 +14,7 @@ from airweave.api.v1.endpoints import (
     file_retrieval,
     health,
     organizations,
+    records,
     search,
     search_legacy,
     source_connections,
@@ -47,6 +48,7 @@ api_router.include_router(
     source_rate_limits.router, prefix="/source-rate-limits", tags=["source-rate-limits"]
 )
 api_router.include_router(sync.router, prefix="/sync", tags=["sync"])
+api_router.include_router(records.router, prefix="/sync", tags=["records"])
 api_router.include_router(entities.router, prefix="/entities", tags=["entities"])
 api_router.include_router(entity_counts.router, prefix="/entity-counts", tags=["entity-counts"])
 api_router.include_router(file_retrieval.router, prefix="/files", tags=["files"])
