@@ -12,7 +12,7 @@ from airweave.api.context import ApiContext
 from airweave.domains.entities.canonical.coverage import capture_coverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
-from airweave.domains.entities.canonical.projection_store import publication_matches
+from airweave.domains.entities.canonical.projection_store import publications_match
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.entities.canonical.search_metadata import (
     SEARCH_METADATA_PIPELINE_VERSION,
@@ -243,7 +243,7 @@ class OwnedSearchService:
                     Entity.organization_id == ctx.organization.id,
                     Sync.organization_id == ctx.organization.id,
                     Entity.sync_id.in_(sync_ids),
-                    or_(*(publication_matches(item) for item in locators)),
+                    publications_match(locators),
                 )
                 .execution_options(populate_existing=True)
             )
@@ -336,10 +336,6 @@ class OwnedSearchService:
         # SQL read boundary. No network I/O occurs after this authorization check.
         if not scores:
             return set()
-        identities = [
-            (locator.record_id, locator.revision, locator.pipeline_version, locator.generation)
-            for _, locator in scores.values()
-        ]
         # One statement snapshots all candidates, including current authentication.
         # The 20*200 bound keeps these tuple parameters below PostgreSQL's limit.
         return set(
@@ -364,16 +360,7 @@ class OwnedSearchService:
                         SourceConnection.short_name,
                         SourceConnection.readable_collection_id,
                     ).in_(list(scope_snapshot)),
-                    Entity.deleted_at.is_(None),
-                    content_is_available(),
-                    Entity.indexed_revision == Entity.record_revision,
-                    Entity.indexed_pipeline_version == Sync.index_pipeline_version,
-                    tuple_(
-                        Entity.id,
-                        Entity.record_revision,
-                        Entity.indexed_pipeline_version,
-                        Entity.indexed_generation,
-                    ).in_(identities),
+                    publications_match(locator for _, locator in scores.values()),
                 )
             )
         )

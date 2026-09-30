@@ -2,14 +2,16 @@
 
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
-from airweave.domains.entities.canonical.projection_store import publication_matches
+from airweave.domains.entities.canonical.projection_store import publications_match
 from airweave.domains.search.types.results import SearchResult
 from airweave.domains.sources.protocols import SourceRegistryProtocol
 from airweave.models.entity import Entity
+from airweave.models.projection_generation import ProjectionGeneration
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
 
@@ -58,13 +60,10 @@ async def visible_results(
     if not candidates:
         return [result for index, result in enumerate(results) if index in legacy]
     # Bound predicate size independently from a caller's requested search page.
-    eligible: set[tuple[UUID, UUID, int, int, UUID]] = set()
-    candidate_values = list(candidates.values())
+    eligible: dict[tuple[UUID, UUID, int, int, UUID], ExtractionCoverage | None] = {}
+    candidate_values = list(set(candidates.values()))
     for start in range(0, len(candidate_values), 100):
-        predicates = [
-            and_(Entity.sync_id == sync_id, publication_matches(locator))
-            for sync_id, locator in candidate_values[start : start + 100]
-        ]
+        batch = candidate_values[start : start + 100]
         rows = await db.execute(
             select(
                 Entity.sync_id,
@@ -72,28 +71,46 @@ async def visible_results(
                 Entity.record_revision,
                 Entity.indexed_pipeline_version,
                 Entity.indexed_generation,
+                ProjectionGeneration.extraction_coverage,
             )
             .join(Sync, Sync.id == Entity.sync_id)
+            .join(ProjectionGeneration, ProjectionGeneration.id == Entity.indexed_generation)
             .where(
                 Entity.organization_id == organization_id,
                 Sync.organization_id == organization_id,
-                or_(*predicates),
+                Entity.sync_id.in_({sync_id for sync_id, _ in batch}),
+                publications_match(locator for _, locator in batch),
             )
         )
-        eligible.update(tuple(row) for row in rows)
+        for row in rows:
+            eligible[tuple(row[:-1])] = (
+                ExtractionCoverage.model_validate(row[-1]) if row[-1] is not None else None
+            )
     return [
         result
         for index, result in enumerate(results)
-        if index in legacy
-        or (
-            index in candidates
-            and (
-                candidates[index][0],
-                candidates[index][1].record_id,
-                candidates[index][1].revision,
-                candidates[index][1].pipeline_version,
-                candidates[index][1].generation,
-            )
-            in eligible
-        )
+        if index in legacy or _eligible_part(candidates.get(index), eligible)
     ]
+
+
+def _eligible_part(
+    candidate: tuple[UUID, ProjectionLocator] | None,
+    eligible: dict[tuple[UUID, UUID, int, int, UUID], ExtractionCoverage | None],
+) -> bool:
+    if candidate is None:
+        return False
+    sync_id, locator = candidate
+    identity = (
+        sync_id,
+        locator.record_id,
+        locator.revision,
+        locator.pipeline_version,
+        locator.generation,
+    )
+    if identity not in eligible:
+        return False
+    coverage = eligible[identity]
+    return coverage is None or any(
+        part.part_index == locator.part_index and part.outcome == "indexed"
+        for part in coverage.parts
+    )

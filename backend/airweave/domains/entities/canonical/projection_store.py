@@ -1,9 +1,11 @@
 """Canonical pending work and atomic publication. No network I/O under row locks."""
 
+from collections import defaultdict
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import and_, exists, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
@@ -25,23 +27,49 @@ from airweave.models.sync import Sync
 
 def publication_matches(locator: ProjectionLocator):
     """Add request organization/source scope separately; gate before text leaves retrieval."""
+    return publications_match((locator,))
+
+
+def publications_match(locators: Iterable[ProjectionLocator]):
+    """Batch publication checks; callers must still validate each returned chunk's part.
+
+    One record can match one requested part while another part is unavailable.
+    Organization/source scope is supplied by the caller.
+    """
+    identities = set()
+    parts: dict[int, set[UUID]] = defaultdict(set)
+    for locator in locators:
+        identities.add(
+            (locator.record_id, locator.revision, locator.pipeline_version, locator.generation)
+        )
+        parts[locator.part_index].add(locator.generation)
     return and_(
-        Entity.id == locator.record_id,
-        Entity.record_revision == locator.revision,
-        Entity.indexed_revision == locator.revision,
-        Entity.indexed_pipeline_version == locator.pipeline_version,
-        Sync.index_pipeline_version == locator.pipeline_version,
-        Entity.indexed_generation == locator.generation,
+        tuple_(
+            Entity.id,
+            Entity.record_revision,
+            Entity.indexed_pipeline_version,
+            Entity.indexed_generation,
+        ).in_(list(identities)),
+        Entity.indexed_revision == Entity.record_revision,
+        Entity.indexed_pipeline_version == Sync.index_pipeline_version,
         Entity.deleted_at.is_(None),
         content_is_available(),
         exists(
-            select(ProjectionGeneration.id).where(
-                ProjectionGeneration.id == locator.generation,
+            select(ProjectionGeneration.id)
+            .correlate(Entity)
+            .where(
+                ProjectionGeneration.id == Entity.indexed_generation,
                 ProjectionGeneration.retired_at.is_(None),
                 or_(
                     ProjectionGeneration.extraction_coverage.is_(None),
-                    ProjectionGeneration.extraction_coverage.contains(
-                        {"parts": [{"part_index": locator.part_index, "outcome": "indexed"}]}
+                    *(
+                        and_(
+                            ProjectionGeneration.id.in_(list(generations)),
+                            ProjectionGeneration.extraction_coverage.contains(
+                                {"parts": [{"part_index": part, "outcome": "indexed"}]}
+                            ),
+                        )
+                        for part, generations in parts.items()
                     ),
                 ),
             )

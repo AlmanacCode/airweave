@@ -554,3 +554,53 @@ async def test_partial_extraction_http_hit_original_and_nonindexed_part_gate(
         await db.commit()
     response = await client.get(f"/sync/{fence.sync_id}/records/{locator.record_id}")
     assert response.json()["extraction"] is None
+
+
+async def test_visibility_batches_exact_parts_generations_and_duplicate_chunks(database, indexed):
+    from airweave.domains.search.canonical_visibility import visible_results
+    from airweave.models.projection_generation import ProjectionGeneration
+
+    fence, locator, connection = indexed
+    registry = SimpleNamespace(
+        get=lambda _: SimpleNamespace(
+            source_class_ref=SimpleNamespace(canonical_record_types=("event",))
+        )
+    )
+    async with database() as db:
+        await db.execute(
+            update(ProjectionGeneration)
+            .where(ProjectionGeneration.id == locator.generation)
+            .values(
+                extraction_coverage={
+                    "parts": [
+                        {"part_index": 0, "key": "body", "kind": "body", "outcome": "indexed"},
+                        {
+                            "part_index": 1,
+                            "key": "file",
+                            "kind": "file",
+                            "outcome": "unsupported",
+                            "reason": "unsupported_format",
+                        },
+                    ],
+                }
+            )
+        )
+        await db.commit()
+        valid = hit(fence, locator.encode())
+        inputs = [
+            valid,
+            hit(fence, locator.model_copy(update={"part_index": 1}).encode()),
+            hit(fence, locator.model_copy(update={"generation": uuid4()}).encode()),
+            hit(fence, locator.model_copy(update={"pipeline_version": 1}).encode()),
+            valid,
+            valid.model_copy(
+                update={
+                    "airweave_system_metadata": valid.airweave_system_metadata.model_copy(
+                        update={"sync_id": str(uuid4())}
+                    )
+                }
+            ),
+        ]
+        assert await visible_results(
+            db, fence.organization_id, connection.readable_collection_id, inputs, registry
+        ) == [valid, valid]
