@@ -5,12 +5,14 @@ on:
     branches: [dev, main]
     paths:
       - backend/**
+      - vespa/app/**
       - Makefile
       - .github/workflows/owned-source-store.yml
   push:
     branches: [dev]
     paths:
       - backend/**
+      - vespa/app/**
       - Makefile
       - .github/workflows/owned-source-store.yml
 
@@ -26,6 +28,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
+      vespa:
+        image: vespaengine/vespa:8
+        ports:
+          - 8081:8081
+          - 19071:19071
+        options: >-
+          --hostname vespa
+          --health-cmd "curl -f http://localhost:19071/state/v1/health"
+          --health-interval 10s --health-timeout 5s --health-retries 30
       postgres:
         image: postgres:16.15
         env:
@@ -58,3 +69,11 @@ jobs:
         run: make test-capture
       - name: Verify indexed retrieval and visibility
         run: make test-search
+      - name: Record tested Vespa image
+        run: docker image inspect vespaengine/vespa:8 --format '{{json .RepoDigests}}'
+      - name: Verify real Vespa schema and retrieval
+        working-directory: backend
+        env:
+          OWNED_VESPA_TEST: '1'
+          EMBEDDING_DIMENSIONS: '384'
+        run: .venv/bin/pytest -q -o log_cli=false tests/integration/test_owned_vespa.py
