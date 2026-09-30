@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
 import httpx
-from tenacity import retry, stop_after_attempt
+from tenacity import retry, retry_if_exception, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
@@ -335,7 +335,7 @@ class GmailSource(BaseSource):
 
     @retry(
         stop=stop_after_attempt(5),
-        retry=_should_retry_gmail_request,
+        retry=retry_if_exception(_should_retry_gmail_request),
         wait=wait_rate_limit_with_backoff,
         reraise=True,
     )
@@ -368,7 +368,7 @@ class GmailSource(BaseSource):
 
     @retry(
         stop=stop_after_attempt(5),
-        retry=_should_retry_gmail_request,
+        retry=retry_if_exception(_should_retry_gmail_request),
         wait=wait_rate_limit_with_backoff,
         reraise=True,
     )

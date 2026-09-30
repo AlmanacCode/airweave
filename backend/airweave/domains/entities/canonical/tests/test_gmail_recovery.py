@@ -239,3 +239,75 @@ async def test_history_offset_resume_and_lost_final_ack_do_not_rehydrate_committ
         state = await source[0].read_cycle(db, pipeline._writer())
     assert state.promoted_checkpoint.checkpoint.value == {"history_id": "20"}
     assert state.phase == "complete"
+
+
+async def test_new_job_resumes_active_cycle_after_exhausted_server_error(
+    database, source, monkeypatch
+):
+    from tenacity import wait_none
+
+    from airweave.domains.sources.exceptions import SourceServerError
+    from airweave.domains.syncs.jobs.repository import SyncJobRepository
+
+    monkeypatch.setattr(
+        GmailSource,
+        "_get_capture_json",
+        GmailSource._get_capture_json.retry_with(wait=wait_none()),
+    )
+    native = NativeHTTP(
+        [
+            ("/profile", {"historyId": "100"}),
+            ("/messages", {"messages": [{"id": "a"}], "nextPageToken": "second"}),
+            ("/messages/a", message("a")),
+            ("/history", {"historyId": "110"}),
+            *[("/messages", (503, {"error": {"message": "synthetic transient"}}))] * 5,
+            ("/messages", {"messages": [{"id": "b"}]}),
+            ("/messages/b", message("b")),
+            ("/history", {"historyId": "120"}),
+        ]
+    )
+    service, fence = source
+    pipeline, ctx, runtime, client = await setup(database, source, native)
+    async with client:
+        with pytest.raises(SourceServerError):
+            await run(pipeline, ctx, runtime)
+    async with database() as db:
+        incomplete = await service.read_cycle(db, pipeline._writer())
+        assert incomplete.phase == "active"
+        assert incomplete.promoted_checkpoint is None
+        # Model the production orchestrator's terminal failure, then the next
+        # eligible scheduled job. This is not a Temporal workflow execution.
+        old = await db.get(SyncJob, fence.job_id)
+        old.status = "failed"
+        await db.commit()
+        assert not await SyncJobRepository().get_active_for_sync(db, fence.sync_id, ctx)
+        job_id = uuid4()
+        db.add(
+            SyncJob(
+                id=job_id,
+                sync_id=fence.sync_id,
+                organization_id=fence.organization_id,
+                status="running",
+            )
+        )
+        await db.commit()
+        next_fence = await service.activate_writer(
+            db,
+            fence.organization_id,
+            fence.sync_id,
+            job_id,
+            attempt_id=uuid4(),
+            attempt_number=1,
+        )
+    pipeline, ctx, runtime, client = await setup(database, (service, next_fence), native)
+    async with client:
+        await run(pipeline, ctx, runtime)
+    assert not native.responses
+    assert sum(url.endswith("/messages/a") for url, _ in native.calls) == 1
+    assert all(params["pageToken"] == "second" for url, params in native.calls[4:10])
+    async with database() as db:
+        completed = await service.read_cycle(db, pipeline._writer())
+        assert completed.version.cycle_id == incomplete.version.cycle_id
+        assert completed.phase == "complete"
+        assert completed.promoted_checkpoint.checkpoint.value == {"history_id": "120"}
+        assert {row.native_id for row in (await db.scalars(select(Entity))).all()} == {"a", "b"}
