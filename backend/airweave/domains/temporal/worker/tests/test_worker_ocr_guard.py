@@ -14,7 +14,10 @@ from airweave.domains.temporal import worker
 
 
 @pytest.mark.asyncio
-async def test_worker_composes_without_ocr_and_starts_supported_activities(monkeypatch, tmp_path):
+@pytest.mark.parametrize("health_status", [200, 503])
+async def test_worker_composes_without_ocr_and_starts_supported_activities(
+    monkeypatch, tmp_path, health_status
+):
     """Real DI composition; substitute Temporal lifecycle and inference health HTTP."""
     configured = settings.model_copy(
         update={
@@ -37,8 +40,8 @@ async def test_worker_composes_without_ocr_and_starts_supported_activities(monke
     def health_client(*args, **kwargs):
         return original_client(
             transport=httpx.MockTransport(
-                lambda request: httpx.Response(200)
-                if request.url.path == "/health"
+                lambda request: httpx.Response(health_status)
+                if request.url.path == "/.well-known/ready"
                 else httpx.Response(503)
             ),
             **kwargs,
@@ -59,6 +62,11 @@ async def test_worker_composes_without_ocr_and_starts_supported_activities(monke
     lifecycle = MagicMock(start=AsyncMock(), stop=AsyncMock())
     monkeypatch.setattr(worker, "TemporalWorker", lambda _: lifecycle)
     monkeypatch.setattr(worker.signal, "signal", lambda *_: None)
+    if health_status != 200:
+        with pytest.raises(embedding_config.EmbeddingConfigError, match="not reachable"):
+            await worker.main()
+        lifecycle.start.assert_not_awaited()
+        return
     await worker.main()
     assert container_mod.container.ocr_provider is None
     assert container_mod.container.converter_registry.for_extension(".txt") is not None

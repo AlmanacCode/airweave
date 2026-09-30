@@ -12,6 +12,7 @@ from airweave.domains.entities.canonical.projection_models import (
     ProjectionDocument,
 )
 from airweave.domains.entities.canonical.store import content_is_available
+from airweave.domains.entities.canonical.text_models import TextArtifact
 from airweave.models.entity import Entity
 from airweave.models.projection_generation import ProjectionGeneration
 from airweave.models.sync import Sync
@@ -85,10 +86,20 @@ class ProjectionGCStore:
             row.next_gc_at = now + timedelta(minutes=5)
             row.gc_attempt = uuid4()
             await db.flush()
+            artifacts = tuple(
+                TextArtifact.model_validate(item) for item in (row.text_representations or [])
+            )
+            start, end = row.delete_cursor, row.delete_cursor + limit
+            artifact_start = max(0, start - len(row.documents))
+            artifact_end = max(0, end - len(row.documents))
             return ProjectionCleanupPage(
                 generation=generation,
                 attempt=row.gc_attempt,
                 cursor=row.delete_cursor,
+                artifact_keys=tuple(
+                    item.storage_key(row.sync_id, row.id)
+                    for item in artifacts[artifact_start:artifact_end]
+                ),
                 documents=tuple(
                     ProjectionDocument.model_validate(item)
                     for item in row.documents[row.delete_cursor : row.delete_cursor + limit]
@@ -126,8 +137,8 @@ class ProjectionGCStore:
                 row.next_gc_at = now + timedelta(minutes=5)
                 return
             row.gc_error = None
-            row.delete_cursor += len(page.documents)
-            if row.delete_cursor >= len(row.documents):
+            row.delete_cursor += len(page.documents) + len(page.artifact_keys)
+            if row.delete_cursor >= len(row.documents) + len(row.text_representations or []):
                 row.delete_cursor = 0
                 row.gc_passes += 1
                 row.last_gc_at = now

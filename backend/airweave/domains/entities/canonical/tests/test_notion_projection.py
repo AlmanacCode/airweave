@@ -306,7 +306,7 @@ async def test_unknown_notion_block_stays_pending_in_actual_projector(database, 
         fence.organization_id, fence.sync_id, "notion", destination, MagicMock()
     )
     assert result.failed == 1 and result.published == 0
-    processor.process.assert_not_called()
+    processor.build_text.assert_not_called()
     destination.feed_prepared.assert_not_called()
     async with database() as db:
         pending = await store.pending(db, fence.organization_id, fence.sync_id)

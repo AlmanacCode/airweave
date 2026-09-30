@@ -25,6 +25,7 @@ from airweave.domains.entities.canonical.query_models import (
     RecordPage,
 )
 from airweave.domains.entities.canonical.store import CanonicalStoreError
+from airweave.domains.entities.canonical.text_models import TextRead, TextRepresentationList
 from airweave.domains.search.owned_models import OwnedSearchRequest, OwnedSearchResponse
 
 router = TrailingSlashRouter()
@@ -50,6 +51,7 @@ async def record_error_response(request: Request, error: CanonicalStoreError) ->
         "stale_record_revision": 409,
         "blob_unavailable": 503,
         "document_unavailable": 409,
+        "text_unavailable": 409,
         "document_incomplete": 409,
         "calendar_changed_restart": 409,
         "calendar_read_incomplete": 409,
@@ -171,4 +173,69 @@ async def record_blob(
             "Content-Disposition": "attachment",
             "ETag": '"' + sha256 + '"',
         },
+    )
+
+
+@router.get(
+    "/{sync_id}/records/{record_id}/text-representations", response_model=TextRepresentationList
+)
+async def list_text_representations(
+    sync_id: UUID,
+    record_id: UUID,
+    response: Response,
+    revision: int = Query(ge=1),
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+    container: Container = Depends(deps.get_container),
+) -> TextRepresentationList:
+    """Describe derived text only from the current authorized index publication."""
+    from airweave.domains.entities.canonical.text_query import CanonicalTextReader
+
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return await CanonicalTextReader(service, container.storage_backend).list(
+        db,
+        ctx.organization.id,
+        sync_id,
+        record_id,
+        revision,
+    )
+
+
+@router.get(
+    "/{sync_id}/records/{record_id}/text-representations/{representation_id}",
+    response_model=TextRead,
+)
+async def read_text_representation(
+    sync_id: UUID,
+    record_id: UUID,
+    response: Response,
+    representation_id: UUID,
+    generation: UUID,
+    revision: int = Query(ge=1),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(12000, ge=1, le=100000),
+    view: Literal["content", "index"] = "content",
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+    container: Container = Depends(deps.get_container),
+) -> TextRead:
+    """Read complete retained converter text in bounded character ranges."""
+    from airweave.domains.entities.canonical.text_query import CanonicalTextReader
+
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return await CanonicalTextReader(service, container.storage_backend).read(
+        db,
+        ctx.organization.id,
+        sync_id,
+        record_id,
+        revision,
+        generation,
+        representation_id,
+        offset=offset,
+        limit=limit,
+        view=view,
     )

@@ -9,6 +9,7 @@ from airweave.core.shared_models import AirweaveFieldFlag
 from airweave.domains.converters.protocols import ConverterRegistryProtocol
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, SyncFailureError
 from airweave.domains.sync_pipeline.file_types import SUPPORTED_FILE_EXTENSIONS
+from airweave.domains.sync_pipeline.pipeline.text_models import BuiltText, BuiltTextBatch
 from airweave.platform.entities._base import BaseEntity, CodeFileEntity, FileEntity, WebEntity
 
 if TYPE_CHECKING:
@@ -62,6 +63,16 @@ class TextualRepresentationBuilder:
             Modifies entities in-place, setting textual_representation.
             Failed entities are removed and counted as skipped.
         """
+        return (await self.build_with_text(entities, sync_context, runtime)).entities
+
+    async def build_with_text(
+        self,
+        entities: List[BaseEntity],
+        sync_context: "ProcessingContext",
+        runtime: "ProcessingRuntime",
+    ) -> BuiltTextBatch:
+        """Retain exact converted text and content boundaries before chunking clears them."""
+        content_starts: dict[str, int] = {}
         source_name = sync_context.source_short_name
 
         # Step 1: Build metadata section for all entities
@@ -71,13 +82,25 @@ class TextualRepresentationBuilder:
         converter_groups, failed_entities = self._partition_by_converter(entities, sync_context)
 
         # Step 3: Convert each partition
-        additional_failures = await self._convert_partitions(converter_groups, sync_context)
+        additional_failures = await self._convert_partitions(
+            converter_groups, sync_context, content_starts
+        )
         failed_entities.extend(additional_failures)
 
         # Step 4: Handle failures
         await self._handle_conversion_failures(entities, failed_entities, sync_context, runtime)
 
-        return entities
+        return BuiltTextBatch(
+            entities=entities,
+            representations=tuple(
+                BuiltText(
+                    entity_id=entity.entity_id,
+                    text=entity.textual_representation or "",
+                    content_start=content_starts.get(entity.entity_id),
+                )
+                for entity in entities
+            ),
+        )
 
     # ------------------------------------------------------------------------------------
     # Metadata Building
@@ -316,12 +339,14 @@ class TextualRepresentationBuilder:
         self,
         converter_groups: Dict[Any, List[Tuple[BaseEntity, str]]],
         sync_context: "ProcessingContext",
+        content_starts: dict[str, int],
     ) -> List[BaseEntity]:
         """Execute batch conversion for each converter group.
 
         Args:
             converter_groups: Dict mapping converter to (entity, key) tuples
             sync_context: Sync context for logging
+            content_starts: Per-entity converter-content offsets to populate
 
         Returns:
             List of entities that failed conversion
@@ -333,7 +358,9 @@ class TextualRepresentationBuilder:
 
             for i in range(0, len(entity_key_pairs), batch_size):
                 sub_batch = entity_key_pairs[i : i + batch_size]
-                failures = await self._convert_sub_batch(converter, sub_batch, sync_context)
+                failures = await self._convert_sub_batch(
+                    converter, sub_batch, sync_context, content_starts
+                )
                 failed_entities.extend(failures)
 
         return failed_entities
@@ -343,6 +370,7 @@ class TextualRepresentationBuilder:
         converter: Any,
         sub_batch: List[Tuple[BaseEntity, str]],
         sync_context: "ProcessingContext",
+        content_starts: dict[str, int],
     ) -> List[BaseEntity]:
         """Convert a sub-batch of entities using the given converter.
 
@@ -350,6 +378,7 @@ class TextualRepresentationBuilder:
             converter: Converter module to use
             sub_batch: List of (entity, key) tuples
             sync_context: Sync context for logging
+            content_starts: Per-entity converter-content offsets to populate
 
         Returns:
             List of entities that failed conversion
@@ -374,7 +403,9 @@ class TextualRepresentationBuilder:
                     failed_entities.append(entity)
                     continue
 
-                entity.textual_representation += f"\n\n# Content\n\n{text_content}"
+                prefix = f"{entity.textual_representation}\n\n# Content\n\n"
+                content_starts[entity.entity_id] = len(prefix)
+                entity.textual_representation = prefix + text_content
 
         except SyncFailureError:
             # Infrastructure failure - propagate to fail entire sync

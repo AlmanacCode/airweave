@@ -78,6 +78,7 @@ class ProjectionCleanupPage(BaseModel):
     attempt: UUID
     cursor: int
     documents: tuple[ProjectionDocument, ...]
+    artifact_keys: tuple[str, ...] = ()
 
 
 def scope_projection_document_id(sync_id: UUID, collection_id: UUID, document_id: str) -> str:

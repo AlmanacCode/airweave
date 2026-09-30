@@ -128,7 +128,7 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
     work = (await pending(database, fence))[0]
     processor = MagicMock()
 
-    async def process(entities, context, runtime, *, strict):
+    async def process(entities, context, runtime, *, strict, expected_ids):
         assert strict and context.source_short_name == "slack"
         assert entities[0].name == "general"
         assert entities[0].airweave_system_metadata.sync_id == fence.sync_id
@@ -139,7 +139,18 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
         chunk.entity_id += "__chunk_0"
         return [chunk]
 
-    processor.process = process
+    from airweave.domains.sync_pipeline.pipeline.text_models import BuiltText, BuiltTextBatch
+
+    async def build_text(entities, context, runtime):
+        return BuiltTextBatch(
+            entities=entities,
+            representations=tuple(
+                BuiltText(entity_id=e.entity_id, text="Synthetic complete text") for e in entities
+            ),
+        )
+
+    processor.build_text = build_text
+    processor.process_built_text = process
     destination = MagicMock()
     destination.collection_id = uuid4()
     destination.prepare_documents = lambda chunks: {
@@ -166,7 +177,7 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
             assert document.fields["airweave_system_metadata_sync_id"] == str(fence.sync_id)
 
     destination.feed_prepared = AsyncMock(side_effect=feed_prepared)
-    storage = MagicMock()
+    storage = MagicMock(write_file=AsyncMock())
     projector = CanonicalProjector(CanonicalProjectionStore(), database, processor, storage)
     assert await projector.project_one(work, "slack", destination, MagicMock())
     destination.feed_prepared.assert_awaited_once()

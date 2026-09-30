@@ -280,6 +280,7 @@ async def database(request):
             await connection.run_sync(migrate, "0008_scope_execution.py")
             await connection.run_sync(migrate, "0009_extraction_coverage.py")
             await connection.run_sync(migrate, "0010_owned_provisioning.py")
+            await connection.run_sync(migrate, "0011_retained_projection_text.py")
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()

@@ -23,6 +23,7 @@ from airweave.domains.entities.canonical.projection_models import (
 )
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.search_metadata import stamp_search_metadata
+from airweave.domains.entities.canonical.text_artifacts import prepare_text
 from airweave.domains.storage.protocols import StorageBackend
 from airweave.domains.sync_pipeline.file_types import SUPPORTED_FILE_EXTENSIONS
 from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
@@ -103,11 +104,16 @@ class CanonicalProjector:
                 if not mapped.parts:
                     raise ValueError("Projection mapper returned no required content")
                 selected, coverage = _select_inputs(mapped, work, source_name, generation)
-                chunks = await self._processor.process(
-                    selected,
-                    ProjectionContext(logger, source_name),
-                    ProjectionRuntime(StrictProjectionTracker()),
+                context = ProjectionContext(logger, source_name)
+                runtime = ProjectionRuntime(StrictProjectionTracker())
+                built = await self._processor.build_text(selected, context, runtime)
+                artifacts = prepare_text(built.representations, generation)
+                chunks = await self._processor.process_built_text(
+                    built.entities,
+                    context,
+                    runtime,
                     strict=True,
+                    expected_ids={entity.entity_id for entity in selected},
                 )
                 _stamp_chunks(chunks, work.record)
                 prepared = destination.prepare_documents(chunks)
@@ -123,14 +129,30 @@ class CanonicalProjector:
                 )
                 async with self._sessions() as db:
                     if not await self._store.prepare(
-                        db, work, generation, destination.collection_id, manifest, coverage=coverage
+                        db,
+                        work,
+                        generation,
+                        destination.collection_id,
+                        manifest,
+                        coverage=coverage,
+                        text_representations=tuple(item for item, _ in artifacts),
                     ):
                         return False
+                for artifact, content in artifacts:
+                    await self._storage.write_file(
+                        artifact.storage_key(work.record.sync_id, generation), content
+                    )
                 await destination.feed_prepared(prepared)
         if no_documents:
             async with self._sessions() as db:
                 if not await self._store.prepare(
-                    db, work, generation, destination.collection_id, (), coverage=coverage
+                    db,
+                    work,
+                    generation,
+                    destination.collection_id,
+                    (),
+                    coverage=coverage,
+                    text_representations=(),
                 ):
                     return False
         async with self._sessions() as db:

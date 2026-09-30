@@ -24,6 +24,9 @@ class ProjectionGeneration(Base):
     extraction_coverage: Mapped[dict | None] = mapped_column(
         JSONB(none_as_null=True), nullable=True
     )
+    text_representations: Mapped[list | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_gc_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_gc_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

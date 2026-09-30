@@ -61,7 +61,7 @@ def create_activities() -> list:
     logger.debug("Wiring activities with container dependencies")
 
     return [
-        CleanupProjectionGenerationsActivity().run,
+        CleanupProjectionGenerationsActivity(container.storage_backend).run,
         ProjectCanonicalRecordsActivity(
             projector=CanonicalProjector(
                 CanonicalProjectionStore(),

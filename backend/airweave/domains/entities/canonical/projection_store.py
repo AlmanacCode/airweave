@@ -16,6 +16,8 @@ from airweave.domains.entities.canonical.projection_models import (
     projection_document_locator,
 )
 from airweave.domains.entities.canonical.store import content_is_available, source_record
+from airweave.domains.entities.canonical.text_artifacts import text_manifest
+from airweave.domains.entities.canonical.text_models import TextArtifact
 from airweave.models.entity import Entity
 from airweave.models.projection_generation import ProjectionGeneration
 from airweave.models.sync import Sync
@@ -136,6 +138,7 @@ class CanonicalProjectionStore:
         documents: tuple[ProjectionDocument, ...],
         *,
         coverage: ExtractionCoverage | None = None,
+        text_representations: tuple[TextArtifact, ...] | None = None,
     ) -> bool:
         """Commit exact immutable deletion identities before the first remote feed."""
         identities = set()
@@ -161,6 +164,9 @@ class CanonicalProjectionStore:
             p.part_index for p in coverage.parts if p.outcome == "indexed"
         }:
             raise ValueError("Projection documents must cover exactly the indexed parts")
+        text_descriptors = text_manifest(
+            text_representations, indexed_parts, work.record.sync_id, generation
+        )
         extraction = coverage.persisted() if coverage is not None else None
         manifest = [document.model_dump() for document in documents]
         async with UnitOfWork(db):
@@ -171,6 +177,7 @@ class CanonicalProjectionStore:
                 if (
                     prior.documents != manifest
                     or prior.extraction_coverage != extraction
+                    or prior.text_representations != text_descriptors
                     or prior.record_id != work.record.id
                     or prior.revision != work.record.revision
                     or prior.pipeline_version != work.pipeline_version
@@ -190,6 +197,7 @@ class CanonicalProjectionStore:
                     pipeline_version=work.pipeline_version,
                     documents=manifest,
                     extraction_coverage=extraction,
+                    text_representations=text_descriptors,
                     next_gc_at=datetime.now(timezone.utc) + timedelta(hours=1),
                 )
             )

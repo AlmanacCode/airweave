@@ -19,6 +19,7 @@ from airweave.domains.embedders.exceptions import EmbedderProviderError
 from airweave.domains.embedders.protocols import DenseEmbedderProtocol, SparseEmbedderProtocol
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, SyncFailureError
 from airweave.domains.sync_pipeline.pipeline.text_builder import TextualRepresentationBuilder
+from airweave.domains.sync_pipeline.pipeline.text_models import BuiltTextBatch
 from airweave.domains.sync_pipeline.processors.utils import filter_empty_representations
 from airweave.platform.entities._base import BaseEntity, CodeFileEntity
 
@@ -62,6 +63,33 @@ class ChunkEmbedProcessor:
         # Step 1: Build textual representations
         processed = await self._text_builder.build_for_batch(entities, sync_context, runtime)
 
+        return await self.process_built_text(
+            processed, sync_context, runtime, strict=strict, expected_ids=expected_ids
+        )
+
+    async def build_text(
+        self,
+        entities: List[BaseEntity],
+        sync_context: "ProcessingContext",
+        runtime: "ProcessingRuntime",
+    ) -> BuiltTextBatch:
+        """Convert once, exposing the complete pre-chunk representation for retention."""
+        return await self._text_builder.build_with_text(entities, sync_context, runtime)
+
+    async def process_built_text(
+        self,
+        processed: List[BaseEntity],
+        sync_context: "ProcessingContext",
+        runtime: "ProcessingRuntime",
+        *,
+        strict: bool = False,
+        expected_ids: set[str] | None = None,
+    ) -> List[BaseEntity]:
+        """Chunk already-built text without rerunning converters."""
+        if expected_ids is None:
+            expected_ids = {entity.entity_id for entity in processed}
+        if strict and len(expected_ids) != len(processed):
+            raise EntityProcessingError("Projection conversion dropped required content")
         # Step 2: Filter empty representations
         processed = await filter_empty_representations(
             processed, sync_context, runtime, "ChunkEmbed"
@@ -93,7 +121,7 @@ class ChunkEmbedProcessor:
             raise EntityProcessingError("Projection embedding dropped required chunks")
 
         sync_context.logger.debug(
-            f"[ChunkEmbedProcessor] {len(entities)} entities -> {len(chunk_entities)} chunks"
+            f"[ChunkEmbedProcessor] {len(processed)} entities -> {len(chunk_entities)} chunks"
         )
 
         return chunk_entities

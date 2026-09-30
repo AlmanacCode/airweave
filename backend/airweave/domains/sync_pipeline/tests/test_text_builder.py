@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
 
 import pytest
 
@@ -57,7 +56,7 @@ class TestConvertSubBatch:
         entity = _make_entity()
 
         with pytest.raises(SyncFailureError, match="infra down"):
-            await builder._convert_sub_batch(converter, [(entity, "/path")], ctx)
+            await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {})
 
     @pytest.mark.asyncio
     async def test_entity_processing_error_skips_sub_batch(self):
@@ -67,7 +66,7 @@ class TestConvertSubBatch:
         ctx = FakeSyncContext()
         entity = _make_entity()
 
-        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx)
+        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {})
 
         assert failures == [entity]
         ctx.logger.warning.assert_called()
@@ -80,7 +79,7 @@ class TestConvertSubBatch:
         ctx = FakeSyncContext()
         entity = _make_entity()
 
-        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx)
+        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {})
 
         assert failures == [entity]
         ctx.logger.error.assert_called()
@@ -93,7 +92,7 @@ class TestConvertSubBatch:
         ctx = FakeSyncContext()
         entity = _make_entity()
 
-        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx)
+        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {})
 
         assert failures == []
         assert "Hello world content" in entity.textual_representation
@@ -106,7 +105,7 @@ class TestConvertSubBatch:
         ctx = FakeSyncContext()
         entity = _make_entity()
 
-        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx)
+        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {})
 
         assert failures == [entity]
 
@@ -154,8 +153,8 @@ class TestGetConverterAndKey:
             builder._get_converter_and_key(entity)
 
     def test_file_entity_no_converter_for_extension_raises(self):
-        from airweave.platform.entities._base import FileEntity
         from airweave.domains.sync_pipeline.file_types import SUPPORTED_FILE_EXTENSIONS
+        from airweave.platform.entities._base import FileEntity
 
         supported_ext = next(iter(SUPPORTED_FILE_EXTENSIONS))
         registry = MagicMock()
