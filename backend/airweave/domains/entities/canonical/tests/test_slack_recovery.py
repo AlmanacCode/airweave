@@ -131,11 +131,14 @@ async def test_expired_reply_cursor_restarts_whole_scope_and_never_partial_recon
     assert next(scan for scan in scans if scan.record_type == "message").sweep_id != old_sweep
 
 
-async def test_repeated_invalid_cursor_fails_without_checkpoint_or_absence(database, source):
+@pytest.mark.parametrize("error_code", ["invalid_cursor", "thread_not_found"])
+async def test_repeated_invalid_cursor_fails_without_checkpoint_or_absence(
+    database, source, error_code
+):
     first, _, _ = runner(
         database,
         source,
-        [ROOT, HISTORY, SlackApiError("invalid_cursor"), HISTORY, SlackApiError("invalid_cursor")],
+        [ROOT, HISTORY, SlackApiError(error_code), HISTORY, SlackApiError(error_code)],
     )
     from airweave.domains.entities.canonical.page_source import InvalidScanContinuation
 
@@ -502,3 +505,31 @@ async def test_old_provider_route_failure_cannot_withdraw_changed_same_fence_par
     assert current.visibility_epoch == (2 if change == "revive" else 1)
     assert "canonical_checkpoint" not in cursor
     assert next(scan for scan in scans if scan.record_type == "message").phase == "collecting"
+
+
+async def test_missing_queued_thread_restarts_inventory_before_absence(database, source):
+    instance, connector, _ = runner(
+        database,
+        source,
+        [
+            ROOT,
+            HISTORY,
+            SlackApiError("thread_not_found"),
+            {"messages": [{"ts": "2", "text": "Current message"}]},
+        ],
+    )
+    await run(instance)
+    assert [call.args[0].split("/")[-1] for call in connector._get.call_args_list] == [
+        "conversations.list",
+        "conversations.history",
+        "conversations.replies",
+        "conversations.history",
+    ]
+    assert "cursor" not in connector._get.call_args_list[-1].args[1]
+    rows, cursor, scans = await saved(database)
+    old = next(row for row in rows if row.native_id == "1")
+    assert old.deleted_at is not None and old.removal_reason == "absent"
+    assert next(row for row in rows if row.native_id == "2").deleted_at is None
+    assert next(row for row in rows if row.native_id == "C1").deleted_at is None
+    assert cursor["canonical_cycle"]["phase"] == "complete"
+    assert all(scan.phase == "complete" for scan in scans)

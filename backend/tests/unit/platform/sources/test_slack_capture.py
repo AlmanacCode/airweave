@@ -131,3 +131,46 @@ async def test_proxy_rate_limit_stops_after_five_attempts():
     assert connector.http_client.get.await_count == 5
     assert waits.await_count == 4
     assert all(float(call.args[0]) == 240 for call in waits.call_args_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code, expected",
+    [
+        ("thread_not_found", "restart"),
+        ("channel_not_found", "access"),
+        ("not_in_channel", "access"),
+        ("missing_scope", "error"),
+        ("internal_error", "error"),
+    ],
+)
+async def test_queued_thread_failure_preserves_error_meaning(code, expected):
+    from airweave.domains.entities.canonical.page_source import (
+        InvalidScanContinuation,
+        ScopeAccessLost,
+    )
+
+    connector = source()
+    connector._get = AsyncMock(side_effect=SlackApiError(code))
+    error = {"restart": InvalidScanContinuation, "access": ScopeAccessLost, "error": SlackApiError}[
+        expected
+    ]
+    with pytest.raises(error):
+        await connector.capture_page(
+            CompletedScope(record_type="message", container_id="C1"),
+            ScanContinuation(value={"pending_threads": ["1"]}),
+            files=MagicMock(),
+        )
+    assert connector._get.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_thread_not_found_outside_reply_fetch_does_not_invalidate_inventory():
+    connector = source()
+    connector._get = AsyncMock(side_effect=SlackApiError("thread_not_found"))
+    with pytest.raises(SlackApiError):
+        await connector.capture_page(
+            CompletedScope(record_type="message", container_id="C1"),
+            ScanContinuation(),
+            files=MagicMock(),
+        )

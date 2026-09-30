@@ -334,6 +334,10 @@ class SlackSource(BaseSource):
         except SlackApiError as exc:
             if exc.code == "invalid_cursor":
                 raise InvalidScanContinuation("Slack page cursor expired") from exc
+            if operation == "conversations.replies" and exc.code == "thread_not_found":
+                # History queued a thread that no longer exists. Restart inventory;
+                # missing replies alone cannot authorize deletion or scope completion.
+                raise InvalidScanContinuation("Slack queued thread is no longer available") from exc
             raise
         items = TypeAdapter(list[dict[str, JsonValue]]).validate_python(payload.get(item_key))
         metadata = SlackPageMetadata.model_validate(payload.get("response_metadata") or {})
