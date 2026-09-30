@@ -117,7 +117,8 @@ async def test_missing_calendar_removes_only_previous_calendar_children():
     results = [item async for item in generate_calendar_observations(get, state)]
     removed = [item for item in results if type(item) is RemovedScope]
     assert [(item.record_type, item.container_id, item.removal_reason) for item in removed] == [
-        ("event", "removed", "scope_removed")
+        ("event_occurrence", "removed", "scope_removed"),
+        ("event", "removed", "scope_removed"),
     ]
     assert state.data["calendar_tokens"] == {"kept": "new"}
 
@@ -141,3 +142,105 @@ def test_only_recurring_cancellations_are_retained_and_reinstatement_keeps_ident
         record(
             "event", {"id": "bad", "status": "cancelled", "recurringEventId": "series"}, "calendar"
         )
+
+
+async def test_expanded_window_is_fixed_paged_and_separate_from_master_scope():
+    from airweave.platform.configs.config import CalendarOccurrenceWindow
+
+    window = CalendarOccurrenceWindow(start="2026-03-01T00:00:00Z", end="2026-04-01T00:00:00Z")
+    get = ScriptedGet(
+        [
+            {"items": [{"id": "cal", "timeZone": "America/Los_Angeles"}]},
+            {
+                "items": [{"id": "master", "recurrence": ["RRULE:FREQ=WEEKLY"]}],
+                "nextSyncToken": "master-token",
+            },
+            {
+                "items": [
+                    {
+                        "id": "real-instance",
+                        "recurringEventId": "master",
+                        "originalStartTime": {"date": "2026-03-01"},
+                    }
+                ],
+                "nextPageToken": "p2",
+            },
+            {"items": [{"id": "cancelled-instance", "status": "cancelled"}]},
+        ]
+    )
+    state = cursor()
+    observations = [item async for item in generate_calendar_observations(get, state, window)]
+    occurrences = [
+        item
+        for item in observations
+        if isinstance(item, CaptureRecord) and item.identity.record_type == "event_occurrence"
+    ]
+    assert [item.identity.native_id for item in occurrences] == [
+        "real-instance",
+        "cancelled-instance",
+    ]
+    assert occurrences[1].kind == "delete"
+    assert get.calls[2][1]["timeMin"] == get.calls[3][1]["timeMin"]
+    assert "syncToken" not in get.calls[2][1] and get.calls[2][1]["singleEvents"] == "true"
+    assert state.data["occurrence_coverage"]["cal"]["timezone"] == "America/Los_Angeles"
+    assert any(
+        type(item) is CompletedScope and item.record_type == "event_occurrence"
+        for item in observations
+    )
+
+
+async def test_failed_expanded_refresh_keeps_prior_coverage_and_does_not_reconcile():
+    from airweave.platform.configs.config import CalendarOccurrenceWindow
+
+    window = CalendarOccurrenceWindow(start="2026-03-01T00:00:00Z", end="2026-04-01T00:00:00Z")
+    state = cursor({"cal": "old"})
+    before = state.data
+    get = ScriptedGet(
+        [
+            {"items": [{"id": "cal", "timeZone": "UTC"}]},
+            {"items": [], "nextSyncToken": "new"},
+            {"items": [{"id": "one"}], "nextPageToken": "p2"},
+            SourceServerError("temporary", status_code=503),
+        ]
+    )
+    observations = []
+    with pytest.raises(SourceServerError):
+        async for item in generate_calendar_observations(get, state, window):
+            observations.append(item)
+    assert state.data == before
+    assert not any(
+        type(item) is CompletedScope and item.record_type == "event_occurrence"
+        for item in observations
+    )
+
+
+def test_explicit_historical_window_and_rolling_defaults_are_bounded():
+    from datetime import timedelta
+
+    from airweave.platform.configs.config import GoogleCalendarConfig
+
+    default = GoogleCalendarConfig().resolved_window()
+    assert default.end - default.start == timedelta(days=120)
+    chosen = GoogleCalendarConfig(
+        occurrence_window={"start": "2001-01-01T00:00:00Z", "end": "2001-02-01T00:00:00Z"}
+    )
+    assert chosen.resolved_window().start.year == 2001
+    with pytest.raises(ValueError):
+        GoogleCalendarConfig(
+            occurrence_window={"start": "2001-01-01T00:00:00Z", "end": "2003-02-01T00:00:00Z"}
+        )
+
+
+async def test_expanded_repeated_pages_never_claim_completion():
+    from airweave.platform.configs.config import CalendarOccurrenceWindow
+    from airweave.platform.sources.records.google_calendar import capture_occurrences
+
+    window = CalendarOccurrenceWindow(start="2026-01-01T00:00:00Z", end="2026-02-01T00:00:00Z")
+    get = ScriptedGet(
+        [{"items": [], "nextPageToken": "repeat"}, {"items": [], "nextPageToken": "repeat"}]
+    )
+    observed = []
+    with pytest.raises(ValueError, match="repeated"):
+        async for item in capture_occurrences(get, "cal", window):
+            observed.append(item)
+    assert not any(type(item) is CompletedScope for item in observed)

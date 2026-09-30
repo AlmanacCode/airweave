@@ -9,6 +9,7 @@ from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from airweave.domains.entities.canonical.checkpoint import CanonicalCheckpoint
 from airweave.domains.entities.canonical.models import (
     CaptureResult,
     ChangePage,
@@ -493,7 +494,7 @@ class CanonicalRecordStore:
         self, db: AsyncSession, fence: WriterFence, cursor_data: dict
     ) -> None:
         """Call only after capture barrier and successful exact-scope reconciliation."""
-        await self._fenced_sync(db, fence)
+        sync = await self._fenced_sync(db, fence)
         cursor = await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == fence.sync_id))
         if cursor is None:
             cursor = SyncCursor(
@@ -501,7 +502,14 @@ class CanonicalRecordStore:
                 sync_id=fence.sync_id,
             )
             db.add(cursor)
-        cursor.cursor_data = cursor_data
+        # Source-supplied or previously loaded values cannot overwrite this reserved stamp.
+        cursor.cursor_data = {
+            **cursor_data,
+            "canonical_checkpoint": CanonicalCheckpoint(
+                writer_attempt_id=fence.attempt_id,
+                observed_change_sequence=sync.observed_change_sequence,
+            ).model_dump(mode="json"),
+        }
         cursor.last_updated = datetime.now(timezone.utc)
         await db.flush()
 

@@ -12,6 +12,7 @@ from airweave.api.context import ApiContext
 from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
 from airweave.db.session import get_db
+from airweave.domains.entities.canonical.calendar_query import CalendarRangeNotCaptured
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.query_models import (
@@ -22,7 +23,6 @@ from airweave.domains.entities.canonical.query_models import (
     RecordPage,
 )
 from airweave.domains.entities.canonical.store import CanonicalStoreError
-
 from airweave.domains.search.owned_models import OwnedSearchRequest, OwnedSearchResponse
 
 router = TrailingSlashRouter()
@@ -47,11 +47,13 @@ async def record_error_response(request: Request, error: CanonicalStoreError) ->
         "blob_not_found": 404,
         "stale_record_revision": 409,
         "blob_unavailable": 503,
+        "calendar_changed_restart": 409,
+        "calendar_range_not_captured": 409,
     }.get(error.code, 400)
-    return JSONResponse(
-        status_code=status,
-        content={"error": {"code": error.code, "message": str(error), "retryable": status == 503}},
-    )
+    detail = {"code": error.code, "message": str(error), "retryable": status == 503}
+    if isinstance(error, CalendarRangeNotCaptured):
+        detail["action"] = error.action
+    return JSONResponse(status_code=status, content={"error": detail})
 
 
 @router.get("/{sync_id}/records", response_model=RecordPage)

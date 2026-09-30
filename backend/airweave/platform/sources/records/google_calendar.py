@@ -1,8 +1,10 @@
 """Original Calendar resources with per-calendar incremental synchronization."""
 
+import json
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import datetime, timezone
 from urllib.parse import quote
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
@@ -20,7 +22,8 @@ from airweave.domains.sources.exceptions import (
     SourceGoneError,
 )
 from airweave.domains.syncs.cursors.cursor import SyncCursor
-from airweave.platform.cursors.google_calendar import GoogleCalendarCursor
+from airweave.platform.configs.config import CalendarOccurrenceWindow
+from airweave.platform.cursors.google_calendar import CalendarWindowCoverage, GoogleCalendarCursor
 
 GetJSON = Callable[..., Awaitable[dict]]
 BASE = "https://www.googleapis.com/calendar/v3"
@@ -113,11 +116,12 @@ async def capture_calendar(
 
 
 async def generate_calendar_observations(
-    get: GetJSON, cursor: SyncCursor | None
+    get: GetJSON, cursor: SyncCursor | None, window: CalendarOccurrenceWindow | None = None
 ) -> AsyncGenerator[SourceObservation, None]:
     """Refresh calendar membership; capture each accessible calendar independently."""
     previous = GoogleCalendarCursor.model_validate(cursor.data if cursor else {})
     tokens: dict[str, str] = {}
+    coverage: dict[str, CalendarWindowCoverage] = {}
     seen_calendars: set[str] = set()
     seen_pages: set[str] = set()
     params: dict[str, str | int] = {"maxResults": 250, "showHidden": "true"}
@@ -133,25 +137,10 @@ async def generate_calendar_observations(
                 raise ValueError("Calendar list repeated an identity across pages")
             seen_calendars.add(calendar_id)
             yield calendar_record
-            try:
-                async for observation in capture_calendar(
-                    get, calendar_id, previous.calendar_tokens.get(calendar_id), tokens
-                ):
-                    yield observation
-            except SourceEntityNotFoundError:
-                yield CaptureRecord(
-                    identity=RecordIdentity(record_type="calendar", native_id=calendar_id),
-                    payload={"id": calendar_id},
-                    kind="delete",
-                    removal_reason="access_revoked",
-                    observed_at=datetime.now(timezone.utc),
-                )
-                yield RemovedScope(
-                    record_type="event",
-                    container_id=calendar_id,
-                    removal_reason="access_revoked",
-                    observed_at=datetime.now(timezone.utc),
-                )
+            async for observation in _capture_member(
+                get, calendar_record, item, previous, window, tokens, coverage
+            ):
+                yield observation
         if not page.nextPageToken:
             break
         if page.nextPageToken in seen_pages:
@@ -167,6 +156,12 @@ async def generate_calendar_observations(
             observed_at=datetime.now(timezone.utc),
         )
         yield RemovedScope(
+            record_type="event_occurrence",
+            container_id=missing,
+            removal_reason="scope_removed",
+            observed_at=datetime.now(timezone.utc),
+        )
+        yield RemovedScope(
             record_type="event",
             container_id=missing,
             removal_reason="scope_removed",
@@ -175,3 +170,95 @@ async def generate_calendar_observations(
     yield CompletedScope(record_type="calendar")
     if cursor is not None:
         cursor.update(calendar_tokens=tokens)
+        if window is not None:
+            cursor.update(occurrence_coverage=coverage)
+
+
+async def capture_occurrences(
+    get: GetJSON, calendar_id: str, window: CalendarOccurrenceWindow
+) -> AsyncGenerator[SourceObservation, None]:
+    """Only a fully exhausted fixed horizon may reconcile this distinct scope."""
+    yield StartedScope(record_type="event_occurrence", container_id=calendar_id)
+    params = {
+        "singleEvents": "true",
+        "showDeleted": "true",
+        "maxResults": 2500,
+        "timeMin": window.start.isoformat(),
+        "timeMax": window.end.isoformat(),
+    }
+    pages: set[str] = set()
+    identities: set[str] = set()
+    byte_count = 0
+    while True:
+        page = CalendarPage.model_validate(
+            await get(f"{BASE}/calendars/{quote(calendar_id, safe='')}/events", params=params)
+        )
+        for item in page.items:
+            byte_count += len(json.dumps(item).encode())
+            observed = record("event_occurrence", item, calendar_id)
+            if observed.identity.native_id in identities:
+                raise ValueError("Expanded Calendar listing repeated an occurrence identity")
+            identities.add(observed.identity.native_id)
+            if len(identities) > 10000 or byte_count > 20 * 1024 * 1024:
+                raise ValueError("Expanded Calendar capture exceeds bounded horizon budget")
+            yield observed
+        if not page.nextPageToken:
+            yield CompletedScope(record_type="event_occurrence", container_id=calendar_id)
+            return
+        if page.nextPageToken in pages:
+            raise ValueError("Expanded Calendar listing repeated a page token")
+        pages.add(page.nextPageToken)
+        if len(pages) >= 100:
+            raise ValueError("Expanded Calendar capture exceeds page budget")
+        params["pageToken"] = page.nextPageToken
+
+
+async def _capture_member(
+    get: GetJSON,
+    calendar_record: CaptureRecord,
+    item: dict[str, JsonValue],
+    previous: GoogleCalendarCursor,
+    window: CalendarOccurrenceWindow | None,
+    tokens: dict[str, str],
+    coverage: dict[str, CalendarWindowCoverage],
+) -> AsyncGenerator[SourceObservation, None]:
+    """Capture one member or record explicit access loss without claiming its window."""
+    calendar_id = calendar_record.identity.native_id
+    try:
+        async for observation in capture_calendar(
+            get, calendar_id, previous.calendar_tokens.get(calendar_id), tokens
+        ):
+            yield observation
+        if window is not None:
+            async for observation in capture_occurrences(get, calendar_id, window):
+                yield observation
+            calendar_timezone = item.get("timeZone")
+            if not isinstance(calendar_timezone, str) or not calendar_timezone:
+                raise ValueError("Calendar has no timezone for occurrence coverage")
+            coverage[calendar_id] = CalendarWindowCoverage(
+                start=window.start,
+                end=window.end,
+                timezone=calendar_timezone,
+                completed_at=datetime.now(timezone.utc),
+                scan_id=uuid4(),
+            )
+    except SourceEntityNotFoundError:
+        yield CaptureRecord(
+            identity=RecordIdentity(record_type="calendar", native_id=calendar_id),
+            payload={"id": calendar_id},
+            kind="delete",
+            removal_reason="access_revoked",
+            observed_at=datetime.now(timezone.utc),
+        )
+        yield RemovedScope(
+            record_type="event_occurrence",
+            container_id=calendar_id,
+            removal_reason="access_revoked",
+            observed_at=datetime.now(timezone.utc),
+        )
+        yield RemovedScope(
+            record_type="event",
+            container_id=calendar_id,
+            removal_reason="access_revoked",
+            observed_at=datetime.now(timezone.utc),
+        )

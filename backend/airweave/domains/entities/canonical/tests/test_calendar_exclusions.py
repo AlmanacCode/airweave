@@ -145,3 +145,43 @@ async def test_live_event_cannot_publish_empty_or_exclusion_nonempty(database, s
         )
         with pytest.raises(ValueError, match="nonempty"):
             await store.publish(db, active, uuid4(), 0)
+
+
+async def test_operational_occurrences_publish_zero_documents_without_retry(database, source):
+    capture, fence = source
+    parent = record("calendar", {"id": "cal"})
+    occurrence = record(
+        "event_occurrence",
+        {
+            "id": "real-instance",
+            "status": "confirmed",
+            "start": {"date": "2026-10-01"},
+            "end": {"date": "2026-10-02"},
+        },
+        "cal",
+    ).model_copy(update={"parent": parent.identity})
+    async with database() as db:
+        result = await capture.capture(db, CaptureBatch(fence=fence, records=(parent, occurrence)))
+    row = result.changes[-1].record
+    projections = CanonicalProjectionStore()
+    async with database() as db:
+        work = next(
+            w
+            for w in await projections.pending(db, fence.organization_id, fence.sync_id)
+            if w.record.id == row.id
+        )
+    processor = MagicMock()
+    processor.process = AsyncMock()
+    destination = MagicMock()
+    destination.collection_id = uuid4()
+    destination.feed_prepared = AsyncMock()
+    projector = CanonicalProjector(projections, database, processor, AsyncMock())
+    assert await projector.project_one(work, "google_calendar", destination, MagicMock())
+    processor.process.assert_not_awaited()
+    destination.feed_prepared.assert_not_awaited()
+    async with database() as db:
+        assert all(
+            w.record.id != row.id
+            for w in await projections.pending(db, fence.organization_id, fence.sync_id)
+        )
+        assert (await db.get(Entity, row.id)).indexed_chunk_count == 0

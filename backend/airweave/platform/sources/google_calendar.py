@@ -96,8 +96,8 @@ class GoogleCalendarSource(BaseSource):
     Google Calendar scheduling information for productivity and time management insights.
     """
 
-    canonical_record_types = ("calendar", "event")
-    canonical_container_parents = {"event": "calendar"}
+    canonical_record_types = ("calendar", "event", "event_occurrence")
+    canonical_container_parents = {"event": "calendar", "event_occurrence": "calendar"}
 
     async def generate_observations(
         self,
@@ -106,10 +106,12 @@ class GoogleCalendarSource(BaseSource):
         files: FileService | None = None,
         node_selections: list[NodeSelectionData] | None = None,
     ) -> AsyncGenerator[SourceObservation, None]:
-        """Capture original masters, exceptions and cancellations; no recurrence expansion."""
+        """Capture originals and bounded provider-expanded instances with real IDs."""
         if node_selections:
             raise ValueError("Calendar selection scopes are not supported by canonical capture")
-        async for observation in generate_calendar_observations(self._get, cursor):
+        async for observation in generate_calendar_observations(
+            self._get, cursor, self.calendar_config.resolved_window()
+        ):
             yield observation
 
     # -----------------------
@@ -127,6 +129,7 @@ class GoogleCalendarSource(BaseSource):
         """Create a new Google Calendar source instance."""
         instance = cls(auth=auth, logger=logger, http_client=http_client)
 
+        instance.calendar_config = config
         config_dict = config.model_dump() if config else {}
         instance.batch_generation = bool(config_dict.get("batch_generation", False))
         instance.batch_size = int(config_dict.get("batch_size", 30))

@@ -201,8 +201,9 @@ def excluded_from_search(record: SourceRecord, source_name: str) -> bool:
     """Retained calendar exclusions intentionally publish no searchable meeting."""
     return (
         source_name == "google_calendar"
-        and record.identity.record_type == "event"
-        and is_cancelled_recurring_event(record.payload)
+        and (record.identity.record_type == "event_occurrence" or (
+            record.identity.record_type == "event" and is_cancelled_recurring_event(record.payload)
+        ))
     )
 
 

@@ -183,7 +183,8 @@ class CanonicalProjectionStore:
         exclusion = work.record.identity.record_type == "event" and is_cancelled_recurring_event(
             work.record.payload
         )
-        no_content = work.record.deleted_at is not None or exclusion
+        no_content = (work.record.deleted_at is not None or exclusion
+                      or work.record.identity.record_type == "event_occurrence")
         if chunk_count < 0 or (not no_content and chunk_count == 0):
             raise ValueError("Active records require a nonempty complete projection")
         if no_content and chunk_count != 0:

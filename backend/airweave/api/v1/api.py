@@ -7,6 +7,7 @@ from airweave.api.v1.endpoints import (
     auth_providers,
     billing,
     browse_tree,
+    calendar_records,
     collections,
     connect,
     entities,
@@ -61,3 +62,6 @@ api_router.include_router(
 )
 api_router.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 api_router.include_router(connect.router, prefix="/connect", tags=["connect"])
+
+
+api_router.include_router(calendar_records.router, prefix="/sync", tags=["records"])

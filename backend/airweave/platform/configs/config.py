@@ -1,9 +1,9 @@
 """Configuration classes for platform components."""
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
-from pydantic import Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from airweave.platform.configs._base import BaseConfig, RequiredTemplateConfig
 from airweave.platform.utils.ssrf import validate_host, validate_url
@@ -307,10 +307,36 @@ class GmailConfig(SourceConfig):
         return value.replace("-", "/")
 
 
-class GoogleCalendarConfig(SourceConfig):
-    """Google Calendar configuration schema."""
+class CalendarOccurrenceWindow(BaseConfig):
+    """Explicit operator-requested capture window; dates must carry timezones."""
 
-    pass
+    start: AwareDatetime
+    end: AwareDatetime
+
+    @model_validator(mode="after")
+    def bounded(self):
+        """Keep one explicit capture request bounded and nonempty."""
+        if self.start.microsecond or self.end.microsecond:
+            raise ValueError("Calendar capture bounds require whole-second precision")
+        if not timedelta(0) < self.end - self.start <= timedelta(days=366):
+            raise ValueError("Calendar capture window must be positive and at most366days")
+        return self
+
+
+class GoogleCalendarConfig(SourceConfig):
+    """Rolling expanded capture, or an explicit window through source configuration."""
+
+    occurrence_past_days: int = Field(default=30, ge=0, le=180)
+    occurrence_future_days: int = Field(default=90, ge=1, le=186)
+    occurrence_window: CalendarOccurrenceWindow | None = None
+
+    def resolved_window(self) -> CalendarOccurrenceWindow:
+        """Freeze relative bounds once for the whole paginated source run."""
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        return self.occurrence_window or CalendarOccurrenceWindow(
+            start=now - timedelta(days=self.occurrence_past_days),
+            end=now + timedelta(days=self.occurrence_future_days),
+        )
 
 
 class GoogleDocsConfig(SourceConfig):
