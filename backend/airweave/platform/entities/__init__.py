@@ -29,12 +29,7 @@ from .asana import (
     AsanaTaskEntity,
     AsanaWorkspaceEntity,
 )
-from .attio import (
-    AttioListEntity,
-    AttioNoteEntity,
-    AttioObjectEntity,
-    AttioRecordEntity,
-)
+from .attio import AttioOriginalEntity
 from .bitbucket import (
     BitbucketCodeFileEntity,
     BitbucketDirectoryEntity,
@@ -388,12 +383,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
         AsanaTaskEntity,
         AsanaWorkspaceEntity,
     ],
-    "attio": [
-        AttioListEntity,
-        AttioNoteEntity,
-        AttioObjectEntity,
-        AttioRecordEntity,
-    ],
+    "attio": [AttioOriginalEntity],
     "bitbucket": [
         BitbucketCodeFileEntity,
         BitbucketDirectoryEntity,

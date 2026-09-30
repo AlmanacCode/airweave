@@ -244,6 +244,10 @@ async def map_record(
             from airweave.domains.entities.canonical.linear_projection import map_linear
 
             entities = await map_linear(record, storage, directory)
+        elif source_name == "attio":
+            from airweave.domains.entities.canonical.attio_projection import map_attio
+
+            entities = map_attio(record)
         elif source_name == "notion":
             from airweave.domains.entities.canonical.notion_projection import map_notion
 

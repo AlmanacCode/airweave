@@ -332,3 +332,28 @@ async def test_drive_binding_allows_native_docs_only_with_same_verified_toolkit(
     assert result.managed_auth.connected_account_id == "ca_drive"
     assert result.managed_auth.allowed_hosts == {"www.googleapis.com", "docs.googleapis.com"}
     assert "sheets.googleapis.com" not in result.managed_auth.allowed_hosts
+
+
+@pytest.mark.asyncio
+async def test_attio_binding_uses_only_native_api_host_and_verified_account(monkeypatch):
+    from airweave.domains.auth_provider.exceptions import AuthProviderConfigError
+    from airweave.domains.auth_provider.providers.composio import ComposioAuthProvider
+
+    provider = await ComposioAuthProvider.create(
+        credentials={"api_key": "key"}, config={"account_id": "ca_attio"}
+    )
+    fetch = AsyncMock(
+        return_value={
+            "id": "ca_attio",
+            "toolkit": {"slug": "attio"},
+            "status": "ACTIVE",
+        }
+    )
+    monkeypatch.setattr(provider, "_get_with_auth", fetch)
+    result = await provider.get_auth_result("attio", ["access_token"])
+    assert result.credentials is None
+    assert result.managed_auth.connected_account_id == "ca_attio"
+    assert result.managed_auth.allowed_hosts == {"api.attio.com"}
+    fetch.return_value = {"id": "ca_other", "toolkit": {"slug": "attio"}, "status": "ACTIVE"}
+    with pytest.raises(AuthProviderConfigError, match="identity"):
+        await provider.get_auth_result("attio", ["access_token"])
