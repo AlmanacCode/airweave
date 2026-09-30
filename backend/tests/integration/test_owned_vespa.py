@@ -163,8 +163,8 @@ async def test_real_minilm_paraphrase_retrieval_and_exact_keyword():
         try:
             for _attempt in range(60):
                 try:
-                    health = await http.get("http://localhost:8080/health", timeout=5)
-                    if health.status_code == 200:
+                    health = await http.get("http://localhost:8080/.well-known/ready", timeout=5)
+                    if health.status_code == 204:
                         break
                 except httpx.HTTPError:
                     pass

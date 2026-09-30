@@ -115,7 +115,7 @@ spec:
           value: '0'
         readinessProbe:
           httpGet:
-            path: /health
+            path: /.well-known/ready
             port: 8080
           initialDelaySeconds: 15
           periodSeconds: 10

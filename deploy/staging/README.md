@@ -91,7 +91,7 @@ for verifying the CNI enforces it.
    scoped service-key organization separately per `backend/SERVICE_AUTH.md`.
    API/worker entrypoints do not migrate or seed. Do not put schema credentials in
    `porter.yaml` runtime configuration. Existing maintenance schedule ownership stays.
-7. Verify Redis persistence, inference `/health`, Vespa feed/query, Temporal worker
+7. Verify Redis persistence, inference `/.well-known/ready` (HTTP 204), Vespa feed/query, Temporal worker
    polling, source-store API authorization, scoped capture and restore. Probe and
    resource tuning remains necessary for Svix/Vespa; these templates don't claim it.
 
@@ -130,3 +130,13 @@ Parent review corrected the Vespa reference from an invalid digest-as-tag form
 to repository@digest. Six static workload image references were independently
 checked for syntax and exact agreement with the lockfile amd64 digests. This is
 still not image pull, startup or Kubernetes admission proof.
+
+### Readiness correction from actual-model CI
+
+Run36725698424 reached the real inference container but its old `/health` probe
+returned404, so model retrieval assertions did not run. Startup validation,
+Compose, staging readiness and the integration probe now use
+`/.well-known/ready`, matching the [upstream inference API](https://docs.weaviate.io/weaviate/modules/custom-modules).
+The integration test requires204 and still verifies actual384-dimensional vectors
+and retrieval afterward. This fixes the contract; a successful rerun is required
+before claiming the pinned deployment works.
