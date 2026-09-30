@@ -13,9 +13,9 @@ from airweave.schemas.health import DependencyCheck, ReadinessResponse
 class HealthProbe(Protocol):
     """Protocol for a single infrastructure health check.
 
-    Implementations return a ``DependencyCheck`` on success and **raise**
-    on failure.  The orchestrator handles timeouts and error sanitization,
-    so probes can stay simple.
+    Implementations return a ``DependencyCheck`` with the observed status or
+    raise when a check fails. The orchestrator handles timeouts and error
+    sanitization, so probes can stay simple.
 
     The critical-vs-informational distinction is a deployment concern and
     lives in the wiring layer, not in the probe itself.
@@ -30,7 +30,7 @@ class HealthProbe(Protocol):
         """Probe the dependency and return its status.
 
         Returns:
-            A ``DependencyCheck`` with ``status=up`` and measured latency.
+            A ``DependencyCheck`` with the observed status and measured latency.
 
         Raises:
             Any exception on failure — the orchestrator will catch it.

@@ -71,6 +71,10 @@ async def lifespan(app: FastAPI):
         await container_mod.container.temporal_schedule_service.ensure_system_schedules()
         logger.info("System Temporal schedules initialized successfully")
     except Exception as e:
+        if "temporal" in settings.health_critical_probes:
+            # The cached health probe cannot initialize a missing connection.
+            # Let the process supervisor retry startup for a required service.
+            raise
         logger.warning(
             f"Failed to initialize system schedules (Temporal may not be available): {e}"
         )

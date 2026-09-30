@@ -38,6 +38,11 @@ and Temporal reporting up. Missing/skipped critical probes do not pass. Verify
 index, worker polling and capture readiness separately; API dependency health
 does not prove those workflows work.
 
+When Temporal is critical, failure to initialize its system schedules aborts API
+startup so the existing process supervisor can retry. Optional Temporal setups
+retain their permissive startup behavior. This avoids an API stuck unready with
+no initialized Temporal client after a transient startup outage.
+
 Create the Porter environment group `almanac-source-store-staging` with only the
 owned service's values. Supply database connection settings, Redis endpoint,
 Temporal endpoint/namespace, Vespa endpoint, TEXT2VEC_INFERENCE_URL,
