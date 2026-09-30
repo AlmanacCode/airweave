@@ -6,7 +6,7 @@ Handles conversion from dot notation to Vespa underscore format.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, List, Optional, Union
 
 from airweave.core.logging import ContextualLogger
@@ -170,7 +170,7 @@ class FilterTranslator:
         """Escape special characters for YQL string literals."""
         return value.replace("\\", "\\\\").replace("'", "\\'")
 
-    def _parse_datetime_to_epoch(self, value: str, field: str) -> int:
+    def _parse_datetime_to_epoch(self, value: str, field: str) -> int | float:
         """Parse ISO datetime string to epoch seconds."""
         try:
             # Strip surrounding quotes — LLMs sometimes wrap datetime strings
@@ -178,7 +178,12 @@ class FilterTranslator:
             if value.endswith("Z"):
                 value = value[:-1] + "+00:00"
             dt = datetime.fromisoformat(value)
-            return int(dt.timestamp())
+            # Existing filters accept zone-less ISO values; interpret them as UTC,
+            # never as the deployment host timezone. New product inputs are aware.
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            seconds = dt.timestamp()
+            return int(seconds) if seconds.is_integer() else seconds
         except (ValueError, AttributeError) as e:
             raise FilterTranslationError(
                 f"Failed to parse datetime '{value}' for field '{field}': {e}"

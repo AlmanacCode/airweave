@@ -6,6 +6,7 @@ and is unsuitable for an existing application or customer index.
 
 import json
 import os
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import httpx
@@ -18,6 +19,7 @@ from airweave.domains.entities.canonical.tests.vespa_helpers import deploy_schem
 from airweave.domains.search.adapters.vector_db.filter_translator import FilterTranslator
 from airweave.domains.search.adapters.vector_db.vespa_client import VespaVectorDB
 from airweave.domains.search.types.embeddings import QueryEmbeddings
+from airweave.domains.search.types.filters import FilterCondition, FilterGroup
 from airweave.domains.search.types.plan import RetrievalStrategy, SearchPlan, SearchQuery
 
 pytestmark = pytest.mark.skipif(
@@ -41,6 +43,7 @@ async def test_real_schema_retrieval_collection_isolation_and_delete():
                 urls.append(url)
                 fields = {
                     "entity_id": identity,
+                    "created_at": int(datetime(2026, 9, 30, tzinfo=timezone.utc).timestamp()),
                     "name": "Synthetic fundraising discussion",
                     "textual_representation": "fundraising discussion fixture",
                     "payload": json.dumps({"web_url": "https://example.com/fixture"}),
@@ -81,6 +84,34 @@ async def test_real_schema_retrieval_collection_isolation_and_delete():
                 assert not result.engine_partial
                 assert [hit.entity_id for hit in result.results] == [expected_id]
                 assert result.results[0].textual_representation == "fundraising discussion fixture"
+            for operator, expected_ids in (
+                ("greater_than_or_equal", []),
+                ("less_than", [expected_id]),
+            ):
+                filtered = await engine.compile_query(
+                    SearchPlan(
+                        query=SearchQuery(primary="fundraising"),
+                        retrieval_strategy=RetrievalStrategy.KEYWORD,
+                        filter_groups=[
+                            FilterGroup(
+                                conditions=[
+                                    FilterCondition(
+                                        field="created_at",
+                                        operator=operator,
+                                        value="2026-09-30T00:00:00.500Z",
+                                    )
+                                ]
+                            )
+                        ],
+                        limit=20,
+                        offset=0,
+                    ),
+                    embeddings,
+                    collection,
+                )
+                result = await engine.execute_query(filtered)
+                assert not result.engine_partial
+                assert [hit.entity_id for hit in result.results] == expected_ids
             deleted = await http.delete(urls[0])
             assert deleted.status_code == 200
             result = await engine.execute_query(compiled)

@@ -3,7 +3,7 @@
 Pure transformation logic with no I/O dependencies.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from airweave.core.logging import ContextualLogger
@@ -33,8 +33,8 @@ FIELD_NAME_MAP = {
     "access.viewers": "access_viewers",
 }
 
-# Fields stored as epoch milliseconds in Vespa
-EPOCH_MS_FIELDS = {"created_at", "updated_at"}
+# Fields stored as epoch seconds in Vespa
+EPOCH_SECONDS_FIELDS = {"created_at", "updated_at"}
 
 
 class FilterTranslator:
@@ -201,9 +201,9 @@ class FilterTranslator:
         for op, symbol in [("gt", ">"), ("gte", ">="), ("lt", "<"), ("lte", "<=")]:
             if op in range_cond:
                 value = range_cond[op]
-                # Convert ISO datetime strings to epoch milliseconds for date fields
-                if key in EPOCH_MS_FIELDS and isinstance(value, str):
-                    value = self._parse_datetime_to_epoch_ms(value)
+                # Convert ISO datetime strings to epoch seconds for date fields
+                if key in EPOCH_SECONDS_FIELDS and isinstance(value, str):
+                    value = self._parse_datetime_to_epoch_seconds(value)
                 parts.append(f"{key} {symbol} {value}")
 
         return " AND ".join(parts) if parts else ""
@@ -234,13 +234,18 @@ class FilterTranslator:
         """Escape special characters for YQL string literals."""
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
-    def _parse_datetime_to_epoch_ms(self, value: str) -> int:
-        """Parse ISO datetime string to epoch milliseconds."""
+    def _parse_datetime_to_epoch_seconds(self, value: str) -> int | float | str:
+        """Parse ISO datetime string to epoch seconds."""
         try:
             if value.endswith("Z"):
                 value = value[:-1] + "+00:00"
             dt = datetime.fromisoformat(value)
-            return int(dt.timestamp() * 1000)
+            # Existing filters accept zone-less ISO values; interpret them as UTC,
+            # never as the deployment host timezone. New product inputs are aware.
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            seconds = dt.timestamp()
+            return int(seconds) if seconds.is_integer() else seconds
         except (ValueError, AttributeError) as e:
             self._logger.warning(f"[FilterTranslator] Failed to parse datetime '{value}': {e}")
             return value
