@@ -244,3 +244,74 @@ async def test_expanded_repeated_pages_never_claim_completion():
         async for item in capture_occurrences(get, "cal", window):
             observed.append(item)
     assert not any(type(item) is CompletedScope for item in observed)
+
+
+async def test_selection_withdraws_old_scope_and_readd_bootstraps():
+    state = cursor({"old": "old-token", "keep": "keep-token"})
+    get = ScriptedGet(
+        [{"items": [{"id": "old"}, {"id": "keep"}]}, {"items": [], "nextSyncToken": "next"}]
+    )
+    result = [
+        item async for item in generate_calendar_observations(get, state, calendar_ids=("keep",))
+    ]
+    assert len(get.calls) == 2 and "/keep/events" in get.calls[1][0]
+    assert get.calls[1][1]["syncToken"] == "keep-token"
+    assert state.data["calendar_tokens"] == {"keep": "next"}
+    assert {item.record_type for item in result if isinstance(item, RemovedScope)} == {
+        "event",
+        "event_occurrence",
+    }
+    assert all(
+        item.removal_reason == "scope_removed" for item in result if isinstance(item, RemovedScope)
+    )
+    readd = ScriptedGet([{"items": [{"id": "old"}]}, {"items": [], "nextSyncToken": "fresh"}])
+    _ = [item async for item in generate_calendar_observations(readd, state, calendar_ids=("old",))]
+    assert "syncToken" not in readd.calls[1][1]
+
+
+async def test_empty_selection_makes_no_provider_requests_and_completes_membership():
+    state = cursor({"old": "token"})
+    get = ScriptedGet([])
+    result = [item async for item in generate_calendar_observations(get, state, calendar_ids=())]
+    assert get.calls == [] and state.data["calendar_tokens"] == {}
+    assert any(type(item) is CompletedScope and item.record_type == "calendar" for item in result)
+
+
+async def test_missing_requested_calendar_revokes_known_scope_without_completion():
+    state = cursor({"missing": "token"})
+    result = []
+    with pytest.raises(ValueError, match="not accessible"):
+        async for item in generate_calendar_observations(
+            ScriptedGet([{"items": []}]), state, calendar_ids=("missing",)
+        ):
+            result.append(item)
+    assert state.data["calendar_tokens"] == {"missing": "token"}
+    assert any(
+        isinstance(item, RemovedScope) and item.removal_reason == "access_revoked"
+        for item in result
+    )
+    assert not any(type(item) is CompletedScope for item in result)
+
+
+def test_calendar_selection_config_distinguishes_none_empty_and_invalid():
+    from airweave.platform.configs.config import GoogleCalendarConfig
+
+    assert GoogleCalendarConfig().calendar_ids is None
+    assert GoogleCalendarConfig(calendar_ids=[]).calendar_ids == ()
+    for value in (["primary"], ["a", "a"], [""], [" a"]):
+        with pytest.raises(ValueError):
+            GoogleCalendarConfig(calendar_ids=value)
+
+
+async def test_selected_calendar_loses_access_between_membership_and_events():
+    from airweave.domains.sources.exceptions import SourceEntityNotFoundError
+
+    state = cursor({"selected": "old"})
+    get = ScriptedGet([{"items": [{"id": "selected"}]}, SourceEntityNotFoundError("gone")])
+    result = [
+        item
+        async for item in generate_calendar_observations(get, state, calendar_ids=("selected",))
+    ]
+    revoked = [item for item in result if isinstance(item, RemovedScope)]
+    assert len(revoked) == 2 and all(item.removal_reason == "access_revoked" for item in revoked)
+    assert state.data["calendar_tokens"] == {}

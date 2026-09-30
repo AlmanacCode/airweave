@@ -254,3 +254,84 @@ async def test_budget_rejects_oversized_row_before_orm_materialization(database,
                 db, fence.organization_id, fence.sync_id, "cal"
             )
         assert not any(isinstance(item, Entity) for item in db.identity_map.values())
+
+
+async def test_empty_selection_reconciles_partial_parent_without_saved_cursor(database, source):
+    from airweave.domains.entities.canonical.requests import (
+        CompletedScope,
+        ReconcileScope,
+        StartedScope,
+    )
+    from airweave.platform.sources.records.google_calendar import generate_calendar_observations
+
+    capture, fence = source
+    parent = record("calendar", {"id": "partial", "timeZone": "UTC"})
+    child = record("event", {"id": "old", "status": "confirmed"}, "partial").model_copy(
+        update={"parent": parent.identity}
+    )
+    async with database() as db:
+        result = await capture.capture(db, CaptureBatch(fence=fence, records=(parent, child)))
+    child_id = result.changes[-1].record.id
+
+    async def never_get(*args, **kwargs):
+        raise AssertionError("Empty selection must not fetch provider")
+
+    # Same-attempt retry is intentionally harder: StartedScope must clear old sightings.
+    async for item in generate_calendar_observations(never_get, None, calendar_ids=()):
+        if isinstance(item, StartedScope):
+            async with database() as db:
+                await capture.start_scope(db, fence, item)
+        elif type(item) is CompletedScope:
+            async with database() as db:
+                await capture.reconcile_scope(
+                    db,
+                    ReconcileScope(fence=fence, scope=item, observed_at=datetime.now(timezone.utc)),
+                )
+    async with database() as db:
+        current = await capture.store.read(db, fence.organization_id, fence.sync_id, child_id)
+        assert current.content_access == "unavailable" and current.payload == {}
+        await db.rollback()
+        removed = await capture.reconcile_parents(db, fence)
+        assert removed.capture.changes[0].record.removal_reason != "provider_deleted"
+
+
+async def test_missing_selected_calendar_revokes_partial_parent_without_cursor(database, source):
+    from airweave.domains.entities.canonical.requests import (
+        CaptureRecord,
+        RemovedScope,
+        StartedScope,
+    )
+    from airweave.platform.sources.records.google_calendar import generate_calendar_observations
+
+    capture, fence = source
+    parent = record("calendar", {"id": "missing", "timeZone": "UTC"})
+    child = record("event", {"id": "retained", "status": "confirmed"}, "missing").model_copy(
+        update={"parent": parent.identity}
+    )
+    async with database() as db:
+        initial = await capture.capture(db, CaptureBatch(fence=fence, records=(parent, child)))
+    child_id = initial.changes[-1].record.id
+
+    async def empty_membership(*args, **kwargs):
+        return {"items": []}
+
+    with pytest.raises(ValueError, match="not accessible"):
+        async for item in generate_calendar_observations(
+            empty_membership, None, calendar_ids=("missing",)
+        ):
+            async with database() as db:
+                if isinstance(item, CaptureRecord):
+                    await capture.capture(db, CaptureBatch(fence=fence, records=(item,)))
+                elif isinstance(item, StartedScope):
+                    await capture.start_scope(db, fence, item)
+                elif isinstance(item, RemovedScope):
+                    await capture.remove_scope(db, fence, item)
+                else:
+                    raise AssertionError("Missing requested scope cannot complete")
+    async with database() as db:
+        current = await capture.store.read(db, fence.organization_id, fence.sync_id, child_id)
+        assert current.content_access == "unavailable" and current.payload == {}
+        assert current.removal_reason == "access_revoked"
+        assert (
+            await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == fence.sync_id)) is None
+        )

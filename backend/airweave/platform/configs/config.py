@@ -326,6 +326,19 @@ class CalendarOccurrenceWindow(BaseConfig):
 class GoogleCalendarConfig(SourceConfig):
     """Rolling expanded capture, or an explicit window through source configuration."""
 
+    calendar_ids: tuple[str, ...] | None = Field(default=None, max_length=250)
+
+    @field_validator("calendar_ids")
+    @classmethod
+    def unique_calendars(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """None selects all, empty selects none; only exact native IDs are accepted."""
+        if value is not None and (
+            len(set(value)) != len(value)
+            or any(not item.strip() or item != item.strip() or item == "primary" for item in value)
+        ):
+            raise ValueError("Use unique exact calendar IDs, not blank values or primary alias")
+        return value
+
     occurrence_past_days: int = Field(default=30, ge=0, le=180)
     occurrence_future_days: int = Field(default=90, ge=1, le=186)
     occurrence_window: CalendarOccurrenceWindow | None = None

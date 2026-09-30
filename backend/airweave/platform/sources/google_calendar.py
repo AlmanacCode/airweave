@@ -110,7 +110,10 @@ class GoogleCalendarSource(BaseSource):
         if node_selections:
             raise ValueError("Calendar selection scopes are not supported by canonical capture")
         async for observation in generate_calendar_observations(
-            self._get, cursor, self.calendar_config.resolved_window()
+            self._get,
+            cursor,
+            self.calendar_config.resolved_window(),
+            calendar_ids=self.calendar_config.calendar_ids,
         ):
             yield observation
 

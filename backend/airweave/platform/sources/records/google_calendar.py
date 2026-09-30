@@ -1,8 +1,10 @@
 """Original Calendar resources with per-calendar incremental synchronization."""
 
 import json
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
+from contextlib import aclosing
 from datetime import datetime, timezone
+from typing import Literal
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -116,57 +118,35 @@ async def capture_calendar(
 
 
 async def generate_calendar_observations(
-    get: GetJSON, cursor: SyncCursor | None, window: CalendarOccurrenceWindow | None = None
+    get: GetJSON,
+    cursor: SyncCursor | None,
+    window: CalendarOccurrenceWindow | None = None,
+    *,
+    calendar_ids: tuple[str, ...] | None = None,
 ) -> AsyncGenerator[SourceObservation, None]:
     """Refresh calendar membership; capture each accessible calendar independently."""
     previous = GoogleCalendarCursor.model_validate(cursor.data if cursor else {})
+    selection = set(calendar_ids) if calendar_ids is not None else None
+    withdrawn = previous.calendar_tokens.keys() - selection if selection is not None else set()
+    for calendar_id in withdrawn:
+        for observation in removed_calendar(calendar_id, "scope_removed"):
+            yield observation
     tokens: dict[str, str] = {}
     coverage: dict[str, CalendarWindowCoverage] = {}
     seen_calendars: set[str] = set()
-    seen_pages: set[str] = set()
-    params: dict[str, str | int] = {"maxResults": 250, "showHidden": "true"}
     yield StartedScope(record_type="calendar")
-    while True:
-        page = CalendarPage.model_validate(
-            await get(f"{BASE}/users/me/calendarList", params=params)
-        )
-        for item in page.items:
-            calendar_record = record("calendar", item)
-            calendar_id = calendar_record.identity.native_id
-            if calendar_id in seen_calendars:
-                raise ValueError("Calendar list repeated an identity across pages")
-            seen_calendars.add(calendar_id)
+    async with aclosing(selected_members(get, selection)) as members:
+        async for calendar_record in members:
+            seen_calendars.add(calendar_record.identity.native_id)
             yield calendar_record
             async for observation in _capture_member(
-                get, calendar_record, item, previous, window, tokens, coverage
+                get, calendar_record, calendar_record.payload, previous, window, tokens, coverage
             ):
                 yield observation
-        if not page.nextPageToken:
-            break
-        if page.nextPageToken in seen_pages:
-            raise ValueError("Calendar list returned a repeated page token")
-        seen_pages.add(page.nextPageToken)
-        params["pageToken"] = page.nextPageToken
-    for missing in previous.calendar_tokens.keys() - seen_calendars:
-        yield CaptureRecord(
-            identity=RecordIdentity(record_type="calendar", native_id=missing),
-            payload={"id": missing},
-            kind="delete",
-            removal_reason="scope_removed",
-            observed_at=datetime.now(timezone.utc),
-        )
-        yield RemovedScope(
-            record_type="event_occurrence",
-            container_id=missing,
-            removal_reason="scope_removed",
-            observed_at=datetime.now(timezone.utc),
-        )
-        yield RemovedScope(
-            record_type="event",
-            container_id=missing,
-            removal_reason="scope_removed",
-            observed_at=datetime.now(timezone.utc),
-        )
+    for observation in missing_members(
+        set(previous.calendar_tokens), seen_calendars, withdrawn, selection
+    ):
+        yield observation
     yield CompletedScope(record_type="calendar")
     if cursor is not None:
         cursor.update(calendar_tokens=tokens)
@@ -262,3 +242,68 @@ async def _capture_member(
             removal_reason="access_revoked",
             observed_at=datetime.now(timezone.utc),
         )
+
+
+def removed_calendar(
+    calendar_id: str, reason: Literal["scope_removed", "access_revoked"]
+) -> Iterator[SourceObservation]:
+    """Withdraw parent visibility and exact child scopes without alleging provider deletion."""
+    now = datetime.now(timezone.utc)
+    yield CaptureRecord(
+        identity=RecordIdentity(record_type="calendar", native_id=calendar_id),
+        payload={"id": calendar_id},
+        kind="delete",
+        removal_reason=reason,
+        observed_at=now,
+    )
+    for record_type in ("event_occurrence", "event"):
+        yield RemovedScope(
+            record_type=record_type,
+            container_id=calendar_id,
+            removal_reason=reason,
+            observed_at=now,
+        )
+
+
+async def selected_members(
+    get: GetJSON, selection: set[str] | None
+) -> AsyncGenerator[CaptureRecord, None]:
+    """Enumerate membership completely, but fetch content only for configured native IDs."""
+    seen_pages: set[str] = set()
+    seen_calendars: set[str] = set()
+    params: dict[str, str | int] = {"maxResults": 250, "showHidden": "true"}
+    while selection != set():
+        page = CalendarPage.model_validate(
+            await get(f"{BASE}/users/me/calendarList", params=params)
+        )
+        for item in page.items:
+            member = record("calendar", item)
+            calendar_id = member.identity.native_id
+            if calendar_id in seen_calendars:
+                raise ValueError("Calendar list repeated an identity across pages")
+            seen_calendars.add(calendar_id)
+            if selection is None or calendar_id in selection:
+                yield member
+        if not page.nextPageToken:
+            return
+        if page.nextPageToken in seen_pages:
+            raise ValueError("Calendar list returned a repeated page token")
+        seen_pages.add(page.nextPageToken)
+        params["pageToken"] = page.nextPageToken
+
+
+def missing_members(
+    previous: set[str], seen_calendars: set[str], withdrawn: set[str], selection: set[str] | None
+) -> Iterator[SourceObservation]:
+    """Revoke membership-proven absence independently of saved cursor history."""
+    missing_requested = selection - seen_calendars if selection is not None else set()
+    for missing in previous - seen_calendars - withdrawn - missing_requested:
+        for observation in removed_calendar(missing, "scope_removed"):
+            yield observation
+    for missing in missing_requested:
+        # Full membership exhaustion proves absence even when an earlier partial
+        # capture never saved this calendar's token/checkpoint.
+        for observation in removed_calendar(missing, "access_revoked"):
+            yield observation
+    if missing_requested:
+        raise ValueError("A requested calendar is not accessible in current membership")
