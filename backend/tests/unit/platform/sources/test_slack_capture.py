@@ -119,3 +119,48 @@ async def test_omitted_but_accessible_channel_does_not_advance_cursor(monkeypatc
     with pytest.raises(ValueError, match="omitted"):
         _ = [x async for x in connector.generate_observations(cursor=cursor)]
     assert cursor.get()["channel_ids"] == ["C1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["json", "http", "proxy"])
+async def test_rate_limit_honors_entire_wait_and_preserves_proxy_type(kind):
+    import httpx
+
+    from airweave.domains.auth_provider.exceptions import AuthProviderRateLimitError
+
+    connector = source()
+    request = httpx.Request("GET", "https://slack.com/api/conversations.list")
+    first = (
+        AuthProviderRateLimitError(provider_name="composio", retry_after=240)
+        if kind == "proxy"
+        else httpx.Response(
+            429 if kind == "http" else 200,
+            headers={"Retry-After": "240"},
+            json={"ok": False, "error": "ratelimited"},
+            request=request,
+        )
+    )
+    connector.http_client.get = AsyncMock(
+        side_effect=[first, httpx.Response(200, json={"ok": True}, request=request)]
+    )
+    waits = AsyncMock()
+    get = connector._get.retry_with(sleep=waits)
+    assert await get(connector, str(request.url)) == {"ok": True}
+    assert float(waits.call_args.args[0]) == 240
+    assert connector.http_client.get.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_proxy_rate_limit_stops_after_five_attempts():
+    from airweave.domains.auth_provider.exceptions import AuthProviderRateLimitError
+
+    connector = source()
+    connector.http_client.get = AsyncMock(
+        side_effect=AuthProviderRateLimitError(provider_name="composio", retry_after=240)
+    )
+    waits = AsyncMock()
+    with pytest.raises(AuthProviderRateLimitError):
+        await connector._get.retry_with(sleep=waits)(connector, "https://slack.com/api/test")
+    assert connector.http_client.get.await_count == 5
+    assert waits.await_count == 4
+    assert all(float(call.args[0]) == 240 for call in waits.call_args_list)

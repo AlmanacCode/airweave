@@ -6,11 +6,13 @@ as the typed domain exceptions from ``domains.sources.exceptions``.
 """
 
 import logging
+import math
 from typing import Callable
 
 import httpx
 from tenacity import retry_if_exception, wait_exponential
 
+from airweave.domains.auth_provider.exceptions import AuthProviderRateLimitError
 from airweave.domains.sources.exceptions import (
     SourceRateLimitError,
     SourceServerError,
@@ -120,16 +122,23 @@ def should_retry_on_rate_limit_or_timeout(exception: BaseException) -> bool:
     )
 
 
-def wait_rate_limit_with_backoff(retry_state) -> float:
+def wait_rate_limit_with_backoff(
+    retry_state, *, max_rate_limit_wait: float | None = 120.0
+) -> float:
     """Wait strategy: Retry-After for rate limits, exponential backoff for transients.
 
     Handles both raw ``httpx.HTTPStatusError`` (429) and domain
-    ``SourceRateLimitError`` / ``SourceServerError``.
+    ``SourceRateLimitError`` / ``SourceServerError`` and managed-provider throttling.
+    Set ``max_rate_limit_wait=None`` to honor the entire provider delay.
     """
     exception = retry_state.outcome.exception()
 
-    if isinstance(exception, SourceRateLimitError):
-        return min(max(exception.retry_after, 1.0), 120.0)
+    def bounded_wait(seconds: float) -> float:
+        seconds = max(seconds, 1.0) if math.isfinite(seconds) else 30.0
+        return min(seconds, max_rate_limit_wait) if max_rate_limit_wait is not None else seconds
+
+    if isinstance(exception, (SourceRateLimitError, AuthProviderRateLimitError)):
+        return bounded_wait(exception.retry_after)
 
     if isinstance(exception, SourceServerError):
         return wait_exponential(multiplier=1, min=2, max=30)(retry_state)
@@ -140,7 +149,7 @@ def wait_rate_limit_with_backoff(retry_state) -> float:
             try:
                 wait_seconds = float(retry_after)
                 wait_seconds = max(wait_seconds, 1.0)
-                return min(wait_seconds, 120.0)
+                return bounded_wait(wait_seconds)
             except (ValueError, TypeError):
                 pass
         return wait_exponential(multiplier=1, min=2, max=30)(retry_state)

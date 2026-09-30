@@ -5,12 +5,14 @@ from __future__ import annotations
 import re
 from contextlib import aclosing
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from tenacity import retry, stop_after_attempt
+from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
+from airweave.domains.auth_provider.exceptions import AuthProviderRateLimitError
 from airweave.domains.browse_tree.types import NodeSelectionData
 from airweave.domains.entities.canonical.requests import (
     CaptureRecord,
@@ -38,7 +40,7 @@ from airweave.platform.http_client.retry_helpers import (
     wait_rate_limit_with_backoff,
 )
 from airweave.platform.sources._base import BaseSource
-from airweave.platform.sources.http_helpers import raise_for_status
+from airweave.platform.sources.http_helpers import _parse_retry_after, raise_for_status
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 
 # Pattern for Slack mrkdwn special sequences:
@@ -129,8 +131,8 @@ class SlackSource(BaseSource):
 
     @retry(
         stop=stop_after_attempt(5),
-        retry=retry_if_rate_limit_or_timeout,
-        wait=wait_rate_limit_with_backoff,
+        retry=retry_if_rate_limit_or_timeout | retry_if_exception_type(AuthProviderRateLimitError),
+        wait=partial(wait_rate_limit_with_backoff, max_rate_limit_wait=None),
         reraise=True,
     )
     async def _get(self, url: str, params: Optional[Dict[str, Any]] = None) -> Dict:
@@ -151,7 +153,9 @@ class SlackSource(BaseSource):
         if not payload.get("ok"):
             error = payload.get("error", "unknown_error")
             if error in {"ratelimited", "rate_limited"}:
-                raise SourceRateLimitError(source_short_name="slack", retry_after=60)
+                raise SourceRateLimitError(
+                    source_short_name="slack", retry_after=_parse_retry_after(response, default=60)
+                )
             if error in {"invalid_auth", "not_authed", "token_revoked", "account_inactive"}:
                 raise SourceAuthError(
                     "Slack authentication is unavailable",
