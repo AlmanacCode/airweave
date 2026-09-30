@@ -1,5 +1,6 @@
 """Native Notion acquisition fixtures; no provider calls or OAuth grants."""
 
+import hashlib
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
@@ -331,3 +332,45 @@ async def test_nonadjacent_cursor_cycle_is_rejected_from_durable_continuation():
     second = await connector.capture_page(scope, first.continuation, files=MagicMock())
     with pytest.raises(ValueError, match="cursor cycle"):
         await connector.capture_page(scope, second.continuation, files=MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_large_search_advances_with_bounded_recent_cursor_history():
+    connector, _ = await source(posts=[listing(cursor=f"page-{i}") for i in range(520)])
+    scope = CompletedScope(record_type="page")
+    continuation = ScanContinuation()
+    for _ in range(520):
+        page = await connector.capture_page(scope, continuation, files=MagicMock())
+        assert not page.final
+        # Exercise the durable JSON boundary on every page, not only in-memory state.
+        continuation = ScanContinuation.model_validate_json(page.continuation.model_dump_json())
+        assert len(continuation.value["cursor_hashes"]) <= 512
+    hashes = continuation.value["cursor_hashes"]
+    assert continuation.value["cursor"] == "page-519"
+    assert hashes[0] == hashlib.sha256(b"page-8").hexdigest()
+    assert hashes[-1] == hashlib.sha256(b"page-519").hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_query_window_resets_recent_cursor_history():
+    row = native(created_time="2026-09-30T01:00:00Z")
+    connector, _ = await source(
+        gets=[row],
+        posts=[
+            listing(cursor="reusable"),
+            listing([row], status="query_result_limit_reached"),
+            listing(cursor="reusable"),
+        ],
+    )
+    owner = parent("data_source", DATA)
+    scope = connector.child_scope(owner, "page")
+    first = await connector.capture_page(scope, ScanContinuation(), files=MagicMock(), parent=owner)
+    window = await connector.capture_page(
+        scope, first.continuation, files=MagicMock(), parent=owner
+    )
+    assert not window.final and window.continuation.value["cursor_hashes"] == []
+    assert window.continuation.value["cursor"] is None
+    following = await connector.capture_page(
+        scope, window.continuation, files=MagicMock(), parent=owner
+    )
+    assert following.continuation.value["cursor"] == "reusable"

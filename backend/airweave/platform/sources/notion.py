@@ -360,11 +360,9 @@ class NotionSource(BaseSource):
             digest = hashlib.sha256(page.next_cursor.encode()).hexdigest()
             if digest in progress.cursor_hashes:
                 raise ValueError("Notion pagination entered a cursor cycle")
-            if len(progress.cursor_hashes) >= 512:
-                raise ValueError(
-                    "Notion pagination exceeded the bounded cursor history; capture is incomplete"
-                )
-            return page.next_cursor, (*progress.cursor_hashes, digest)
+            # Detect recent cycles without imposing a total page-count ceiling.
+            # Longer-period loops remain subject to the existing runtime limits.
+            return page.next_cursor, (*progress.cursor_hashes[-511:], digest)
         if page.next_cursor is not None:
             raise ValueError("Notion returned an inconsistent terminal cursor")
         return None, progress.cursor_hashes
