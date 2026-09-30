@@ -1,0 +1,46 @@
+{
+  "verified_at": "2026-09-30",
+  "source_commit": "1b28bf7",
+  "provider": "gmail",
+  "mode": "frozen_seven_day_filtered_full_reconciliation",
+  "provider_writes": false,
+  "harness_exit_code": 0,
+  "runs": [
+    {
+      "run": 1,
+      "provider_requests": 302,
+      "records_observed": 242,
+      "stored_records": 242,
+      "partial_records": 0,
+      "blob_bytes_written": 5660964,
+      "full_scope_completed": true,
+      "loaded_durable_checkpoint": false,
+      "change_sequence": 242
+    },
+    {
+      "run": 2,
+      "provider_requests": 302,
+      "records_observed": 242,
+      "stored_records": 242,
+      "partial_records": 0,
+      "blob_bytes_written": 5660964,
+      "full_scope_completed": true,
+      "loaded_durable_checkpoint": true,
+      "change_sequence": 277
+    }
+  ],
+  "aggregate_requests": 604,
+  "aggregate_observations": 484,
+  "identical_second_read": false,
+  "schema_removed": true,
+  "blob_directory_removed": true,
+  "independent_private_directories": 0,
+  "independent_private_schemas": 0,
+  "immutable_archive_removed": true,
+  "limitations": [
+    "Frozen seven-day query, not whole-mailbox baseline or history-delta proof.",
+    "Fresh second job loads durable cycle state; this trial does not interrupt a page.",
+    "Second raw payload/revision digest changed; no claim of identical provider responses.",
+    "Local disposable database and capture harness, not hosted owner-binding or staging proof."
+  ]
+}
