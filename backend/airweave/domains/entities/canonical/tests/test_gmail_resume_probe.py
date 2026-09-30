@@ -169,3 +169,89 @@ asyncio.run(main())
     code, output, error = await subprocess_script(script, {"TEST_ROOT": str(tmp_path)})
     assert code == 0, error
     assert output.splitlines()[-1] == "verified"
+
+
+async def test_actual_lifecycle_child_context_reaches_committed_gmail_page(
+    database, source, tmp_path
+):
+    """Exercise the real child composition, not the separate pipeline-test context."""
+    script = r"""
+import asyncio, json, os, sys
+from contextlib import asynccontextmanager
+from unittest.mock import MagicMock
+sys.path.insert(0, 'tests/live')
+import conftest
+import httpx
+import provider_lifecycle as lifecycle
+from provider_sample import verify_rest_identity
+from airweave.domains.entities.canonical.tests.test_gmail_recovery import NativeHTTP
+from airweave.domains.sources.token_providers.static import StaticTokenProvider
+from airweave.platform.configs.config import GmailConfig
+from airweave.platform.sources.gmail import GmailSource
+from airweave.platform.sources.tests.test_gmail_capture import message
+
+@asynccontextmanager
+async def synthetic_source(name, account, expected_email, key, fence, **options):
+    assert name == 'gmail' and options['gmail_unfiltered'] is True
+    native = NativeHTTP([
+        ('/profile', {'emailAddress': expected_email, 'historyId': 'identity-only'}),
+        ('/profile', {'historyId': 'capture-boundary'}),
+        ('/messages', {'messages': [{'id': 'synthetic-a'}], 'nextPageToken': 'next'}),
+        ('/messages/synthetic-a', message('synthetic-a')),
+    ])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(native.handle),
+            event_hooks={'request': [options['request_hook']]}) as client:
+        connector = await GmailSource.create(auth=StaticTokenProvider('synthetic'),
+            logger=MagicMock(), http_client=client, config=GmailConfig(
+                included_labels=[], excluded_labels=[], excluded_categories=[]))
+        await verify_rest_identity(name, connector, expected_email)
+        yield connector, 'provider_email'
+
+lifecycle.rest_source = synthetic_source
+# All provider traffic uses the scripted MockTransport; synthetic credentials only.
+os.environ['COMPOSIO_API_KEY'] = 'synthetic-test-only'
+os.environ['LIVE_GMAIL_ACCOUNT_ID'] = 'synthetic-test-only'
+os.environ['LIVE_EXPECTED_EMAIL'] = 'synthetic@example.test'
+raise SystemExit(asyncio.run(lifecycle.child(json.loads(os.environ['TEST_MANIFEST']))))
+"""
+    from sqlalchemy import select
+
+    from airweave.models.capture_scan import CaptureScan
+    from airweave.models.entity import Entity
+    from airweave.models.sync_cursor import SyncCursor
+
+    fence = source[1]
+    async with database() as db:
+        schema = await db.scalar(text("select current_schema()"))
+    manifest = {
+        "provider": "gmail",
+        "schema": schema,
+        "root": str(tmp_path),
+        "organization_id": str(fence.organization_id),
+        "sync_id": str(fence.sync_id),
+        "job_id": str(fence.job_id),
+        "attempt_number": 2,
+        "gmail_resume": True,
+        "gmail_unfiltered": True,
+        "resume_stage": "interrupt",
+        "record_limit": 250,
+        "request_limit": 600,
+        "timeout": 30,
+        "file_byte_limit": 10 * 1024 * 1024,
+        "blob_byte_limit": 256 * 1024 * 1024,
+    }
+    code, output, error = await subprocess_script(script, {"TEST_MANIFEST": json.dumps(manifest)})
+    assert code == 75, (output, error)
+    result = json.loads(output.splitlines()[-1])
+    assert result["intentional_interruption"] and not result["failed"]
+    assert result["identity_profile_requests"] == result["capture_profile_requests"] == 1
+    assert result["provider_requests"] == 4 and result["records_observed"] == 1
+    assert not result["checkpoint_saved"] and not result["full_scope_completed"]
+    async with database() as db:
+        record = await db.scalar(select(Entity).where(Entity.native_id == "synthetic-a"))
+        scan = await db.scalar(select(CaptureScan).where(CaptureScan.sync_id == fence.sync_id))
+        cursor = await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == fence.sync_id))
+    assert record is not None and record.record_revision == 1
+    assert scan.phase == "collecting" and scan.continuation["phase"] == "history"
+    assert cursor.cursor_data["canonical_cycle"]["phase"] == "active"
+    assert "canonical_checkpoint" not in cursor.cursor_data
