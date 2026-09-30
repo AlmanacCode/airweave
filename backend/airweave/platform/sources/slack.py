@@ -8,7 +8,15 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictBool,
+    TypeAdapter,
+    ValidationError,
+)
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
@@ -28,7 +36,7 @@ from airweave.domains.entities.canonical.requests import (
     RecordIdentity,
 )
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
-from airweave.domains.sources.exceptions import SourceAuthError, SourceRateLimitError
+from airweave.domains.sources.exceptions import SourceAuthError, SourceError, SourceRateLimitError
 from airweave.domains.sources.token_providers.protocol import (
     SourceAuthProvider,
     authorization_headers,
@@ -122,6 +130,13 @@ class SlackApiError(ValueError):
         """Retain the safe provider code for explicit access-loss handling."""
         self.code = code
         super().__init__(f"Slack request failed: {code}")
+
+
+class SlackHistoryCoverage(BaseModel):
+    """Slack omits this flag unless older history is unavailable under its limit."""
+
+    model_config = ConfigDict(extra="ignore")
+    is_limited: StrictBool = False
 
 
 class SlackPageMetadata(BaseModel):
@@ -373,6 +388,14 @@ class SlackSource(BaseSource):
                 # missing replies alone cannot authorize deletion or scope completion.
                 raise InvalidScanContinuation("Slack queued thread is no longer available") from exc
             raise
+        if operation == "conversations.history":
+            coverage = SlackHistoryCoverage.model_validate(payload)
+            if coverage.is_limited:
+                raise SourceError(
+                    "Slack history is limited by workspace visibility. "
+                    "Capture remains incomplete; older retained messages were not reconciled.",
+                    source_short_name="slack",
+                )
         items = TypeAdapter(list[dict[str, JsonValue]]).validate_python(payload.get(item_key))
         metadata = SlackPageMetadata.model_validate(payload.get("response_metadata") or {})
         following = metadata.next_cursor.strip()
