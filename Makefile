@@ -4,7 +4,7 @@ PYTHON := .venv/bin/python
 PYTEST := .venv/bin/pytest
 IMAGE ?= almanac-source-store:local
 
-.PHONY: help setup check test-store test-capture test-search test-auth test-health test-index validate-deploy build
+.PHONY: help setup check test-store test-provisioning test-capture test-search test-auth test-health test-index validate-deploy build
 
 help:
 	@echo 'setup         Install the locked backend and development dependencies'
@@ -37,6 +37,10 @@ test-store:
 test-capture:
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/platform/sources/tests tests/unit/platform/sources/records tests/unit/platform/sources/test_*_capture.py tests/unit/domains/entities tests/unit/platform/http_client/test_composio_transport.py airweave/domains/storage/tests/test_file_service.py
 
+test-provisioning:
+	@test -n "$$CANONICAL_TEST_DATABASE_URL" || (echo 'Set CANONICAL_TEST_DATABASE_URL to a disposable PostgreSQL database.' >&2; exit 1)
+	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/owned_provisioning/tests airweave/domains/source_connections/tests airweave/domains/temporal/tests airweave/domains/sources/tests/test_lifecycle.py airweave/domains/sync_pipeline/tests/test_factory.py
+
 test-search:
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/search
 
@@ -50,4 +54,4 @@ test-index:
 	@test "$$OWNED_VESPA_TEST" = 1 || (echo 'Set OWNED_VESPA_TEST=1 only for a disposable Vespa at localhost:8081/19071; this deploys schemas.' >&2; exit 1)
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false tests/integration/test_owned_vespa.py tests/integration/test_canonical_search_prefilters.py airweave/domains/entities/canonical/tests/test_real_vespa_projection.py
 
-check: test-store test-capture test-search test-auth test-health
+check: test-store test-provisioning test-capture test-search test-auth test-health

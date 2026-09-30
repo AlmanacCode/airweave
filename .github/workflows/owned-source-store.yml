@@ -74,6 +74,8 @@ jobs:
         run: make test-store
       - name: Verify source capture and transport
         run: make test-capture
+      - name: Verify connection provisioning and recovery
+        run: make test-provisioning
       - name: Verify indexed retrieval and visibility
         run: make test-search
       - name: Verify service authentication
