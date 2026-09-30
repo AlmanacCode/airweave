@@ -20,6 +20,7 @@ from airweave.domains.entities.canonical.requests import (
     RecordIdentity,
 )
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
+from airweave.domains.sources.exceptions import SourceServerError
 from airweave.domains.sources.token_providers.protocol import ManagedToolAuthProvider
 from airweave.domains.storage.file_service import FileService
 from airweave.platform.decorators import source
@@ -178,6 +179,16 @@ class WisprSource(BaseSource):
                 },
             )
         )
+        if isinstance(result.error, str) and any(
+            phrase in result.error.lower() for phrase in ("rate limit", "too many requests")
+        ):
+            # HTTP 200 tool text is a diagnostic signal, not a structured 429 or
+            # a provider Retry-After contract. Keep the failure terminal here.
+            raise SourceServerError(
+                "Managed Wispr tool reported a rate-limit signal; "
+                "the limiting service and retry delay are unknown. Capture is incomplete.",
+                source_short_name="wispr",
+            )
         if result.error is not None:
             raise ValueError("Wispr tool execution failed; capture is incomplete")
         return result.data

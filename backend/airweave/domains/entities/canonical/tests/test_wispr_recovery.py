@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from airweave.domains.entities.canonical.requests import CaptureBatch, CaptureRecord, RecordIdentity
 from airweave.domains.entities.canonical.store import CanonicalStoreError
+from airweave.domains.sources.exceptions import SourceServerError
 from airweave.domains.sources.token_providers.protocol import ManagedToolAuthProvider
 from airweave.domains.sync_pipeline.canonical_scan import CanonicalScanDriver
 from airweave.models.capture_scan import CaptureScan
@@ -16,7 +17,7 @@ from airweave.models.entity import Entity
 from airweave.platform.sources.wispr import WisprSource
 
 
-async def connector(rows, body_calls, *, fail_at=None):
+async def connector(rows, body_calls, *, fail_at=None, failure=None):
     result = await WisprSource.create(
         auth=ManagedToolAuthProvider(
             api_key="fixture", connected_account_id="fixture", user_id="fixture"
@@ -31,7 +32,7 @@ async def connector(rows, body_calls, *, fail_at=None):
         native = arguments["meeting_id"]
         body_calls.append(native)
         if len(body_calls) == fail_at:
-            raise ValueError("Synthetic opaque body failure")
+            raise failure or ValueError("Synthetic opaque body failure")
         return {
             "id": native,
             "content": "notes",
@@ -50,15 +51,22 @@ def driver(service, database, fence, source):
     )
 
 
-async def test_failed_body_resumes_without_repeating_completed_siblings(database, source):
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ValueError("Synthetic opaque body failure"),
+        SourceServerError("Synthetic rate signal; retry delay unknown", source_short_name="wispr"),
+    ],
+)
+async def test_failed_body_resumes_without_repeating_completed_siblings(database, source, failure):
     service, fence = source
     rows = [
         {"id": f"m{i}", "title": "Earlier listing", "start": "2026-09-20T00:00:00Z"}
         for i in range(10)
     ]
     calls = []
-    first = await connector(rows, calls, fail_at=10)
-    with pytest.raises(ValueError, match="Synthetic opaque"):
+    first = await connector(rows, calls, fail_at=10, failure=failure)
+    with pytest.raises(type(failure), match="Synthetic"):
         await driver(service, database, fence, first).run()
     assert len(calls) == 10
     failed = calls[-1]

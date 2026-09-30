@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from airweave.domains.sources.exceptions import SourceServerError
+from airweave.domains.sources.exceptions.classifier import classify_error
 from airweave.domains.sources.token_providers.protocol import ManagedToolAuthProvider
 from airweave.platform.sources.wispr import WisprSource
 
@@ -286,3 +288,22 @@ async def test_ambiguous_continuation_markers_do_not_choose_a_range(monkeypatch)
     with pytest.raises(ValueError, match="ambiguous continuation"):
         await connector._meeting("m")
     assert execute.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error", ["Private meeting: rate limit exceeded", "Too many requests: private detail"]
+)
+async def test_rate_signal_stops_without_retry_or_invented_status(monkeypatch, error):
+    connector = await source()
+    post = AsyncMock(side_effect=[{"session_id": "session"}, {"data": {}, "error": error}])
+    monkeypatch.setattr(connector, "_post", post)
+    with pytest.raises(SourceServerError, match="rate-limit signal") as failure:
+        await connector._meeting("m")
+    assert post.await_count == 2
+    assert failure.value.source_short_name == "wispr"
+    assert failure.value.status_code is None
+    assert "private" not in str(failure.value).lower()
+    assert "retry delay are unknown" in str(failure.value)
+    # Do not turn unstructured tool text into credential failure or a timed retry.
+    assert classify_error(failure.value).category is None

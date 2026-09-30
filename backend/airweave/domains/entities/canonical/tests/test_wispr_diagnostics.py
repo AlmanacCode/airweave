@@ -13,6 +13,7 @@ import conftest
 import httpx
 import provider_sample
 from wispr_diagnostics import WisprDiagnostics
+from airweave.domains.sources.exceptions import SourceServerError
 
 async def main():
     original_client = httpx.AsyncClient
@@ -42,8 +43,14 @@ async def main():
                 SimpleNamespace(organization_id=uuid4()), request_hook=request,
                 response_hook=diagnostics.response, envelope_hook=diagnostics.envelope):
                 raise AssertionError("Validation error swallowed")
-        except ValueError as exc:
-            assert str(exc) == "Wispr tool execution failed; capture is incomplete"
+        except (ValueError, SourceServerError) as exc:
+            if kind == "string" and rate:
+                assert isinstance(exc, SourceServerError)
+                assert "rate-limit signal" in str(exc)
+                assert exc.status_code is None
+            else:
+                assert str(exc) == "Wispr tool execution failed; capture is incomplete"
+            assert "private" not in str(exc) and "secret" not in str(exc)
         assert calls == ["metadata", "session", "search"]
         assert diagnostics.operation == "search" and diagnostics.last_http_status == 200
         assert diagnostics.tool_error_present and diagnostics.tool_error_kind == kind
