@@ -412,3 +412,44 @@ async def test_initial_pause_can_activate_but_initial_disconnect_is_terminal(dat
     async with database() as db:
         with pytest.raises(HTTPException, match="Connect a new account after disconnect"):
             await service.ensure(db, ctx, other, request.model_copy(update={"generation": 2}))
+
+
+async def test_slack_workspace_user_survives_pause_and_rejects_different_member(database, setup):
+    ctx, service, request, account, lifecycle, schedules, workflows = setup
+    creator = service.store.create
+    creator._source_registry.get.return_value.short_name = "slack"
+    creator._source_validation.seed_config_result(
+        "slack", {"expected_team_id": "T1", "expected_user_id": "U1"}
+    )
+    spec = ManagedSource.model_validate(
+        {
+            **request.source.model_dump(),
+            "provider": "slack",
+            "expected_identity": "T1",
+            "expected_user_identity": "U1",
+            "config": {"expected_team_id": "wrong", "expected_user_id": "wrong"},
+        }
+    )
+    request = request.model_copy(update={"source": spec})
+    assert spec.source_config() == {"expected_team_id": "T1", "expected_user_id": "U1"}
+    async with database() as db:
+        first = await service.ensure(db, ctx, account, request)
+        assert (first.expected_identity, first.expected_user_identity) == ("T1", "U1")
+    async with database() as db:
+        paused = await service.ensure(db, ctx, account, EnsureSource(generation=2, state="paused"))
+        assert (paused.expected_identity, paused.expected_user_identity) == ("T1", "U1")
+    async with database() as db:
+        wrong = request.model_copy(
+            update={
+                "generation": 3,
+                "source": spec.model_copy(update={"expected_user_identity": "U2"}),
+            }
+        )
+        with pytest.raises(HTTPException, match="Reconnect changes original account identity"):
+            await service.ensure(db, ctx, account, wrong)
+    async with database() as db:
+        resumed = await service.ensure(
+            db, ctx, account, request.model_copy(update={"generation": 3})
+        )
+        assert resumed.source_connection_id == first.source_connection_id
+        assert (resumed.expected_identity, resumed.expected_user_identity) == ("T1", "U1")

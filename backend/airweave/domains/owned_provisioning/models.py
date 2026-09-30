@@ -11,8 +11,9 @@ class ManagedSource(BaseModel):
     """Native identity is supplied only by Almanac's verified account authority."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    provider: Literal["gmail", "google_calendar", "google_drive"]
+    provider: Literal["gmail", "google_calendar", "google_drive", "slack"]
     expected_identity: str = Field(min_length=1, max_length=512)
+    expected_user_identity: str | None = Field(default=None, min_length=1, max_length=512)
     collection: str = Field(min_length=1, max_length=255)
     auth_provider: str = Field(min_length=1, max_length=255)
     connected_account_id: str = Field(min_length=1, max_length=255)
@@ -20,6 +21,13 @@ class ManagedSource(BaseModel):
     user_id: str = Field(min_length=1, max_length=255)
     config: dict[str, JsonValue] = Field(default_factory=dict)
     cron: str = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def native_principal(self):
+        """Slack workspace membership requires its native user, not broker user_id."""
+        if (self.provider == "slack") != (self.expected_user_identity is not None):
+            raise ValueError("Only Slack requires an expected native user identity")
+        return self
 
     @field_validator("cron")
     @classmethod
@@ -31,6 +39,12 @@ class ManagedSource(BaseModel):
 
     def source_config(self) -> dict[str, JsonValue]:
         """Expected identity cannot be overridden inside unstructured provider config."""
+        if self.provider == "slack":
+            return {
+                **self.config,
+                "expected_team_id": self.expected_identity,
+                "expected_user_id": self.expected_user_identity,
+            }
         field = {
             "gmail": "expected_mailbox",
             "google_calendar": "expected_primary_calendar_id",
@@ -77,16 +91,19 @@ class ProvisionedSource(BaseModel):
     source_connection_id: UUID | None
     sync_id: UUID | None
     expected_identity: str | None
+    expected_user_identity: str | None = None
 
 
-def native_identity(provider: str, config: dict) -> str:
+def native_principal(provider: str, config: dict) -> tuple[str, str | None]:
     """Read the original attested principal from the protected source config."""
     from airweave.platform.configs.config import (
         GmailConfig,
         GoogleCalendarConfig,
         GoogleDriveConfig,
+        SlackConfig,
     )
 
+    user = None
     match provider:
         case "gmail":
             identity = GmailConfig.model_validate(config).expected_mailbox
@@ -94,8 +111,11 @@ def native_identity(provider: str, config: dict) -> str:
             identity = GoogleCalendarConfig.model_validate(config).expected_primary_calendar_id
         case "google_drive":
             identity = GoogleDriveConfig.model_validate(config).expected_permission_id
+        case "slack":
+            slack = SlackConfig.model_validate(config)
+            identity, user = slack.expected_team_id, slack.expected_user_id
         case _:
             raise ValueError("Unsupported owned source provider")
     if identity is None:
         raise ValueError("Owned source has no trusted native identity")
-    return identity
+    return identity, user

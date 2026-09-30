@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from airweave.api.context import ApiContext
 from airweave.core.datetime_utils import utc_now_naive
 from airweave.db.unit_of_work import UnitOfWork
-from airweave.domains.owned_provisioning.models import EnsureSource, native_identity
+from airweave.domains.owned_provisioning.models import EnsureSource, native_principal
 from airweave.domains.source_connections.protocols import SourceConnectionCreateServiceProtocol
 from airweave.domains.sources.protocols import SourceValidationServiceProtocol
 from airweave.models.connection import Connection
@@ -111,11 +111,11 @@ class ProvisioningStore:
                 )
                 if (
                     source.short_name,
-                    native_identity(source.short_name, source.config_fields),
+                    native_principal(source.short_name, source.config_fields),
                     source.readable_collection_id,
                 ) != (
                     request.source.provider,
-                    request.source.expected_identity,
+                    (request.source.expected_identity, request.source.expected_user_identity),
                     request.source.collection,
                 ):
                     raise HTTPException(

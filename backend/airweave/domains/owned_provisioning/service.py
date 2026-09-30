@@ -15,7 +15,7 @@ from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.owned_provisioning.models import (
     EnsureSource,
     ProvisionedSource,
-    native_identity,
+    native_principal,
 )
 from airweave.domains.owned_provisioning.store import ProvisioningStore, locked_intent
 from airweave.domains.sources.protocols import SourceLifecycleServiceProtocol
@@ -78,6 +78,9 @@ class OwnedProvisioningService:
             if row.source_connection_id
             else None
         )
+        identity, user = (
+            native_principal(source.short_name, source.config_fields) if source else (None, None)
+        )
         return ProvisionedSource(
             account_id=row.account_id,
             organization_id=row.organization_id,
@@ -92,9 +95,8 @@ class OwnedProvisioningService:
             ),
             source_connection_id=row.source_connection_id,
             sync_id=row.sync_id,
-            expected_identity=native_identity(source.short_name, source.config_fields)
-            if source
-            else None,
+            expected_identity=identity,
+            expected_user_identity=user,
         )
 
     async def reconcile(

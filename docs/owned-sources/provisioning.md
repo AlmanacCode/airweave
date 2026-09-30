@@ -42,3 +42,20 @@ existing/initial disconnect, and initially paused → first active). Provider na
 validation and Temporal calls are simulated; no live account operations occurred.
 Log: `/tmp/provisioning-pause-tests.log`. Migration 0010's state constraint was
 extended before deployment; deployed schemas would require a new migration.
+
+## Slack principal
+
+Slack requests use `provider: slack`, `expected_identity` for the native workspace
+ID and `expected_user_identity` for the native Slack user. The latter is required
+only for Slack and is distinct from Composio's `user_id`. Both overwrite conflicting
+free-form config fields, feed the existing native `auth.test` capture fence, survive
+pause acknowledgements, and must match on resume. Response acknowledgements include
+both fields; Google responses have null expected_user_identity. The Almanac adapter
+maps `slack_composio` to this provider and verifies both acknowledgement identities.
+This admits capture; it does not claim complete Slack incremental edit/delete coverage.
+
+Verification: eight real-SQL provisioning tests passed (native/Temporal calls mocked),
+including wrong-user/same-workspace rejection and pause/resume preservation. Almanac
+adapter's 18 tests passed, including rejection of a wrong native-user acknowledgement.
+Wispr remains outside automatic provisioning pending native-principal qualification:
+the saved catalogue exposes GET_ACCOUNT_INFO but its output schema is unspecified.
