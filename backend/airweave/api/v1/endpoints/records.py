@@ -1,9 +1,10 @@
 """Internal service API for committed source records; provider APIs are never read here."""
 
+from asyncio import FIRST_COMPLETED, create_task, gather, wait
 from typing import Literal
 from uuid import UUID
 
-from fastapi import Depends, Path, Query, Request, Response
+from fastapi import Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,15 +32,35 @@ from airweave.domains.search.owned_models import OwnedSearchRequest, OwnedSearch
 router = TrailingSlashRouter()
 
 
+async def _search_disconnected(request: Request) -> None:
+    # FastAPI has consumed this read-only search POST's body before entering the route.
+    while (await request.receive())["type"] != "http.disconnect":
+        pass
+
+
 @router.post("/search", response_model=OwnedSearchResponse)
 async def search_records(
     request: OwnedSearchRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     ctx: ApiContext = Depends(deps.get_context),
     container: Container = Depends(deps.get_container),
 ) -> OwnedSearchResponse:
     """Retrieve bounded indexed originals; no provider requests or agent execution."""
-    return await container.owned_search.search(db, ctx, request)
+    work = create_task(container.owned_search.search(db, ctx, request))
+    disconnected = create_task(_search_disconnected(http_request))
+    try:
+        done, _ = await wait((work, disconnected), return_when=FIRST_COMPLETED)
+        if work in done:
+            return await work
+        await disconnected
+        raise HTTPException(499, "Search client disconnected")
+    finally:
+        # Join async work before request-scoped dependencies close. Already-running
+        # synchronous Vespa or inference work cannot be forcibly stopped here.
+        work.cancel()
+        disconnected.cancel()
+        await gather(work, disconnected, return_exceptions=True)
 
 
 async def record_error_response(request: Request, error: CanonicalStoreError) -> JSONResponse:
