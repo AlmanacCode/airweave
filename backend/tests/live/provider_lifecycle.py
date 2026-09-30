@@ -27,6 +27,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from airweave.adapters.event_bus.fake import FakeEventBus
+from airweave.domains.entities.canonical.page_source import CanonicalPageSource
 from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope, StartedScope
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
 from airweave.domains.entities.canonical.store import CanonicalRecordStore
@@ -70,6 +71,26 @@ class BoundedStorage(harness.FilesystemBackend):
             raise BudgetExceeded("blob_bytes")
         await super().write_file(path, content)
         self.written_bytes += len(content)
+
+
+class BoundedPageSource:
+    """Test budget around the real page adapter; production driver still owns all progress."""
+
+    def __init__(self, source, counters, record_limit):
+        self.source, self.counters, self.record_limit = source, counters, record_limit
+        self.canonical_record_types = source.canonical_record_types
+        self.canonical_container_parents = source.canonical_container_parents
+        self.capture_cycle_configuration = source.capture_cycle_configuration
+
+    async def capture_page(self, scope, continuation):
+        page = await self.source.capture_page(scope, continuation)
+        self.counters["records_observed"] += len(page.records)
+        if self.counters["records_observed"] > self.record_limit:
+            raise BudgetExceeded("records")
+        return page
+
+    async def confirm_root_absent(self, native_id):
+        await self.source.confirm_root_absent(native_id)
 
 
 async def bounded_observations(source, cursor, files, counters, record_limit):
@@ -147,12 +168,12 @@ def validate_checkpoint(name, manifest, counters, saved, previous, loaded, attem
         assert saved["canonical_page_token"]
         assert counters["started"] == counters["completed"] == (0 if loaded else 1)
         assert bool(counters["resumed_changes_requests"]) == loaded
-    elif name in {"slack", "wispr"}:
+    elif name == "slack":
+        assert saved["canonical_cycle"]["phase"] == "complete"
+        assert saved["canonical_cycle"]["completed_job_id"]
+    elif name == "wispr":
         assert saved is None
-        if name == "wispr":
-            assert counters["started"] == counters["completed"] == 0
-        else:
-            assert counters["started"] == counters["completed"] > 0
+        assert counters["started"] == counters["completed"] == 0
         return
     else:
         assert saved["canonical_query"] == manifest["query"]
@@ -301,6 +322,11 @@ async def child(manifest):
             assert source.cursor_class == cursor_schema
             bus = FakeEventBus()
             attempt = CaptureAttempt(id=uuid4(), number=1)
+            page_source = (
+                BoundedPageSource(source, counters, manifest["record_limit"])
+                if isinstance(source, CanonicalPageSource)
+                else None
+            )
             pipeline = CanonicalCapturePipeline(
                 CanonicalCaptureService(CanonicalRecordStore()),
                 sessions,
@@ -308,6 +334,7 @@ async def child(manifest):
                 source.canonical_record_types,
                 attempt,
                 container_parents=getattr(source, "canonical_container_parents", {}),
+                page_source=page_source,
             )
             runtime = SyncRuntime(
                 source=source,
@@ -318,9 +345,15 @@ async def child(manifest):
             runner = SyncOrchestrator(
                 entity_pipeline=pipeline,
                 worker_pool=AsyncWorkerPool(logger=logger),
-                stream=AsyncSourceStream(
-                    bounded_observations(source, cursor, files, counters, manifest["record_limit"]),
-                    logger=logger,
+                stream=(
+                    None
+                    if page_source is not None
+                    else AsyncSourceStream(
+                        bounded_observations(
+                            source, cursor, files, counters, manifest["record_limit"]
+                        ),
+                        logger=logger,
+                    )
                 ),
                 sync_context=ctx,
                 runtime=runtime,
@@ -463,6 +496,7 @@ async def main():
                 "0002_projection_publication.py",
                 "0003_mail_thread_index.py",
                 "0004_projection_generation.py",
+                "0005_capture_scan.py",
             ):
                 await connection.run_sync(harness.migrate, migration)
         organization_id, sync_id = uuid4(), uuid4()

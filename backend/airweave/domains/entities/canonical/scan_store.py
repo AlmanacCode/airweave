@@ -4,10 +4,10 @@ import json
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from airweave.domains.entities.canonical.cycle_models import CycleVersion
+from airweave.domains.entities.canonical.cycle_models import CaptureCycle, CycleVersion
 from airweave.domains.entities.canonical.cycle_store import (
     CycleConflict,
     attest_cycle,
@@ -30,8 +30,13 @@ from airweave.domains.entities.canonical.scan_models import (
     ScanState,
     ScanVersion,
 )
-from airweave.domains.entities.canonical.store import CanonicalRecordStore, CanonicalStoreError
+from airweave.domains.entities.canonical.store import (
+    CanonicalRecordStore,
+    CanonicalStoreError,
+    content_is_available,
+)
 from airweave.models.capture_scan import CaptureScan
+from airweave.models.entity import Entity
 
 
 class ScanConflict(CanonicalStoreError):
@@ -193,6 +198,8 @@ class CanonicalScanStore:
             )
             if any(record.parent != parent for record in request.records):
                 raise ScanConflict("Child records must retain their declared parent identity")
+        if is_root and cycle.configuration.child_record_types:
+            await self._invalidate_revived_children(db, request, cycle)
         captured = await self.records._capture_locked(
             db,
             sync,
@@ -205,6 +212,55 @@ class CanonicalScanStore:
             row.phase = "reconciling"
         await db.flush()
         return ScanResult(state=scan_state(row), capture=captured)
+
+    async def _invalidate_revived_children(
+        self,
+        db: AsyncSession,
+        request: CommitScanPage,
+        cycle: CaptureCycle,
+    ) -> None:
+        """Reviving an unavailable parent requires a fresh child scan in this same transaction."""
+        upserts = tuple(
+            record.identity.native_id for record in request.records if record.kind == "upsert"
+        )
+        if not upserts:
+            return
+        revived = tuple(
+            (
+                await db.scalars(
+                    select(Entity.native_id).where(
+                        Entity.organization_id == request.fence.organization_id,
+                        Entity.sync_id == request.fence.sync_id,
+                        Entity.entity_definition_short_name == cycle.configuration.root_record_type,
+                        Entity.container_id.is_(None),
+                        Entity.native_id.in_(upserts),
+                        or_(Entity.deleted_at.is_not(None), ~content_is_available()),
+                    )
+                )
+            ).all()
+        )
+        if not revived:
+            return
+        rows = (
+            await db.scalars(
+                select(CaptureScan)
+                .where(
+                    CaptureScan.organization_id == request.fence.organization_id,
+                    CaptureScan.sync_id == request.fence.sync_id,
+                    CaptureScan.cycle_id == request.cycle_id,
+                    CaptureScan.record_type.in_(cycle.configuration.child_record_types),
+                    CaptureScan.container_id.in_(revived),
+                )
+                .with_for_update()
+            )
+        ).all()
+        for child in rows:
+            child.sweep_id = uuid4()
+            child.revision += 1
+            child.phase = "collecting"
+            child.continuation = {}
+            child.started_at = datetime.now(timezone.utc)
+            child.completed_at = None
 
     async def reconcile(self, db: AsyncSession, request: ReconcileScan) -> ScanResult:
         """A final page is necessary; absence completion is durable and bounded."""

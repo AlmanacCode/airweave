@@ -32,6 +32,7 @@ from airweave.domains.access_control.resolver import ACActionResolver
 from airweave.domains.arf.protocols import ArfServiceProtocol
 from airweave.domains.browse_tree.protocols import NodeSelectionRepositoryProtocol
 from airweave.domains.browse_tree.types import NodeSelectionData
+from airweave.domains.entities.canonical.page_source import CanonicalPageSource
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
 from airweave.domains.entities.canonical.source import CanonicalSource, ContainerScopedSource
 from airweave.domains.entities.canonical.store import CanonicalRecordStore
@@ -193,7 +194,9 @@ class SyncFactory(SyncFactoryProtocol):
         )
         source_entry = self._source_registry.get(sc.short_name)
         canonical_source = (
-            source_result.source if isinstance(source_result.source, CanonicalSource) else None
+            source_result.source
+            if isinstance(source_result.source, (CanonicalSource, CanonicalPageSource))
+            else None
         )
         destinations = (
             []
@@ -245,6 +248,9 @@ class SyncFactory(SyncFactoryProtocol):
                 event_bus=self._event_bus,
                 record_types=canonical_source.canonical_record_types,
                 attempt=resolve_capture_attempt(capture_attempt),
+                page_source=(
+                    canonical_source if isinstance(canonical_source, CanonicalPageSource) else None
+                ),
                 container_parents=(
                     canonical_source.canonical_container_parents
                     if isinstance(canonical_source, ContainerScopedSource)
@@ -343,8 +349,12 @@ class SyncFactory(SyncFactoryProtocol):
         runtime: SyncRuntime,
         source_result: SourceBuildResult,
         sync_context: SyncContext,
-    ) -> AsyncSourceStream:
-        """Build the async source stream from the source generator."""
+    ) -> AsyncSourceStream | None:
+        """Page sources are driven sequentially; legacy generators retain their stream."""
+        if isinstance(runtime.source, CanonicalPageSource):
+            if source_result.node_selections:
+                raise ValueError("Whole-scope page capture does not support selected nodes")
+            return None
         if isinstance(runtime.source, CanonicalSource):
             generator = runtime.source.generate_observations(
                 cursor=runtime.cursor,
@@ -382,7 +392,7 @@ class SyncFactory(SyncFactoryProtocol):
         """Build source instance, cursor, file service, and node selections."""
         if execution_config and execution_config.behavior.replay_from_arf:
             source_class = self._source_registry.get(source_connection.short_name).source_class_ref
-            if isinstance(source_class, CanonicalSource):
+            if isinstance(source_class, (CanonicalSource, CanonicalPageSource)):
                 raise ValueError(
                     "Canonical records must be reindexed from Postgres, not mutable ARF"
                 )

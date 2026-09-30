@@ -134,7 +134,7 @@ async def test_create_orchestrator_raises_when_source_connection_missing():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("canonical", [False, True])
+@pytest.mark.parametrize("canonical", [False, True, "page"])
 async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
     """entity_repo is forwarded to EntityActionResolver and EntityPipeline."""
     entity_repo = MagicMock()
@@ -180,7 +180,14 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
     ):
         mock_source = MagicMock()
         mock_source.generate_entities = MagicMock(return_value=AsyncMock())
-        if canonical:
+        if canonical == "page":
+            from airweave.domains.sources.token_providers.static import StaticTokenProvider
+            from airweave.platform.sources.slack import SlackSource
+
+            mock_source = SlackSource(
+                auth=StaticTokenProvider("synthetic"), logger=MagicMock(), http_client=MagicMock()
+            )
+        elif canonical:
             mock_source.canonical_record_types = ("event",)
             mock_source.generate_observations = MagicMock(return_value=AsyncMock())
         mock_build_source.return_value = SourceBuildResult(
@@ -208,8 +215,12 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
             assert isinstance(orchestrator.entity_pipeline, CanonicalCapturePipeline)
             mock_build_destinations.assert_not_called()
             mock_disp_builder.assert_not_called()
-            mock_source.generate_entities.assert_not_called()
-            mock_source.generate_observations.assert_called_once()
+            if canonical == "page":
+                assert orchestrator.stream is None
+                assert orchestrator.entity_pipeline.page_source is mock_source
+            else:
+                mock_source.generate_entities.assert_not_called()
+                mock_source.generate_observations.assert_called_once()
         else:
             assert orchestrator.entity_pipeline._entity_repo is entity_repo
             assert orchestrator.entity_pipeline._resolver._entity_repo is entity_repo

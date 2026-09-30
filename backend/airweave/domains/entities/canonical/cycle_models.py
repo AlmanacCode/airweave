@@ -45,6 +45,7 @@ class CaptureCycle(BaseModel):
     configuration: CycleConfiguration
     phase: Literal["active", "complete"] = "active"
     root_writer_attempt_id: UUID | None = None
+    completed_job_id: UUID | None = None
 
 
 class BeginCycle(BaseModel):
@@ -71,3 +72,11 @@ class RestartCycle(BaseModel):
     fence: WriterFence
     expected: CycleVersion
     configuration: CycleConfiguration
+
+
+class CycleRoot(BaseModel):
+    """Bounded operational scope discovery, without copying provider payloads."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    native_id: str

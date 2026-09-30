@@ -10,7 +10,7 @@ from airweave.domains.entities.canonical.tests.test_capture_pipeline import comp
 from airweave.domains.sources.token_providers.static import StaticTokenProvider
 from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
 from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
-from airweave.platform.sources.slack import SlackSource
+from airweave.platform.sources.slack import SlackApiError, SlackSource
 
 pytestmark = pytest.mark.integration
 
@@ -36,6 +36,16 @@ async def test_first_completed_membership_hides_prior_partial_channel(
     child_id = seeded.changes[1].record.id
     # The failed prior capture saved records but no channel_ids checkpoint.
     ctx, _, runtime, bus = components(database, source)
+    connector = SlackSource(
+        auth=StaticTokenProvider("fixture"), logger=MagicMock(), http_client=MagicMock()
+    )
+    connector._get = AsyncMock(
+        side_effect=(
+            ConnectionError("membership page failed")
+            if listing_fails
+            else [{"channels": []}, SlackApiError("channel_not_found")]
+        ),
+    )
     pipeline = CanonicalCapturePipeline(
         service,
         database,
@@ -43,19 +53,12 @@ async def test_first_completed_membership_hides_prior_partial_channel(
         SlackSource.canonical_record_types,
         CaptureAttempt(id=fence.attempt_id, number=fence.attempt_number),
         SlackSource.canonical_container_parents,
-    )
-    connector = SlackSource(
-        auth=StaticTokenProvider("fixture"), logger=MagicMock(), http_client=MagicMock()
-    )
-    connector._get = AsyncMock(
-        side_effect=ConnectionError("membership page failed") if listing_fails else None,
-        return_value={"channels": []},
+        page_source=connector,
     )
     await pipeline.start(ctx)
 
     async def scan():
-        async for item in connector.generate_observations(cursor=runtime.cursor):
-            await pipeline.process([item], ctx, runtime)
+        await pipeline.run_scans(ctx, runtime, AsyncMock())
 
     if listing_fails:
         with pytest.raises(ConnectionError, match="membership page failed"):

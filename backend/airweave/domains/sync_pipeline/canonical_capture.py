@@ -1,6 +1,6 @@
 """Capture pipeline: native records commit before independent search projection."""
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 
@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.core.events.sync import EntityBatchProcessedEvent, TypeActionCounts
 from airweave.core.protocols.event_bus import EventBus
+from airweave.domains.entities.canonical.cycle_models import CaptureCycle, CompleteCycle
 from airweave.domains.entities.canonical.models import CaptureResult
+from airweave.domains.entities.canonical.page_source import CanonicalPageSource
 from airweave.domains.entities.canonical.requests import (
     CaptureBatch,
     CaptureRecord,
@@ -21,6 +23,7 @@ from airweave.domains.entities.canonical.requests import (
 )
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
 from airweave.domains.entities.canonical.source import SourceObservation
+from airweave.domains.sync_pipeline.canonical_scan import CanonicalScanDriver
 from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
 from airweave.domains.sync_pipeline.contexts import SyncContext
 from airweave.domains.sync_pipeline.contexts.runtime import SyncRuntime
@@ -39,6 +42,7 @@ class CanonicalCapturePipeline:
         record_types: tuple[str, ...],
         attempt: CaptureAttempt,
         container_parents: dict[str, str] | None = None,
+        page_source: CanonicalPageSource | None = None,
     ):
         """Inject transactional persistence and existing progress-event infrastructure."""
         if not record_types:
@@ -55,6 +59,15 @@ class CanonicalCapturePipeline:
                 )
             if parent in self._container_parents:
                 raise ValueError("Only root-container visibility relationships are supported")
+        self.page_source = page_source
+        self._cycle: CaptureCycle | None = None
+        if page_source is not None:
+            config = page_source.capture_cycle_configuration
+            if config.root_record_type not in self._record_types or any(
+                self._container_parents.get(child) != config.root_record_type
+                for child in config.child_record_types
+            ):
+                raise ValueError("Page source cycle must match its declared container topology")
         self._attempt = attempt
         self._fence: WriterFence | None = None
         self._completed_scopes: set[CompletedScope] = set()
@@ -72,6 +85,35 @@ class CanonicalCapturePipeline:
                 attempt_id=self._attempt.id,
                 attempt_number=self._attempt.number,
             )
+
+    async def run_scans(
+        self,
+        sync_context: SyncContext,
+        runtime: SyncRuntime,
+        check_limits: Callable[[], Awaitable[None]],
+    ) -> None:
+        """Run opted-in pages with a commit barrier before every next provider call."""
+        if self.page_source is None:
+            raise SyncFailureError("Source has no durable page capability")
+        if sync_context.execution_config.cursor.skip_updates:
+            raise SyncFailureError("Durable page capture cannot disable checkpoint updates")
+
+        async def progress(result: CaptureResult, records: tuple[CaptureRecord, ...]) -> None:
+            for record in records:
+                await runtime.entity_tracker.track_entity(
+                    record.identity.record_type, record.identity.entity_key
+                )
+            await self._record_progress(result, sync_context, runtime)
+
+        self._cycle = await CanonicalScanDriver(
+            self._service,
+            self._sessions,
+            self._writer(),
+            self.page_source,
+            progress,
+            self._with_parent,
+            check_limits,
+        ).run()
 
     def _writer(self) -> WriterFence:
         if self._fence is None:
@@ -243,6 +285,22 @@ class CanonicalCapturePipeline:
 
     async def save_checkpoint(self, sync_context: SyncContext, runtime: SyncRuntime) -> None:
         """Commit cursor only after source success, durable captures and scoped reconciliation."""
+        if self.page_source is not None:
+            if self._cycle is None:
+                raise SyncFailureError("Page capture did not reach its completion barrier")
+            async with self._sessions() as db:
+                current = await self._service.read_cycle(db, self._writer())
+            if current != self._cycle:
+                raise SyncFailureError("Cycle changed before source finalization")
+            if current.phase == "complete":
+                if current.completed_job_id != self._writer().job_id:
+                    raise SyncFailureError("Completed cycle belongs to another job")
+                return
+            async with self._sessions() as db:
+                self._cycle = await self._service.complete_cycle(
+                    db, CompleteCycle(fence=self._writer(), expected=current.version)
+                )
+            return
         if runtime.cursor is None or not runtime.cursor.cursor_data:
             return
         if sync_context.execution_config and sync_context.execution_config.cursor.skip_updates:

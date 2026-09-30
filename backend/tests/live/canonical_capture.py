@@ -80,6 +80,7 @@ async def fetch_records(name, account, expected_email, key, fence, root):
     """Exercise actual source capture, bounded before any complete-scope claim."""
     from provider_sample import rest_source, wispr_source
 
+    from airweave.domains.entities.canonical.page_source import CanonicalPageSource
     from airweave.domains.entities.canonical.requests import RecordIdentity
     from airweave.domains.entities.canonical.source import ContainerScopedSource
 
@@ -94,6 +95,8 @@ async def fetch_records(name, account, expected_email, key, fence, root):
     records = {}
     observations = 0
     async with asyncio.timeout(180), connection as (source, identity_verification):
+        if isinstance(source, CanonicalPageSource):
+            raise ValueError("Page sources require the production provider_lifecycle.py harness")
         parents = (
             source.canonical_container_parents if isinstance(source, ContainerScopedSource) else {}
         )
@@ -295,6 +298,7 @@ async def main():
                 "0002_projection_publication.py",
                 "0003_mail_thread_index.py",
                 "0004_projection_generation.py",
+                "0005_capture_scan.py",
             ):
                 await connection.run_sync(migrate, migration)
         with TemporaryDirectory(prefix="airweave-private-live-") as directory:

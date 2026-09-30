@@ -56,7 +56,7 @@ class SyncOrchestrator:
         self,
         entity_pipeline: EntityPipeline | CanonicalCapturePipeline,
         worker_pool: AsyncWorkerPool,
-        stream: AsyncSourceStream,
+        stream: AsyncSourceStream | None,
         sync_context: SyncContext,
         runtime: SyncRuntime,
         access_control_pipeline: AccessControlPipeline,
@@ -205,10 +205,21 @@ class SyncOrchestrator:
         )
         if self.runtime.canonical_capture is not None:
             await self.runtime.canonical_capture.start(self.sync_context)
-        await self.stream.start()
+        if self.stream is not None:
+            await self.stream.start()
 
     async def _process_entities(self) -> None:  # noqa: C901
         """Process entities using micro-batching with bounded inner concurrency."""
+        if (
+            self.runtime.canonical_capture is not None
+            and self.runtime.canonical_capture.page_source is not None
+        ):
+            await self.runtime.canonical_capture.run_scans(
+                self.sync_context, self.runtime, self._check_capture_limits
+            )
+            return
+        if self.stream is None:
+            raise SyncFailureError("Observation source has no stream")
         source_name = self.runtime.source.source_name
         self.sync_context.logger.info(
             f"Starting pull-based processing from source {source_name} "
@@ -298,6 +309,14 @@ class SyncOrchestrator:
             # Re-raise error if there was one
             if stream_error:
                 raise stream_error
+
+    async def _check_capture_limits(self) -> None:
+        """Keep the existing usage guard before each durable provider page."""
+        if not self.sync_context.execution_config.behavior.skip_guardrails:
+            async with get_db_context() as db:
+                await self._usage_checker.is_allowed(
+                    db, self.sync_context.organization.id, ActionType.ENTITIES
+                )
 
     async def _submit_batch_and_trim(
         self,
@@ -779,7 +798,8 @@ class SyncOrchestrator:
             await self.worker_pool.cancel_all()
 
         # Cancel stream to stop producer
-        await self.stream.cancel()
+        if self.stream is not None:
+            await self.stream.cancel()
 
         # Transition through CANCELLING → CANCELLED.
         # RUNNING → CANCELLING is required by the state machine.

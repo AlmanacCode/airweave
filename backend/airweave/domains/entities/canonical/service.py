@@ -10,6 +10,7 @@ from airweave.domains.entities.canonical.cycle_models import (
     BeginCycle,
     CaptureCycle,
     CompleteCycle,
+    CycleRoot,
     RestartCycle,
 )
 from airweave.domains.entities.canonical.cycle_store import (
@@ -17,6 +18,7 @@ from airweave.domains.entities.canonical.cycle_store import (
     complete_cycle,
     cursor_row,
     cycle_state,
+    list_cycle_roots,
     restart_cycle,
 )
 from airweave.domains.entities.canonical.models import CaptureResult, ReconcileResult
@@ -158,3 +160,17 @@ class CanonicalCaptureService:
         async with UnitOfWork(db):
             await self.store._fenced_sync(db, request.fence)
             return await restart_cycle(db, request)
+
+    async def list_cycle_roots(
+        self,
+        db: AsyncSession,
+        fence: WriterFence,
+        cycle_id: UUID,
+        *,
+        after: UUID | None = None,
+        missing: bool = False,
+    ) -> tuple[CycleRoot, ...]:
+        """Read a bounded scope-discovery page after verifying current writer ownership."""
+        async with UnitOfWork(db):
+            await self.store._fenced_sync(db, fence)
+            return await list_cycle_roots(db, fence, cycle_id, after=after, missing=missing)

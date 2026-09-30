@@ -8,6 +8,7 @@ from temporalio import activity
 
 from airweave.core.logging import logger
 from airweave.db.session import get_db_context
+from airweave.domains.entities.canonical.page_source import CanonicalPageSource
 from airweave.domains.entities.canonical.projection_models import ProjectionBatchResult
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.projector import CanonicalProjector
@@ -49,7 +50,7 @@ class ProjectCanonicalRecordsActivity:
                 return ProjectionBatchResult().model_dump(mode="json")
             source_name, collection_id = row
             entry = self.source_registry.get(source_name)
-            if not isinstance(entry.source_class_ref, CanonicalSource):
+            if not isinstance(entry.source_class_ref, (CanonicalSource, CanonicalPageSource)):
                 return ProjectionBatchResult().model_dump(mode="json")
             # Do not construct an index client for sources with no pending records.
             pending = await CanonicalProjectionStore().pending(

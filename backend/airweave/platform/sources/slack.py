@@ -2,25 +2,31 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
-from contextlib import aclosing
 from datetime import datetime, timezone
 from functools import partial
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
 from airweave.domains.auth_provider.exceptions import AuthProviderRateLimitError
 from airweave.domains.browse_tree.types import NodeSelectionData
+from airweave.domains.entities.canonical.cycle_models import CycleConfiguration
+from airweave.domains.entities.canonical.page_source import (
+    CapturePage,
+    InvalidScanContinuation,
+    ScopeAccessLost,
+)
 from airweave.domains.entities.canonical.requests import (
     CaptureRecord,
     CompletedScope,
     RecordIdentity,
-    RemovedScope,
-    StartedScope,
 )
+from airweave.domains.entities.canonical.scan_models import ScanContinuation
 from airweave.domains.sources.exceptions import SourceAuthError, SourceRateLimitError
 from airweave.domains.sources.token_providers.protocol import (
     SourceAuthProvider,
@@ -91,6 +97,32 @@ class SlackApiError(ValueError):
         super().__init__(f"Slack request failed: {code}")
 
 
+class SlackPageMetadata(BaseModel):
+    """Only pagination metadata is parsed; record JSON stays untouched."""
+
+    next_cursor: str = Field(default="", max_length=4096)
+
+
+class SlackRootContinuation(BaseModel):
+    """Bounded conversation-list pagination state."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    cursor: str = Field(default="", max_length=4096)
+    recent: tuple[str, ...] = Field(default=(), max_length=16)
+
+
+class SlackMessageContinuation(BaseModel):
+    """One history page's thread queue, never the whole conversation in memory."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    history_cursor: str = Field(default="", max_length=4096)
+    history_recent: tuple[str, ...] = Field(default=(), max_length=16)
+    history_done: bool = False
+    pending_threads: tuple[str, ...] = Field(default=(), max_length=100)
+    reply_cursor: str = Field(default="", max_length=4096)
+    reply_recent: tuple[str, ...] = Field(default=(), max_length=16)
+
+
 @source(
     name="Slack",
     short_name="slack",
@@ -112,6 +144,11 @@ class SlackSource(BaseSource):
 
     canonical_record_types = ("channel", "message")
     canonical_container_parents = {"message": "channel"}
+    capture_cycle_configuration = CycleConfiguration(
+        fingerprint=hashlib.sha256(b"slack:whole-conversations:history-and-replies:v1").hexdigest(),
+        root_record_type="channel",
+        child_record_types=("message",),
+    )
 
     @classmethod
     async def create(
@@ -167,33 +204,6 @@ class SlackSource(BaseSource):
             raise SlackApiError(error)
         return payload
 
-    async def _capture_pages(
-        self, operation: str, item_key: str, params: dict[str, Any]
-    ) -> AsyncGenerator[dict, None]:
-        """Drain a cursor endpoint; incomplete pagination is a failed capture."""
-        page_cursor = ""
-        seen_cursors: set[str] = set()
-        while True:
-            page_params = {**params, "limit": 100}
-            if page_cursor:
-                page_params["cursor"] = page_cursor
-            page = await self._get(f"https://slack.com/api/{operation}", page_params)
-            items = page.get(item_key)
-            if not isinstance(items, list):
-                raise ValueError("Slack capture response lacks its record list")
-            for item in items:
-                if not isinstance(item, dict):
-                    raise ValueError("Slack capture returned an invalid record")
-                yield item
-            page_cursor = page.get("response_metadata", {}).get("next_cursor", "").strip()
-            if not page_cursor:
-                if page.get("has_more"):
-                    raise ValueError("Slack capture has more records without a cursor")
-                return
-            if page_cursor in seen_cursors:
-                raise ValueError("Slack capture repeated a pagination cursor")
-            seen_cursors.add(page_cursor)
-
     @staticmethod
     def _capture_message(message: dict, channel_id: str) -> CaptureRecord:
         """Keep the complete native response; file bytes are explicitly not captured yet."""
@@ -206,83 +216,129 @@ class SlackSource(BaseSource):
             completeness="partial" if message.get("files") else "complete",
         )
 
-    async def generate_observations(
-        self,
-        *,
-        cursor: SyncCursor | None = None,
-        files: FileService | None = None,
-        node_selections: list[NodeSelectionData] | None = None,
-    ) -> AsyncGenerator[CaptureRecord | CompletedScope | StartedScope | RemovedScope, None]:
-        """Reconcile complete accessible histories, preserving threads and channel identity.
+    async def capture_page(
+        self, scope: CompletedScope, continuation: ScanContinuation
+    ) -> CapturePage:
+        """Fetch one page; record and nested reply progress are committed by the pipeline."""
+        try:
+            return await self._validated_capture_page(scope, continuation)
+        except ValidationError:
+            # Validation diagnostics may contain private provider values.
+            raise ValueError("Slack capture returned invalid page or continuation data") from None
 
-        Slack offers no durable deletion cursor here. Every run re-enumerates history;
-        a failure aborts reconciliation. Lost channel access is never called deletion.
-        """
-        if node_selections:
-            raise ValueError("Slack capture does not yet support selected conversation scopes")
-        seen_channels: set[str] = set()
-        yield StartedScope(record_type="channel")
-        async with aclosing(
-            self._capture_pages(
+    async def _validated_capture_page(
+        self, scope: CompletedScope, continuation: ScanContinuation
+    ) -> CapturePage:
+        if scope.record_type == "channel" and scope.container_id is None:
+            state = SlackRootContinuation.model_validate(continuation.value)
+            items, following, recent = await self._capture_page_response(
                 "conversations.list",
                 "channels",
                 {"types": "public_channel,private_channel,im,mpim", "exclude_archived": "false"},
+                state.cursor,
+                state.recent,
             )
-        ) as channels:
-            async for channel in channels:
-                channel_id = channel["id"]
-                seen_channels.add(channel_id)
-                yield CaptureRecord(
-                    identity=RecordIdentity(record_type="channel", native_id=channel_id),
-                    payload=channel,
+            records = tuple(
+                CaptureRecord(
+                    identity=RecordIdentity(record_type="channel", native_id=item["id"]),
+                    payload=item,
                     observed_at=datetime.now(timezone.utc),
                 )
-                yield StartedScope(record_type="message", container_id=channel_id)
-                async with aclosing(
-                    self._capture_pages(
-                        "conversations.history", "messages", {"channel": channel_id}
+                for item in items
+            )
+            return CapturePage(
+                records=records,
+                final=not following,
+                continuation=ScanContinuation(
+                    value=SlackRootContinuation(cursor=following, recent=recent).model_dump(
+                        mode="json"
                     )
-                ) as history:
-                    async for message in history:
-                        yield self._capture_message(message, channel_id)
-                        if message.get("reply_count", 0):
-                            async with aclosing(
-                                self._capture_pages(
-                                    "conversations.replies",
-                                    "messages",
-                                    {"channel": channel_id, "ts": message["ts"]},
-                                )
-                            ) as replies:
-                                async for reply in replies:
-                                    yield self._capture_message(reply, channel_id)
-                yield CompletedScope(record_type="message", container_id=channel_id)
-
-        previous_channels = set(cursor.get().get("channel_ids", [])) if cursor else set()
-        for channel_id in previous_channels - seen_channels:
-            await self._confirm_channel_access_lost(channel_id)
-            observed_at = datetime.now(timezone.utc)
-            yield CaptureRecord(
-                identity=RecordIdentity(record_type="channel", native_id=channel_id),
-                payload={"id": channel_id},
-                kind="delete",
-                removal_reason="access_revoked",
-                observed_at=observed_at,
+                ),
             )
-            yield RemovedScope(
-                record_type="message",
-                container_id=channel_id,
-                removal_reason="access_revoked",
-                observed_at=observed_at,
-            )
-        # Reconcile parents even if an earlier partial run saved no channel checkpoint.
-        yield CompletedScope(record_type="channel")
-        if cursor is not None:
-            cursor.update(channel_ids=sorted(seen_channels))
-
-    async def _confirm_channel_access_lost(self, channel_id: str) -> None:
-        """Require provider confirmation before hiding an omitted prior channel."""
+        if scope.record_type != "message" or scope.container_id is None:
+            raise ValueError("Slack page capture requires a declared whole conversation scope")
+        state = SlackMessageContinuation.model_validate(continuation.value)
+        channel_id = scope.container_id
         try:
-            await self._get("https://slack.com/api/conversations.info", {"channel": channel_id})
+            if state.pending_threads:
+                items, following, recent = await self._capture_page_response(
+                    "conversations.replies",
+                    "messages",
+                    {"channel": channel_id, "ts": state.pending_threads[0]},
+                    state.reply_cursor,
+                    state.reply_recent,
+                )
+                pending = state.pending_threads if following else state.pending_threads[1:]
+                state = state.model_copy(
+                    update={
+                        "pending_threads": pending,
+                        "reply_cursor": following,
+                        "reply_recent": recent if following else (),
+                    }
+                )
+            else:
+                if state.history_done:
+                    raise ValueError("Completed Slack continuation cannot fetch another page")
+                items, following, recent = await self._capture_page_response(
+                    "conversations.history",
+                    "messages",
+                    {"channel": channel_id},
+                    state.history_cursor,
+                    state.history_recent,
+                )
+                pending = tuple(
+                    dict.fromkeys(item["ts"] for item in items if item.get("reply_count", 0))
+                )
+                state = SlackMessageContinuation(
+                    history_cursor=following,
+                    history_recent=recent,
+                    history_done=not following,
+                    pending_threads=pending,
+                )
+        except SlackApiError as exc:
+            if exc.code in {"channel_not_found", "not_in_channel"}:
+                raise ScopeAccessLost("Slack conversation access was lost") from exc
+            raise
+        return CapturePage(
+            records=tuple(self._capture_message(item, channel_id) for item in items),
+            continuation=ScanContinuation(value=state.model_dump(mode="json")),
+            final=state.history_done and not state.pending_threads,
+        )
+
+    async def _capture_page_response(
+        self,
+        operation: str,
+        item_key: str,
+        params: dict[str, JsonValue],
+        cursor: str,
+        recent: tuple[str, ...],
+    ) -> tuple[list[dict[str, JsonValue]], str, tuple[str, ...]]:
+        """Validate provider pagination without rewriting native record payloads."""
+        try:
+            payload = await self._get(
+                f"https://slack.com/api/{operation}",
+                {**params, "limit": 100, **({"cursor": cursor} if cursor else {})},
+            )
+        except SlackApiError as exc:
+            if exc.code == "invalid_cursor":
+                raise InvalidScanContinuation("Slack page cursor expired") from exc
+            raise
+        items = TypeAdapter(list[dict[str, JsonValue]]).validate_python(payload.get(item_key))
+        metadata = SlackPageMetadata.model_validate(payload.get("response_metadata") or {})
+        following = metadata.next_cursor.strip()
+        if not following and payload.get("has_more"):
+            raise ValueError("Slack capture has more records without a cursor")
+        if following:
+            digest = hashlib.sha256(following.encode()).hexdigest()
+            if following == cursor or digest in recent:
+                raise ValueError("Slack capture repeated a pagination cursor")
+            recent = (*recent[-15:], digest)
+        return items, following, recent
+
+    async def confirm_root_absent(self, native_id: str) -> None:
+        """Require provider confirmation before hiding an omitted prior conversation."""
+        try:
+            await self._get("https://slack.com/api/conversations.info", {"channel": native_id})
         except SlackApiError as exc:
             if exc.code not in {"channel_not_found", "not_in_channel"}:
                 raise

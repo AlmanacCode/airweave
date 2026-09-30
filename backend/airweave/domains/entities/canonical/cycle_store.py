@@ -12,6 +12,7 @@ from airweave.domains.entities.canonical.cycle_models import (
     BeginCycle,
     CaptureCycle,
     CompleteCycle,
+    CycleRoot,
     CycleVersion,
     RestartCycle,
 )
@@ -185,6 +186,7 @@ async def complete_cycle(db: AsyncSession, sync: Sync, request: CompleteCycle) -
     state = state.model_copy(
         update={
             "phase": "complete",
+            "completed_job_id": request.fence.job_id,
             "version": CycleVersion(
                 cycle_id=state.version.cycle_id, revision=state.version.revision + 1
             ),
@@ -214,3 +216,48 @@ async def restart_cycle(db: AsyncSession, request: RestartCycle) -> CaptureCycle
     persist(cursor, state)
     await db.flush()
     return state
+
+
+async def list_cycle_roots(
+    db: AsyncSession,
+    fence: WriterFence,
+    cycle_id: UUID,
+    *,
+    after: UUID | None = None,
+    missing: bool = False,
+) -> tuple[CycleRoot, ...]:
+    """Read up to 100 roots under the fence; absence checks require the final root page."""
+    _, state = await attest_cycle(db, fence, cycle_id)
+    predicates = [
+        Entity.organization_id == fence.organization_id,
+        Entity.sync_id == fence.sync_id,
+        Entity.entity_definition_short_name == state.configuration.root_record_type,
+        Entity.container_id.is_(None),
+        Entity.record_revision > 0,
+        Entity.deleted_at.is_(None),
+        content_is_available(),
+    ]
+    if after is not None:
+        predicates.append(Entity.id > after)
+    if missing:
+        root = await db.scalar(
+            select(CaptureScan).where(
+                CaptureScan.organization_id == fence.organization_id,
+                CaptureScan.sync_id == fence.sync_id,
+                CaptureScan.record_type == state.configuration.root_record_type,
+                CaptureScan.container_id.is_(None),
+                CaptureScan.cycle_id == cycle_id,
+                CaptureScan.phase == "reconciling",
+            )
+        )
+        if root is None or state.root_writer_attempt_id != fence.attempt_id:
+            raise CycleConflict("Root absence checks require completed current-attempt collection")
+        predicates.append(Entity.last_seen_run_id.is_distinct_from(root.sweep_id))
+    elif not await root_ready(db, fence, state):
+        raise CycleConflict("Root membership must complete before child discovery")
+    rows = (
+        await db.execute(
+            select(Entity.id, Entity.native_id).where(*predicates).order_by(Entity.id).limit(100)
+        )
+    ).all()
+    return tuple(CycleRoot(id=row.id, native_id=row.native_id) for row in rows)
