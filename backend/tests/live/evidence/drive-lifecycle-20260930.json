@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-30",
+  "scope": "full accessible allDrives corpus; no hidden filter",
+  "provider_writes": false,
+  "limits": {"records": 2000, "provider_requests": 250, "total_blob_bytes": 134217728, "per_blob_bytes": 10485760, "seconds": 300},
+  "attempts": 2,
+  "second_attempt_purpose": "sanitized diagnostic retry of same full scope",
+  "result_each_attempt": {
+    "failed": true,
+    "error_type": "ComposioProxyError",
+    "provider_requests": 11,
+    "records_observed": 4,
+    "started": 1,
+    "completed": 0,
+    "checkpoint_unchanged": true,
+    "job_status": "failed"
+  },
+  "diagnostic_retry": {"safe_reason": "Proxy download exceeds the file size limit", "last_operation": "download"},
+  "fresh_process_incremental_run": false,
+  "full_scope_verified": false,
+  "cleanup_each_attempt": {"schema_removed": true, "blob_directory_removed": true},
+  "drive_source_tests_passed": 13
+}

@@ -1,4 +1,4 @@
-"""Opt-in fixed Gmail reconciliation or selected Calendar incremental lifecycle.
+"""Opt-in Gmail, selected Calendar, or full accessible Drive lifecycle proof.
 
 Two fresh processes; no Temporal worker, hosted factory, auth or product binding claim.
 Parent owns private schema/files cleanup on success and failure. No provider writes.
@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import time
 from contextlib import aclosing, asynccontextmanager
@@ -46,6 +47,8 @@ from airweave.models import SyncCursor as StoredCursor
 from airweave.platform.configs.config import GoogleCalendarConfig
 from airweave.platform.cursors.gmail import GmailCursor
 from airweave.platform.cursors.google_calendar import GoogleCalendarCursor
+from airweave.platform.cursors.google_drive import GoogleDriveCursor
+from airweave.platform.http_client.composio_transport import ComposioProxyError
 
 
 class BudgetExceeded(RuntimeError):
@@ -55,12 +58,13 @@ class BudgetExceeded(RuntimeError):
 class BoundedStorage(harness.FilesystemBackend):
     """Cap all writes, even repeated MIME reads, before retaining another blob."""
 
-    def __init__(self, root):
+    def __init__(self, root, byte_limit):
         super().__init__(root)
         self.written_bytes = 0
+        self.byte_limit = byte_limit
 
     async def write_file(self, path, content):
-        if self.written_bytes + len(content) > 256 * 1024 * 1024:
+        if self.written_bytes + len(content) > self.byte_limit:
             raise BudgetExceeded("blob_bytes")
         await super().write_file(path, content)
         self.written_bytes += len(content)
@@ -81,6 +85,25 @@ async def bounded_observations(source, cursor, files, counters, record_limit):
             yield item
 
 
+def safe_failure_reason(error):
+    """Only local fixed diagnostics; never emit provider payloads, URLs or IDs."""
+    text = str(error)
+    if isinstance(error, BudgetExceeded) and text in {"records", "provider_requests", "blob_bytes"}:
+        return text
+    if isinstance(error, ComposioProxyError) and (
+        text
+        in {
+            "Proxy download exceeds the file size limit",
+            "Composio response exceeds the file size limit",
+            "Invalid Composio response envelope",
+            "Temporary download request failed",
+        }
+        or re.fullmatch(r"(?:Composio proxy|Temporary download) returned HTTP [0-9]{3}", text)
+    ):
+        return text
+    return None
+
+
 async def child(manifest):
     engine = create_async_engine(
         harness.test_database_url(),
@@ -95,11 +118,25 @@ async def child(manifest):
     name = manifest["provider"]
     is_calendar = name == "google_calendar"
     counters["sync_token_requests"] = 0
+    counters["resumed_changes_requests"] = 0
+    last_operation = "identity"
 
     async def request_hook(request):
+        nonlocal last_operation
+        last_operation = (
+            "export"
+            if request.url.path.endswith("/export")
+            else ("download" if request.url.params.get("alt") == "media" else "metadata")
+        )
         counters["provider_requests"] += 1
         if request.url.params.get("syncToken"):
             counters["sync_token_requests"] += 1
+        if (
+            request.url.path.endswith("/changes")
+            and previous.get("canonical_page_token")
+            and request.url.params.get("pageToken") == previous["canonical_page_token"]
+        ):
+            counters["resumed_changes_requests"] += 1
         if counters["provider_requests"] > manifest["request_limit"]:
             raise BudgetExceeded("provider_requests")
 
@@ -142,10 +179,16 @@ async def child(manifest):
         async with sessions() as db:
             previous = await cursor_service.get_cursor_data(db, sync_id, ctx)
         cursor = SyncCursor(
-            sync_id, GoogleCalendarCursor if is_calendar else GmailCursor, previous or None
+            sync_id,
+            {
+                "gmail": GmailCursor,
+                "google_calendar": GoogleCalendarCursor,
+                "google_drive": GoogleDriveCursor,
+            }[name],
+            previous or None,
         )
         loaded = cursor.loaded_from_db
-        storage = BoundedStorage(Path(manifest["root"]) / "blobs")
+        storage = BoundedStorage(Path(manifest["root"]) / "blobs", manifest["blob_byte_limit"])
         files = FileService(job_id, storage, sync_id=sync_id)
         files.MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
         fence = SimpleNamespace(organization_id=organization_id, sync_id=sync_id, job_id=job_id)
@@ -153,7 +196,13 @@ async def child(manifest):
             asyncio.timeout(manifest["timeout"]),
             rest_source(
                 name,
-                os.environ["LIVE_CALENDAR_ACCOUNT_ID" if is_calendar else "LIVE_GMAIL_ACCOUNT_ID"],
+                os.environ[
+                    {
+                        "gmail": "LIVE_GMAIL_ACCOUNT_ID",
+                        "google_calendar": "LIVE_CALENDAR_ACCOUNT_ID",
+                        "google_drive": "LIVE_DRIVE_ACCOUNT_ID",
+                    }[name]
+                ],
                 os.environ["LIVE_EXPECTED_EMAIL"],
                 os.environ["COMPOSIO_API_KEY"],
                 fence,
@@ -224,6 +273,10 @@ async def child(manifest):
             expected_scopes = 2 if loaded else 3
             assert counters["started"] == counters["completed"] == expected_scopes
             assert bool(counters["sync_token_requests"]) == loaded
+        elif name == "google_drive":
+            assert saved["canonical_page_token"]
+            assert counters["started"] == counters["completed"] == (0 if loaded else 1)
+            assert bool(counters["resumed_changes_requests"]) == loaded
         else:
             assert saved["canonical_query"] == manifest["query"]
             assert saved["history_id"] == "" and counters["started"] == counters["completed"] == 1
@@ -276,7 +329,11 @@ async def child(manifest):
             "payload_revision_digest": digest,
             "mode": ("calendar_incremental" if loaded else "calendar_initial")
             if is_calendar
-            else "filtered_full_reconciliation",
+            else (
+                ("drive_incremental" if loaded else "drive_initial")
+                if name == "google_drive"
+                else "filtered_full_reconciliation"
+            ),
             "all_day_occurrences": sum(
                 r.entity_definition_short_name == "event_occurrence"
                 and "date" in r.source_payload.get("start", {})
@@ -292,6 +349,8 @@ async def child(manifest):
         result = {
             "failed": True,
             "error_type": type(error).__name__,
+            "safe_reason": safe_failure_reason(error),
+            "last_operation": last_operation,
             **counters,
             "checkpoint_unchanged": saved == (previous or None),
             "job_status": status,
@@ -304,7 +363,7 @@ async def child(manifest):
 
 async def main():
     name = os.environ.get("LIVE_LIFECYCLE_PROVIDER", "gmail")
-    if name not in {"gmail", "google_calendar"}:
+    if name not in {"gmail", "google_calendar", "google_drive"}:
         raise ValueError("Unsupported lifecycle provider")
     url = harness.test_database_url()
     schema = "canonical_live_" + uuid4().hex
@@ -344,9 +403,12 @@ async def main():
             end = int(time.time())
             manifest = {
                 "provider": name,
-                "request_limit": 100 if name == "google_calendar" else 600,
-                "record_limit": 10000 if name == "google_calendar" else 250,
-                "timeout": 180 if name == "google_calendar" else 600,
+                "request_limit": {"gmail": 600, "google_calendar": 100, "google_drive": 250}[name],
+                "record_limit": {"gmail": 250, "google_calendar": 10000, "google_drive": 2000}[
+                    name
+                ],
+                "timeout": {"gmail": 600, "google_calendar": 180, "google_drive": 300}[name],
+                "blob_byte_limit": (128 if name == "google_drive" else 256) * 1024 * 1024,
                 "schema": schema,
                 "root": str(root),
                 "organization_id": str(organization_id),

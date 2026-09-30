@@ -177,3 +177,23 @@ loaded its durable checkpoint and made one actual master `syncToken` request.
 No all-day events occurred in this sample; DST/all-day correctness remains fixture
 coverage. The private schema and files were removed; an independent PostgreSQL
 check found zero remaining `canonical_live_*` schemas. No provider writes occurred.
+
+Drive mode: `LIVE_LIFECYCLE_PROVIDER=google_drive` with `LIVE_DRIVE_ACCOUNT_ID`
+uses the source's entire accessible `allDrives` corpus; no query, path selection,
+or hidden sampling filter is inserted. Per process: 2,000 observations,
+250 provider requests, 128 MiB total retained blob writes, 10 MiB per blob and
+300 seconds. A successful initial run must exhaust enumeration plus changes
+replay and commit its canonical page token. A second fresh process must actually
+request `/changes` with that saved token and emit no full-rescan markers; an
+expired token/reset is not reported as successful incremental proof. Failure
+stops the attempt and reports whether the previous checkpoint stayed unchanged.
+
+Drive attempt 2026-09-30: the full accessible scope stopped at the configured
+10 MiB per-file transport ceiling (`Proxy download exceeds the file size limit`)
+during a binary download. The initial attempt and one sanitized diagnostic retry
+each made 11 provider requests and yielded 4 observations, with one start marker
+and **no** completed scope. The real job became failed; the checkpoint remained
+unchanged. No second incremental process was started. This proves the bounded
+abort path, not complete Drive synchronization. Both attempts removed their
+private schema/files. Thirteen Drive source/content tests passed; a synthetic
+storage-budget check also rejected an over-budget write before retaining it.
