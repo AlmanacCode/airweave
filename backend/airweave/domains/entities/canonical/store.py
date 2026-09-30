@@ -337,7 +337,13 @@ class CanonicalRecordStore:
         return parent.visibility_epoch
 
     async def _capture_locked(
-        self, db: AsyncSession, sync: Sync, batch: CaptureBatch, *, seen_id: UUID | None = None
+        self,
+        db: AsyncSession,
+        sync: Sync,
+        batch: CaptureBatch,
+        *,
+        seen_id: UUID | None = None,
+        mark_seen: bool = True,
     ) -> CaptureResult:
         changes = []
         unchanged = 0
@@ -395,7 +401,8 @@ class CanonicalRecordStore:
                 and not attestation_changed
                 and not (observation.kind == "upsert" and not was_available)
             ):
-                entity.last_seen_run_id = seen_id or batch.fence.attempt_id
+                if mark_seen:
+                    entity.last_seen_run_id = seen_id or batch.fence.attempt_id
                 entity.observed_at = observation.observed_at
                 unchanged += 1
                 continue
@@ -438,7 +445,8 @@ class CanonicalRecordStore:
             entity.removal_reason = observation.removal_reason
             entity.completeness = observation.completeness
             entity.blob_references = [blob.model_dump(mode="json") for blob in observation.blobs]
-            entity.last_seen_run_id = seen_id or batch.fence.attempt_id
+            if mark_seen:
+                entity.last_seen_run_id = seen_id or batch.fence.attempt_id
             entity.projection_error = None
             # Flush before reading default/index state and before another observation of this ID.
             await db.flush()

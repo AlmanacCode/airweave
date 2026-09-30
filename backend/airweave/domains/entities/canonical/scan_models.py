@@ -73,6 +73,11 @@ class CommitScanPage(BaseModel):
     cycle_id: UUID
     expected: ScanVersion
     records: tuple[CaptureRecord, ...] = Field(max_length=500)
+    discovered_records: tuple[CaptureRecord, ...] = Field(
+        default=(),
+        max_length=500,
+        description="Verified independent originals from the bound source; never placeholders",
+    )
     continuation: ScanContinuation
     final: bool = False
 

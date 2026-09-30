@@ -168,12 +168,13 @@ class CanonicalScanDriver:
                         cycle_id=state.cycle_id,
                         expected=state.version,
                         records=tuple(self._parented(r, scope) for r in page.records),
+                        discovered_records=page.discovered_records,
                         continuation=page.continuation,
                         final=page.final,
                     ),
                 )
             state = result.state
-            await self.progress(result.capture, page.records)
+            await self.progress(result.capture, (*page.records, *page.discovered_records))
         if state.phase == "reconciling":
             if state.completion_policy == "discovery_with_validation":
                 state = await self.refresh_known(state)

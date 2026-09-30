@@ -253,11 +253,39 @@ class CanonicalScanStore:
         expected_parent = source_record(parent).identity if parent is not None else None
         if any(record.parent != expected_parent for record in request.records):
             raise ScanConflict("Page records must retain their exact declared parent identity")
+        combined = (*request.records, *request.discovered_records)
+        identities = {
+            (record.identity.record_type, record.identity.entity_key) for record in combined
+        }
+        if len(combined) > 500 or len(identities) != len(combined):
+            raise ScanConflict("A page must contain at most 500 distinct original identities")
+        if any(
+            record.identity.record_type not in cycle.configuration.root_record_types
+            or cycle.configuration.policy(record.identity.record_type) == "exhaustive"
+            or record.parent is not None
+            or record.identity.container_id is not None
+            or record.kind != "upsert"
+            or record.allow_reparent
+            or not record.payload
+            for record in request.discovered_records
+        ):
+            raise ScanConflict("Discovered originals must be verified independent declared roots")
         captured = await self.records._capture_locked(
             db,
             sync,
             CaptureBatch(fence=request.fence, records=request.records),
             seen_id=row.sweep_id,
+        )
+        discovered = await self.records._capture_locked(
+            db,
+            sync,
+            CaptureBatch(fence=request.fence, records=request.discovered_records),
+            mark_seen=False,
+        )
+        captured = CaptureResult(
+            changes=(*captured.changes, *discovered.changes),
+            sequence=discovered.sequence,
+            unchanged=captured.unchanged + discovered.unchanged,
         )
         row.continuation = request.continuation.value
         row.revision += 1
