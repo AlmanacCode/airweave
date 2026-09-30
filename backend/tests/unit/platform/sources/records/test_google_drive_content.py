@@ -1,8 +1,9 @@
 """Body completeness requires durable bytes matching the observed file version."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
 
 from airweave.domains.entities.canonical.requests import BlobReference
@@ -24,7 +25,7 @@ def inputs():
         "get": AsyncMock(return_value={"version": "7"}),
         "client": object(),
         "auth": object(),
-        "logger": object(),
+        "logger": Mock(),
     }
 
 
@@ -72,3 +73,29 @@ async def test_native_document_uses_existing_export_format(inputs):
         call["media_type"]
         == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
+
+
+@pytest.mark.parametrize(
+    "reason", ["exportSizeLimitExceeded", "insufficientPermissions", "unknown"]
+)
+async def test_provider_export_limit_is_narrow_and_preserves_native_payload(inputs, reason):
+    response = httpx.Response(
+        403,
+        json={"error": {"errors": [{"reason": reason}]}},
+        request=httpx.Request("GET", "https://www.googleapis.com/drive/v3/files/test/export"),
+    )
+    failure = httpx.HTTPStatusError(
+        "provider rejection", request=response.request, response=response
+    )
+    inputs["files"].capture_canonical_url.side_effect = failure
+    record = file_record(
+        {"id": "doc", "mimeType": "application/vnd.google-apps.document", "version": "7"}
+    )
+    if reason != "exportSizeLimitExceeded":
+        with pytest.raises(httpx.HTTPStatusError):
+            await capture_file_content(record, **inputs)
+        return
+    result = await capture_file_content(record, **inputs)
+    assert result is record and result.completeness == "metadata_only" and not result.blobs
+    assert result.payload == record.payload
+    inputs["get"].assert_not_awaited()

@@ -173,3 +173,44 @@ def test_added_typed_entities_are_registered():
     registry.build()
     for entity in (WisprMeetingEntity, GoogleDriveFolderEntity, SlackChannelEntity):
         assert registry.get_short_name_by_class(entity)
+
+
+async def test_owned_drive_spreadsheet_uses_real_converter():
+    import hashlib
+    from io import BytesIO
+    from pathlib import Path
+
+    import openpyxl
+
+    from airweave.domains.converters.registry import ConverterRegistry
+    from airweave.domains.entities.canonical.requests import BlobReference
+
+    workbook = openpyxl.Workbook()
+    workbook.active.append(["Project", "Status"])
+    workbook.active.append(["Owned capture", "Verified"])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    content = buffer.getvalue()
+    digest = hashlib.sha256(content).hexdigest()
+    mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    item = record(
+        "file",
+        {"id": "sheet", "name": "Planning", "mimeType": "application/vnd.google-apps.spreadsheet"},
+    )
+    blob = BlobReference(
+        key=f"canonical/{item.sync_id}/blobs/sha256/{digest}",
+        sha256=digest,
+        size_bytes=len(content),
+        media_type=mime,
+    )
+    item = item.model_copy(update={"blobs": (blob,)})
+    storage = AsyncMock()
+    storage.read_file.return_value = content
+    async with map_record(item, "google_drive", storage) as entities:
+        path = entities[0].local_path
+        assert Path(path).suffix == ".xlsx"
+        converter = ConverterRegistry().for_extension(".xlsx")
+        assert converter is not None
+        result = await converter.convert_batch([path])
+        assert "Owned capture" in result[path] and "Verified" in result[path]
+    assert not Path(path).exists()

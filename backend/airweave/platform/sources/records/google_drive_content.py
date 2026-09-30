@@ -2,6 +2,8 @@
 
 from urllib.parse import quote, urlencode
 
+import httpx
+
 from airweave.core.logging import ContextualLogger
 from airweave.domains.entities.canonical.requests import CaptureRecord
 from airweave.domains.sources.token_providers.protocol import SourceAuthProvider
@@ -46,6 +48,11 @@ async def capture_file_content(
         blob = await files.capture_canonical_url(
             url=download_url, client=client, auth=auth, logger=logger, media_type=media_type
         )
+    except httpx.HTTPStatusError as error:
+        if not _export_limit_reached(error, mime):
+            raise
+        logger.info("Drive export exceeds provider size limit; retained metadata only")
+        return record
     except FileSkippedException:
         # Declared/streamed size limits are a visible metadata-only record, not absent data.
         return record
@@ -56,4 +63,25 @@ async def capture_file_content(
         )
     return record.model_copy(
         update={"blobs": (blob,), "content_hash": blob.sha256, "completeness": "complete"}
+    )
+
+
+def _export_limit_reached(error: httpx.HTTPStatusError, mime: str) -> bool:
+    """Only the explicit native-export size failure permits retaining metadata."""
+    if error.response.status_code != 403 or not mime.startswith("application/vnd.google-apps."):
+        return False
+    try:
+        payload = error.response.json()
+    except ValueError:
+        return False
+    if not isinstance(payload, dict) or not isinstance(payload.get("error"), dict):
+        return False
+    errors = payload["error"].get("errors")
+    return (
+        isinstance(errors, list)
+        and bool(errors)
+        and all(
+            isinstance(item, dict) and item.get("reason") == "exportSizeLimitExceeded"
+            for item in errors
+        )
     )
