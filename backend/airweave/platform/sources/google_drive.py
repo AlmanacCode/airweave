@@ -16,6 +16,7 @@ References:
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -25,8 +26,15 @@ from tenacity import retry, stop_after_attempt
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
 from airweave.domains.browse_tree.types import NodeSelectionData
-from airweave.domains.entities.canonical.requests import CaptureRecord
-from airweave.domains.entities.canonical.source import SourceObservation
+from airweave.domains.entities.canonical.cycle_models import CaptureCycle, CycleConfiguration
+from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.page_source import (
+    CapturePage,
+    CapturePlan,
+    InvalidScanContinuation,
+)
+from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope
+from airweave.domains.entities.canonical.scan_models import ScanContinuation
 from airweave.domains.sources.exceptions import SourceAuthError, SourceError
 from airweave.domains.sources.token_providers.protocol import (
     SourceAuthProvider,
@@ -52,8 +60,8 @@ from airweave.platform.http_client.retry_helpers import (
 )
 from airweave.platform.sources._base import BaseSource
 from airweave.platform.sources.http_helpers import raise_for_status
-from airweave.platform.sources.records.google_drive import generate_drive_observations
 from airweave.platform.sources.records.google_drive_content import capture_file_content
+from airweave.platform.sources.records.google_drive_pages import DrivePages, rejected_listing_token
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 
 
@@ -86,27 +94,69 @@ class GoogleDriveSource(BaseSource):
 
     canonical_record_types = ("file",)
 
-    async def generate_observations(
-        self,
-        *,
-        cursor: SyncCursor | None = None,
-        files: FileService | None = None,
-        node_selections: list[NodeSelectionData] | None = None,
-    ) -> AsyncGenerator[SourceObservation, None]:
-        """Capture original file metadata; missing body bytes remain explicitly metadata-only."""
-        if self.include_patterns or node_selections:
+    canonical_container_parents = {}
+
+    @property
+    def capture_cycle_configuration(self) -> CycleConfiguration:
+        """One unfiltered accessible corpus; legacy path selections remain unsupported."""
+        if self.include_patterns:
             raise ValueError("Drive path selection is not yet supported by canonical capture")
-        async for observation in generate_drive_observations(self._get, cursor):
-            if isinstance(observation, CaptureRecord) and files is not None:
-                observation = await capture_file_content(
-                    observation,
-                    files=files,
-                    get=self._get,
-                    client=self.http_client,
-                    auth=self.auth,
-                    logger=self.logger,
-                )
-            yield observation
+        return CycleConfiguration(
+            fingerprint=hashlib.sha256(b"drive-all-accessible-v1").hexdigest(),
+            parents={"file": (None,)},
+            known_object_validation=("file",),
+        )
+
+    async def prepare_cycle(self, previous: CaptureCycle | None) -> CapturePlan:
+        """Only engine-attested full capture can authorize native changes."""
+        return await DrivePages(self._get).prepare(previous, self.capture_cycle_configuration)
+
+    def initial_continuation(self, cycle: CaptureCycle) -> ScanContinuation:
+        """Restore the persisted starting boundary."""
+        return DrivePages.initial(cycle)
+
+    async def _capture_body(self, record: CaptureRecord, files: FileService) -> CaptureRecord:
+        return await capture_file_content(
+            record,
+            files=files,
+            get=self._get,
+            client=self.http_client,
+            auth=self.auth,
+            logger=self.logger,
+        )
+
+    async def capture_page(
+        self,
+        scope: CompletedScope,
+        continuation: ScanContinuation,
+        *,
+        files: FileService,
+        parent: SourceRecord | None = None,
+    ) -> CapturePage:
+        """Commit one version-checked file without retaining a native response queue."""
+        if scope != CompletedScope(record_type="file") or parent is not None:
+            raise ValueError("Drive requires its independent file scope")
+
+        async def hydrate(record: CaptureRecord) -> CaptureRecord:
+            return await self._capture_body(record, files)
+
+        return await DrivePages(self._get).page(continuation, hydrate)
+
+    async def refresh_known(self, record: SourceRecord, *, files: FileService) -> CaptureRecord:
+        """Known list omissions require an exact accessible-file read."""
+        if record.identity.record_type != "file" or record.parent is not None:
+            raise ValueError("Drive omission must identify an independent file")
+        return await self._capture_body(
+            await DrivePages(self._get).current(record.identity.native_id), files
+        )
+
+    def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
+        """Folders are native metadata, not proof of inherited access."""
+        raise ValueError("Drive has no canonical child scopes")
+
+    async def confirm_absent(self, record: SourceRecord) -> None:
+        """Every omitted file uses exact known-object refresh."""
+        raise ValueError("Drive absence requires exact known-object refresh")
 
     @classmethod
     async def create(
@@ -160,6 +210,15 @@ class GoogleDriveSource(BaseSource):
         if response.status_code == 401 and self.auth.supports_refresh:
             headers = await authorization_headers(self.auth, refresh=True)
             response = await self.http_client.get(url, headers=headers, params=params, timeout=30.0)
+
+        if (
+            response.status_code == 400
+            and url == "https://www.googleapis.com/drive/v3/files"
+            and params
+            and params.get("pageToken")
+            and rejected_listing_token(response.json())
+        ):
+            raise InvalidScanContinuation("Drive rejected its saved inventory page token")
 
         raise_for_status(
             response,
