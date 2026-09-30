@@ -335,9 +335,55 @@ async def test_mixed_coverage_wire_from_sql(database, source, tmp_path):
             source[1].sync_id
         ]
         assert complete.scope_summary.unfinished == 0 and complete.phase == "complete"
+    assert complete.scope_summary.completed_changes == 0
+    source = await next_job(database, source)
+    delta = MixedSource(fail_window=True, window="next-window")
+    pipeline, ctx, runtime = await setup(database, source, delta)
+    with pytest.raises(SourceServerError):
+        await run(pipeline, ctx, runtime)
+    assert [value["mode"] for kind, value in delta.calls if kind == "event"] == ["changes"]
+    async with database() as db:
+        partial_delta = (
+            await capture_coverage(db, source[1].organization_id, (source[1].sync_id,))
+        )[source[1].sync_id]
+        assert partial_delta.phase == "active" and partial_delta.discovery == "pending"
+        assert partial_delta.scope_summary.model_dump() == {
+            "eligible": 3,
+            "completed_full": 1,
+            "completed_changes": 1,
+            "unfinished": 1,
+        }
+    resumed = MixedSource(window="must-preserve-next-window")
+    pipeline, ctx, runtime = await setup(database, source, resumed, 2)
+    await run(pipeline, ctx, runtime)
+    assert [kind for kind, _ in resumed.calls] == ["calendar", "event_occurrence"]
+    async with database() as db:
+        complete_delta = (
+            await capture_coverage(db, source[1].organization_id, (source[1].sync_id,))
+        )[source[1].sync_id]
+        assert complete_delta.phase == "complete"
+        assert complete_delta.discovery == "scope_enumeration_complete"
+        assert complete_delta.scope_summary.model_dump() == {
+            "eligible": 3,
+            "completed_full": 2,
+            "completed_changes": 1,
+            "unfinished": 0,
+        }
+        assert complete_delta.last_full_capture is None
+        assert complete_delta.provider_checkpoint_promoted_at is None
+        unchanged = await db.scalar(
+            select(Entity).where(
+                Entity.entity_definition_short_name == "event", Entity.native_id == "b"
+            )
+        )
+        assert unchanged.deleted_at is None
     (tmp_path / "mixed-coverage.json").write_text(
         json.dumps(
-            [item.model_dump(mode="json") for item in (unknown, partial, complete)], indent=2
+            [
+                item.model_dump(mode="json")
+                for item in (unknown, partial, complete, partial_delta, complete_delta)
+            ],
+            indent=2,
         )
     )
 
