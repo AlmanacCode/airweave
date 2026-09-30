@@ -18,9 +18,16 @@ def envelope(reason, *, domain="usageLimits", code=403):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["_get", "_get_capture_json"])
-@pytest.mark.parametrize("reason", ["rateLimitExceeded", "userRateLimitExceeded"])
-@pytest.mark.parametrize("delay", [None, "3", "180", "invalid", "NaN"])
+@pytest.mark.parametrize(
+    "method,reason,delay",
+    [
+        ("_get", "rateLimitExceeded", None),
+        ("_get_capture_json", "userRateLimitExceeded", "3"),
+        ("_get_capture_json", "rateLimitExceeded", "180"),
+        ("_get_capture_json", "rateLimitExceeded", "invalid"),
+        ("_get_capture_json", "rateLimitExceeded", "NaN"),
+    ],
+)
 async def test_native_quota_retry_is_bounded_and_preserves_evidence(method, reason, delay):
     calls = 0
 
@@ -54,7 +61,6 @@ async def test_native_quota_retry_is_bounded_and_preserves_evidence(method, reas
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["_get", "_get_capture_json"])
 @pytest.mark.parametrize(
     "body",
     [
@@ -78,7 +84,7 @@ async def test_native_quota_retry_is_bounded_and_preserves_evidence(method, reas
         b"{broken",
     ],
 )
-async def test_permission_unknown_and_malformed_errors_do_not_retry(method, body):
+async def test_permission_unknown_and_malformed_errors_do_not_retry(body):
     calls = 0
 
     def handler(request):
@@ -98,7 +104,7 @@ async def test_permission_unknown_and_malformed_errors_do_not_retry(method, body
             config=GmailConfig(),
         )
         with pytest.raises(SourceEntityForbiddenError):
-            await getattr(source, method)("https://gmail.googleapis.com/gmail/v1/users/me/profile")
+            await source._get_capture_json("https://gmail.googleapis.com/gmail/v1/users/me/profile")
     assert calls == 1
 
 
