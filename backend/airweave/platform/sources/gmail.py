@@ -19,6 +19,10 @@ from tenacity import retry, retry_if_exception, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
+from airweave.domains.auth_provider.exceptions import (
+    AuthProviderRateLimitError,
+    AuthProviderServerError,
+)
 from airweave.domains.browse_tree.types import NodeSelectionData
 from airweave.domains.entities.canonical.cycle_models import CaptureCycle, CycleConfiguration
 from airweave.domains.entities.canonical.models import SourceRecord
@@ -66,15 +70,25 @@ from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 
 def _should_retry_gmail_request(exception: Exception) -> bool:
     """Custom retry condition that excludes 404 errors but includes 429 and timeouts."""
+    if isinstance(exception, (SourceRateLimitError, AuthProviderRateLimitError)):
+        # The shared wait caps at 120s. Defer a longer provider minimum instead
+        # of retrying before it or extending this request's bounded wait.
+        return exception.retry_after <= 120
     if isinstance(exception, httpx.HTTPStatusError):
-        if exception.response.status_code == 404:
-            return False
         if exception.response.status_code == 429:
-            return True
-        return True
+            try:
+                return float(exception.response.headers.get("Retry-After", "0")) <= 120
+            except ValueError:
+                return True  # Preserve the shared helper's fallback for invalid headers.
+        return exception.response.status_code >= 500
     if isinstance(
         exception,
-        (httpx.ConnectTimeout, httpx.ReadTimeout, SourceRateLimitError, SourceServerError),
+        (
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            SourceServerError,
+            AuthProviderServerError,
+        ),
     ):
         return True
     return False
