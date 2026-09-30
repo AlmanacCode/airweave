@@ -218,8 +218,12 @@ def validate_checkpoint(name, manifest, counters, saved, previous, loaded, attem
         assert counters["started"] == counters["completed"] == expected_scopes
         assert bool(counters["sync_token_requests"]) == loaded
     elif name == "google_drive":
-        assert saved["canonical_page_token"]
-        assert counters["started"] == counters["completed"] == (0 if loaded else 1)
+        cycle = saved["canonical_cycle"]
+        assert cycle["phase"] == "complete" and cycle["completed_job_id"]
+        assert cycle["last_full_capture"] and cycle["promoted_checkpoint"]
+        assert cycle["promoted_checkpoint"]["checkpoint"]["value"]["page_token"]
+        assert cycle["mode"] == ("changes" if loaded else "full")
+        assert counters["started"] == counters["completed"] == 0
         assert bool(counters["resumed_changes_requests"]) == loaded
     elif name in {"slack", "wispr"}:
         assert saved["canonical_cycle"]["phase"] == "complete"
@@ -302,6 +306,19 @@ def count_gmail_request(name, request, previous, counters, identity_verified):
             counters["resumed_changes_requests"] += 1
 
 
+def count_drive_request(name, request, previous, counters):
+    """Count only an actual request using the previously published Drive boundary."""
+    if name != "google_drive" or not request.url.path.endswith("/changes"):
+        return
+    promoted = previous.get("canonical_cycle", {}).get("promoted_checkpoint")
+    if (
+        promoted
+        and request.url.params.get("pageToken")
+        == promoted["checkpoint"]["value"]["page_token"]
+    ):
+        counters["resumed_changes_requests"] += 1
+
+
 async def child(manifest):
     engine = create_async_engine(
         harness.test_database_url(),
@@ -361,12 +378,7 @@ async def child(manifest):
         count_gmail_request(name, request, previous, counters, identity_verified)
         if request.url.params.get("syncToken"):
             counters["sync_token_requests"] += 1
-        if (
-            request.url.path.endswith("/changes")
-            and previous.get("canonical_page_token")
-            and request.url.params.get("pageToken") == previous["canonical_page_token"]
-        ):
-            counters["resumed_changes_requests"] += 1
+        count_drive_request(name, request, previous, counters)
 
     @asynccontextmanager
     async def db_context():

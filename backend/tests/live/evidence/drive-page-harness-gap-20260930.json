@@ -1,0 +1,20 @@
+{
+  "source_commit": "35cb5fb",
+  "verified_at": "2026-09-30",
+  "provider": "google_drive",
+  "harness_exit_code": 1,
+  "job_status": "completed",
+  "error_type": "KeyError",
+  "identified_harness_gap": "validate_checkpoint expects removed legacy canonical_page_token; new adapter publishes canonical_cycle checkpoint",
+  "provider_requests": 140,
+  "records_observed": 55,
+  "blob_bytes_written": 207614203,
+  "second_cycle_ran": false,
+  "complete_trial_verified": false,
+  "schema_removed": true,
+  "blob_directory_removed": true,
+  "independent_private_schemas": 0,
+  "independent_private_directories": 0,
+  "immutable_archive_removed": true,
+  "provider_writes": false
+}
