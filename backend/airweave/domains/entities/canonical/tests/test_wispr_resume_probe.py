@@ -39,6 +39,19 @@ async def main():
     calls = []
     source = await connector([{"id": str(i)} for i in range(6)], calls,
         fail_at=2 if mode == "fail" else None)
+    if os.environ.get("TEST_MIXED") == "1":
+        async def mixed(slug, arguments):
+            rows=[{"id":"private-same-id-"+str(i)} for i in range(3)]
+            if slug == "WISPR_FLOW_MCP_SEARCH_MEETINGS":
+                return {"meetings":rows,"has_more":False}
+            if slug == "WISPR_FLOW_MCP_SEARCH_SCRATCHPAD_NOTES":
+                return {"notes":rows,"has_more":False}
+            if slug == "WISPR_FLOW_MCP_GET_MEETING":
+                return {"id":arguments["meeting_id"],"content":"private meeting text",
+                        "transcript":"private transcript text"}
+            assert slug == "WISPR_FLOW_MCP_GET_SCRATCHPAD_NOTE"
+            return {"id":arguments["note_id"],"content":"private scratchpad text"}
+        source._execute = mixed
     counters = {"provider_requests": 0, "records_observed": 0}
     execute = source._execute
     async def counted(*args):
@@ -76,11 +89,11 @@ async def test_wispr_process_restart_skips_completed_bodies(database, source, tm
     code, output, error = await subprocess_script(SCRIPT, {**env, "TEST_MODE": "interrupt"})
     assert code == 75, error
     first = json.loads(output.splitlines()[-1])
-    assert first["completed_bodies"] == 3 and first["provider_requests"] == 4
+    assert first["completed_bodies"] == 3 and first["provider_requests"] == 5
     code, output, error = await subprocess_script(SCRIPT, {**env, "TEST_MODE": "resume"})
     assert code == 76, error
     second = json.loads(output.splitlines()[-1])
-    assert second["wispr_recovery_verified"] and second["provider_requests"] == 2
+    assert second["wispr_recovery_verified"] and second["provider_requests"] == 3
     assert not second["full_scope_completed"]
     assert (tmp_path / "target.json").stat().st_mode & 0o077 == 0
 
@@ -156,3 +169,56 @@ async def test_wispr_pipeline_rejects_actual_topology_mismatch(database, source,
     )
     assert code not in (0, 75, 76)
     assert "Page source cycle must match its declared container topology" in error
+
+
+async def test_wispr_legacy_target_is_rejected_without_private_output(tmp_path):
+    script = r"""
+import sys, json, os
+from pathlib import Path
+from uuid import uuid4
+sys.path.insert(0,"tests/live")
+import conftest
+from wispr_resume import WisprResumeProbe
+path=Path(os.environ["TARGET"])
+path.write_text(json.dumps({"cycle_id":str(uuid4()),"bodies":[]}))
+try:
+    WisprResumeProbe(None,None,None,None,None,path,"resume",{})
+except ValueError as exc:
+    assert str(exc)=="Incompatible Wispr resume target; start a new private v3 trial"
+else:
+    raise AssertionError("Legacy target accepted")
+print("verified")
+"""
+    code, output, error = await subprocess_script(
+        script, {"TARGET": str(tmp_path / "old-target.json")}
+    )
+    assert code == 0, error
+    assert output.strip() == "verified"
+
+
+async def test_mixed_kind_native_id_collision_survives_real_process_resume(
+    database, source, tmp_path
+):
+    async with database() as db:
+        schema = await db.scalar(text("select current_schema()"))
+    target = tmp_path / "mixed-target.json"
+    env = {
+        "TEST_SCHEMA": schema,
+        "TEST_FENCE": source[1].model_dump_json(),
+        "TEST_TARGET": str(target),
+        "TEST_MIXED": "1",
+    }
+    code, output, error = await subprocess_script(SCRIPT, {**env, "TEST_MODE": "interrupt"})
+    assert code == 75, error
+    saved = json.loads(target.read_text())
+    assert saved["schema_version"] == 3 and len(saved["configuration_digest"]) == 64
+    assert len(saved["bodies"]) == 3
+    assert all("record_type" in body for body in saved["bodies"])
+    assert "private" not in output and "private" not in target.read_text()
+    code, output, error = await subprocess_script(SCRIPT, {**env, "TEST_MODE": "resume"})
+    assert code == 76, error
+    evidence = json.loads(output.splitlines()[-1])
+    assert evidence["wispr_recovery_verified"] and evidence["completed_bodies"] == 4
+    assert all(count > 0 for count in evidence["completed_body_kinds"].values())
+    assert "private" not in output
+    assert target.stat().st_mode & 0o077 == 0
