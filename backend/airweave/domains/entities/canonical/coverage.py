@@ -3,7 +3,7 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,11 +15,23 @@ from airweave.domains.entities.canonical.cycle_models import (
 from airweave.models.sync_cursor import SyncCursor
 
 
+class FullCaptureCoverage(BaseModel):
+    """Public coverage evidence excludes private provider continuation values."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    cycle_id: UUID
+    completed_at: AwareDatetime
+    discovery: Literal["incomplete", "scope_enumeration_complete"]
+
+
 class CaptureCoverage(BaseModel):
     """No cycle means unknown; completion only certifies the declared scope policies."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     phase: Literal["active", "complete"]
+    mode: Literal["full", "changes"] = "full"
+    last_full_capture: FullCaptureCoverage | None = None
+    provider_checkpoint_promoted_at: AwareDatetime | None = None
     policies: dict[str, CompletionPolicy]
     discovery: Literal["incomplete", "pending", "scope_enumeration_complete"]
 
@@ -50,7 +62,30 @@ async def capture_coverage(
             if cycle.phase == "active"
             else "scope_enumeration_complete"
         )
+        evidence = cycle.last_full_capture
+        if evidence is not None and evidence.configuration_digest != cycle.configuration.digest():
+            continue
+        promoted = cycle.promoted_checkpoint
+        if cycle.mode == "changes":
+            if (
+                evidence is None
+                or promoted is None
+                or (promoted.configuration_digest != cycle.configuration.digest())
+            ):
+                continue
+            discovery = evidence.discovery
         result[row.sync_id] = CaptureCoverage(
-            phase=cycle.phase, policies=policies, discovery=discovery
+            phase=cycle.phase,
+            policies=policies,
+            discovery=discovery,
+            mode=cycle.mode,
+            last_full_capture=FullCaptureCoverage(
+                cycle_id=evidence.cycle_id,
+                completed_at=evidence.completed_at,
+                discovery=evidence.discovery,
+            )
+            if evidence
+            else None,
+            provider_checkpoint_promoted_at=promoted.promoted_at if promoted else None,
         )
     return result

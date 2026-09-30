@@ -6,17 +6,18 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, field_validator
 
-from airweave.domains.entities.canonical.cycle_models import CompletionPolicy
+from airweave.domains.entities.canonical.cycle_models import (
+    TERMINAL_CHECKPOINT_KEY,
+    CompletionPolicy,
+    ProviderCheckpoint,
+)
 from airweave.domains.entities.canonical.models import CaptureResult, SourceRecord
-from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope, WriterFence
-
-
-class ScanVersion(BaseModel):
-    """The exact durable state a caller observed before external I/O."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    sweep_id: UUID
-    revision: int = Field(ge=1)
+from airweave.domains.entities.canonical.requests import (
+    CaptureRecord,
+    CompletedScope,
+    ScanVersion,
+    WriterFence,
+)
 
 
 class ScanContinuation(BaseModel):
@@ -29,6 +30,8 @@ class ScanContinuation(BaseModel):
     @classmethod
     def bounded(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
         """Bound serialized state before it enters a transaction."""
+        if TERMINAL_CHECKPOINT_KEY in value:
+            raise ValueError("Source continuation uses a reserved engine key")
         if len(json.dumps(value, allow_nan=False, ensure_ascii=False).encode()) > 65536:
             raise ValueError("Scan continuation exceeds 64 KiB")
         return value
@@ -62,6 +65,8 @@ class ScanState(BaseModel):
     parent_visibility_epoch: int | None = None
     membership_attempt_id: UUID | None = None
     completion_policy: CompletionPolicy = "exhaustive"
+    mode: Literal["full", "changes"] = "full"
+    provider_checkpoint: ProviderCheckpoint | None = None
 
 
 class CommitScanPage(BaseModel):
@@ -80,6 +85,7 @@ class CommitScanPage(BaseModel):
     )
     continuation: ScanContinuation
     final: bool = False
+    provider_checkpoint: ProviderCheckpoint | None = None
 
 
 class ReconcileScan(BaseModel):

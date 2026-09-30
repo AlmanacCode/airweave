@@ -11,6 +11,14 @@ ScopeRemovalReason = Literal["scope_removed", "access_revoked"]
 RecordKind = Annotated[str, Field(min_length=1, max_length=200)]
 
 
+class ScanVersion(BaseModel):
+    """Exact durable scope version observed before provider I/O."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    sweep_id: UUID
+    revision: int = Field(ge=1)
+
+
 class RecordIdentity(BaseModel):
     """Native identity inside one sync, including provider-required container."""
 

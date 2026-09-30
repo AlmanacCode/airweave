@@ -4,10 +4,16 @@ import json
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+from pydantic import JsonValue
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from airweave.domains.entities.canonical.cycle_models import CycleVersion
+from airweave.domains.entities.canonical.cycle_models import (
+    TERMINAL_CHECKPOINT_KEY,
+    CaptureMode,
+    CycleVersion,
+    ProviderCheckpoint,
+)
 from airweave.domains.entities.canonical.cycle_store import (
     CycleConflict,
     attest_cycle,
@@ -72,12 +78,37 @@ def scan_state(row: CaptureScan, parent: Entity | None = None) -> ScanState:
         version=ScanVersion(sweep_id=row.sweep_id, revision=row.revision),
         phase=row.phase,
         fingerprint=row.fingerprint,
-        continuation=ScanContinuation(value=row.continuation),
+        continuation=ScanContinuation(
+            value={
+                key: value
+                for key, value in row.continuation.items()
+                if key != TERMINAL_CHECKPOINT_KEY
+            }
+        ),
+        provider_checkpoint=ProviderCheckpoint.model_validate(
+            row.continuation[TERMINAL_CHECKPOINT_KEY]
+        )
+        if TERMINAL_CHECKPOINT_KEY in row.continuation
+        else None,
         started_at=row.started_at,
         completed_at=row.completed_at,
         parent_visibility_epoch=row.parent_visibility_epoch,
         membership_attempt_id=row.membership_attempt_id,
     )
+
+
+def page_continuation(request: CommitScanPage, mode: CaptureMode) -> dict[str, JsonValue]:
+    """The terminal boundary commits with the records it certifies, never in a later call."""
+    if request.provider_checkpoint is not None and not request.final:
+        raise ScanConflict("Only a terminal page may certify a provider checkpoint")
+    if mode == "changes" and request.final and request.provider_checkpoint is None:
+        raise ScanConflict("Changes terminal page requires a provider checkpoint")
+    if mode == "changes" and any(record.removal_reason == "absent" for record in request.records):
+        raise ScanConflict("Changes require explicit deletion evidence, never absence")
+    continuation = dict(request.continuation.value)
+    if request.provider_checkpoint is not None:
+        continuation[TERMINAL_CHECKPOINT_KEY] = request.provider_checkpoint.model_dump(mode="json")
+    return continuation
 
 
 class CanonicalScanStore:
@@ -129,7 +160,8 @@ class CanonicalScanStore:
             update={
                 "completion_policy": cycle.configuration.policy(row.record_type)
                 if cycle
-                else "exhaustive"
+                else "exhaustive",
+                "mode": cycle.mode if cycle else "full",
             }
         )
 
@@ -230,6 +262,7 @@ class CanonicalScanStore:
         """Capture and advance the page as one transaction, never a partial acknowledgement."""
         sync = await self.records._fenced_sync(db, request.fence)
         _, cycle = await attest_cycle(db, request.fence, request.cycle_id)
+        continuation = page_continuation(request, cycle.mode)
         await attest_scope(db, request.fence, cycle, request.scope)
         row = self._expect(
             await self._row(db, request.fence, request.scope), request.expected, request.cycle_id
@@ -287,10 +320,11 @@ class CanonicalScanStore:
             sequence=discovered.sequence,
             unchanged=captured.unchanged + discovered.unchanged,
         )
-        row.continuation = request.continuation.value
+        row.continuation = continuation
         row.revision += 1
         if request.final:
-            row.phase = "reconciling"
+            row.phase = "complete" if cycle.mode == "changes" else "reconciling"
+            row.completed_at = datetime.now(timezone.utc) if cycle.mode == "changes" else None
         await db.flush()
         return ScanResult(state=await self._state(db, row), capture=captured)
 
@@ -346,6 +380,8 @@ class CanonicalScanStore:
         """Bounded exact inventory omissions, only after current-attempt collection."""
         await self.records._fenced_sync(db, fence)
         _, cycle = await attest_cycle(db, fence, state.cycle_id)
+        if cycle.mode == "changes":
+            raise ScanConflict("Changes scans cannot reconcile or validate enumeration absence")
         await attest_scope(db, fence, cycle, state.scope)
         row = self._expect(await self._row(db, fence, state.scope), state.version, state.cycle_id)
         parent = await scope_owner(db, fence, cycle, state.scope)
@@ -387,6 +423,8 @@ class CanonicalScanStore:
         """Commit exact known-object validation with its sweep acknowledgement."""
         sync = await self.records._fenced_sync(db, request.fence)
         _, cycle = await attest_cycle(db, request.fence, request.state.cycle_id)
+        if cycle.mode == "changes":
+            raise ScanConflict("Changes scans cannot reconcile or validate enumeration absence")
         if (
             cycle.configuration.policy(request.state.scope.record_type)
             != "discovery_with_validation"
@@ -425,6 +463,8 @@ class CanonicalScanStore:
         """A final page is necessary; absence completion is durable and bounded."""
         sync = await self.records._fenced_sync(db, request.fence)
         _, cycle = await attest_cycle(db, request.fence, request.cycle_id)
+        if cycle.mode == "changes":
+            raise ScanConflict("Changes scans cannot reconcile or validate enumeration absence")
         await attest_scope(db, request.fence, cycle, request.scope)
         row = self._expect(
             await self._row(db, request.fence, request.scope), request.expected, request.cycle_id

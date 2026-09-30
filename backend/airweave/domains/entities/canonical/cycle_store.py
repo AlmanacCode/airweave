@@ -10,10 +10,14 @@ from sqlalchemy.orm import aliased
 from airweave.domains.entities.canonical.checkpoint import CanonicalCheckpoint
 from airweave.domains.entities.canonical.cycle_models import (
     CYCLE_KEY,
+    TERMINAL_CHECKPOINT_KEY,
     BeginCycle,
     CaptureCycle,
     CompleteCycle,
     CycleVersion,
+    FullCaptureEvidence,
+    PromotedCheckpoint,
+    ProviderCheckpoint,
     RestartCycle,
     ScopeWork,
 )
@@ -61,6 +65,40 @@ def persist(cursor: SyncCursor, state: CaptureCycle) -> None:
     cursor.last_updated = datetime.now(timezone.utc)
 
 
+def next_cycle(previous: CaptureCycle | None, request: BeginCycle | RestartCycle) -> CaptureCycle:
+    """One immutable execution plan; incompatible history never becomes a delta baseline."""
+    digest = request.configuration.digest()
+    evidence = previous.last_full_capture if previous else None
+    promoted = previous.promoted_checkpoint if previous else None
+    if evidence is not None and evidence.configuration_digest != digest:
+        evidence = None
+    if promoted is not None and promoted.configuration_digest != digest:
+        promoted = None
+    starting = request.starting_checkpoint
+    if request.mode == "changes":
+        if len(request.configuration.parents) != 1 or next(
+            iter(request.configuration.parents.values())
+        ) != (None,):
+            raise CycleConflict("Changes currently require one independent root kind")
+        if evidence is None or promoted is None:
+            raise CycleConflict(
+                "Changes require a completed compatible full capture and checkpoint"
+            )
+        if starting is not None and starting != promoted.checkpoint:
+            raise CycleConflict("Changes must start at the last promoted provider checkpoint")
+        starting = promoted.checkpoint
+    return CaptureCycle(
+        version=CycleVersion(
+            cycle_id=uuid4(), revision=1 if previous is None else previous.version.revision + 1
+        ),
+        configuration=request.configuration,
+        mode=request.mode,
+        starting_checkpoint=starting,
+        promoted_checkpoint=promoted,
+        last_full_capture=evidence,
+    )
+
+
 async def begin_cycle(db: AsyncSession, request: BeginCycle) -> CaptureCycle:
     """An explicit completed-version CAS starts the next cycle."""
     cursor = await cursor_row(db, request.fence)
@@ -72,6 +110,13 @@ async def begin_cycle(db: AsyncSession, request: BeginCycle) -> CaptureCycle:
             if state.configuration != request.configuration:
                 raise CycleConflict(
                     "Active cycle configuration changed; explicit abandonment required"
+                )
+            if state.mode != request.mode or (
+                request.starting_checkpoint is not None
+                and request.starting_checkpoint != state.starting_checkpoint
+            ):
+                raise CycleConflict(
+                    "Active cycle execution plan changed; explicit restart required"
                 )
             return state
         if request.expected is None:
@@ -85,12 +130,7 @@ async def begin_cycle(db: AsyncSession, request: BeginCycle) -> CaptureCycle:
             cursor_data={},
         )
         db.add(cursor)
-    state = CaptureCycle(
-        version=CycleVersion(
-            cycle_id=uuid4(), revision=1 if state is None else state.version.revision + 1
-        ),
-        configuration=request.configuration,
-    )
+    state = next_cycle(state, request)
     persist(cursor, state)
     await db.flush()
     return state
@@ -289,6 +329,43 @@ async def next_scope_work(db: AsyncSession, fence: WriterFence, cycle_id: UUID) 
     return None
 
 
+async def terminal_checkpoint(
+    db: AsyncSession, state: CaptureCycle, request: CompleteCycle, now: datetime
+) -> PromotedCheckpoint | None:
+    """Attest the source's terminal scan before publishing its provider boundary."""
+    terminal = request.terminal_checkpoint
+    if (state.starting_checkpoint is not None or state.mode == "changes") and terminal is None:
+        raise CycleConflict("Checkpoint-bearing capture requires its terminal scan boundary")
+    promoted = state.promoted_checkpoint if state.mode == "changes" else None
+    if terminal is not None:
+        if terminal.record_type not in state.configuration.root_record_types:
+            raise CycleConflict("Terminal checkpoint must belong to a declared root scope")
+        scan = await db.scalar(
+            select(CaptureScan).where(
+                CaptureScan.organization_id == request.fence.organization_id,
+                CaptureScan.sync_id == request.fence.sync_id,
+                CaptureScan.cycle_id == state.version.cycle_id,
+                CaptureScan.record_type == terminal.record_type,
+                CaptureScan.container_id.is_(None),
+                CaptureScan.parent_record_id.is_(None),
+                CaptureScan.phase == "complete",
+                CaptureScan.sweep_id == terminal.expected.sweep_id,
+                CaptureScan.revision == terminal.expected.revision,
+            )
+        )
+        if scan is None:
+            raise CycleConflict("Terminal scan changed or is not complete")
+        committed = scan.continuation.get(TERMINAL_CHECKPOINT_KEY)
+        if committed is None or ProviderCheckpoint.model_validate(committed) != terminal.checkpoint:
+            raise CycleConflict("Provider checkpoint does not match committed terminal page")
+        promoted = PromotedCheckpoint(
+            checkpoint=terminal.checkpoint,
+            configuration_digest=state.configuration.digest(),
+            promoted_at=now,
+        )
+    return promoted
+
+
 async def complete_cycle(db: AsyncSession, sync: Sync, request: CompleteCycle) -> CaptureCycle:
     """Publish the checkpoint only when SQL proves all currently visible scopes complete."""
     cursor, state = await attest_cycle(db, request.fence, request.expected.cycle_id)
@@ -315,9 +392,26 @@ async def complete_cycle(db: AsyncSession, sync: Sync, request: CompleteCycle) -
         )
         if missing is not None:
             raise CycleConflict("A visible parent still has an incomplete child scope")
+    now = datetime.now(timezone.utc)
+    promoted = await terminal_checkpoint(db, state, request, now)
+    evidence = state.last_full_capture
+    if state.mode == "full":
+        evidence = FullCaptureEvidence(
+            cycle_id=state.version.cycle_id,
+            completed_at=now,
+            configuration_digest=state.configuration.digest(),
+            discovery="scope_enumeration_complete"
+            if all(
+                state.configuration.policy(kind) == "exhaustive"
+                for kind in state.configuration.parents
+            )
+            else "incomplete",
+        )
     state = state.model_copy(
         update={
             "phase": "complete",
+            "promoted_checkpoint": promoted,
+            "last_full_capture": evidence,
             "completed_job_id": request.fence.job_id,
             "version": CycleVersion(
                 cycle_id=state.version.cycle_id, revision=state.version.revision + 1
@@ -341,10 +435,7 @@ async def restart_cycle(db: AsyncSession, request: RestartCycle) -> CaptureCycle
     cursor, previous = await attest_cycle(db, request.fence, request.expected.cycle_id)
     if previous.version != request.expected:
         raise CycleConflict("Cycle changed before explicit restart")
-    state = CaptureCycle(
-        version=CycleVersion(cycle_id=uuid4(), revision=previous.version.revision + 1),
-        configuration=request.configuration,
-    )
+    state = next_cycle(previous, request)
     persist(cursor, state)
     await db.flush()
     return state

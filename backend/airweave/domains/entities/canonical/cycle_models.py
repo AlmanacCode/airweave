@@ -1,16 +1,30 @@
 """Typed engine-owned cycle state inside the existing SyncCursor."""
 
+import hashlib
+import json
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 
 from airweave.domains.entities.canonical.models import SourceRecord
-from airweave.domains.entities.canonical.requests import RecordKind, WriterFence
+from airweave.domains.entities.canonical.requests import RecordKind, ScanVersion, WriterFence
 
 CompletionPolicy = Literal["exhaustive", "discovery_only", "discovery_with_validation"]
 
+CaptureMode = Literal["full", "changes"]
+CompletedDiscovery = Literal["incomplete", "scope_enumeration_complete"]
+
 CYCLE_KEY = "canonical_cycle"
+TERMINAL_CHECKPOINT_KEY = "_canonical_terminal_checkpoint"
 
 
 class CycleConfiguration(BaseModel):
@@ -20,6 +34,12 @@ class CycleConfiguration(BaseModel):
     fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
     parents: dict[RecordKind, tuple[RecordKind | None, ...]]
     completion_policies: dict[RecordKind, CompletionPolicy] = Field(default_factory=dict)
+
+    def digest(self) -> str:
+        """Bind history to scope, topology and guarantees, including default policies."""
+        value = self.model_dump(mode="json")
+        value["completion_policies"] = {kind: self.policy(kind) for kind in self.parents}
+        return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
     def policy(self, kind: str) -> CompletionPolicy:
         """Omitted declarations preserve historical exhaustive semantics."""
@@ -110,6 +130,49 @@ class CycleVersion(BaseModel):
     revision: int = Field(ge=1)
 
 
+class ProviderCheckpoint(BaseModel):
+    """Bounded connector state; distinct from the engine's change-sequence checkpoint."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    value: dict[str, JsonValue]
+
+    @field_validator("value")
+    @classmethod
+    def bounded(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        """Never store an unbounded provider response or work queue."""
+        if not value or len(json.dumps(value, allow_nan=False).encode()) > 65536:
+            raise ValueError("Provider checkpoint must contain at most 64 KiB of state")
+        return value
+
+
+class FullCaptureEvidence(BaseModel):
+    """A completed full pass certifies only its explicit discovery guarantee."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    cycle_id: UUID
+    completed_at: AwareDatetime
+    discovery: CompletedDiscovery
+    configuration_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class PromotedCheckpoint(BaseModel):
+    """Only successful cycle finalization advances this private provider boundary."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    checkpoint: ProviderCheckpoint
+    configuration_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    promoted_at: AwareDatetime
+
+
+class TerminalCheckpoint(BaseModel):
+    """Source-parsed boundary from an exact completed root scan, attested during publication."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    record_type: RecordKind
+    expected: ScanVersion
+    checkpoint: ProviderCheckpoint
+
+
 class CaptureCycle(BaseModel):
     """Completion stays durable until an explicit next-cycle CAS."""
 
@@ -119,6 +182,10 @@ class CaptureCycle(BaseModel):
     configuration: CycleConfiguration
     phase: Literal["active", "complete"] = "active"
     completed_job_id: UUID | None = None
+    mode: CaptureMode = "full"
+    starting_checkpoint: ProviderCheckpoint | None = None
+    promoted_checkpoint: PromotedCheckpoint | None = None
+    last_full_capture: FullCaptureEvidence | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -138,6 +205,8 @@ class BeginCycle(BaseModel):
     fence: WriterFence
     configuration: CycleConfiguration
     expected: CycleVersion | None = None
+    mode: CaptureMode = "full"
+    starting_checkpoint: ProviderCheckpoint | None = None
 
 
 class CompleteCycle(BaseModel):
@@ -146,6 +215,7 @@ class CompleteCycle(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     fence: WriterFence
     expected: CycleVersion
+    terminal_checkpoint: TerminalCheckpoint | None = None
 
 
 class RestartCycle(BaseModel):
@@ -155,6 +225,8 @@ class RestartCycle(BaseModel):
     fence: WriterFence
     expected: CycleVersion
     configuration: CycleConfiguration
+    mode: CaptureMode = "full"
+    starting_checkpoint: ProviderCheckpoint | None = None
 
 
 class ScopeWork(BaseModel):
