@@ -48,6 +48,7 @@ async def record_error_response(request: Request, error: CanonicalStoreError) ->
         "stale_record_revision": 409,
         "blob_unavailable": 503,
         "calendar_changed_restart": 409,
+        "calendar_read_incomplete": 409,
         "calendar_range_not_captured": 409,
     }.get(error.code, 400)
     detail = {"code": error.code, "message": str(error), "retryable": status == 503}
