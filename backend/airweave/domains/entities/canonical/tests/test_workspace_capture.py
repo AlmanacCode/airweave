@@ -1,6 +1,7 @@
 """Actual Drive pipeline publishes Docs references atomically; HTTP is synthetic."""
 
 import hashlib
+from contextlib import aclosing
 from unittest.mock import AsyncMock
 
 import httpx
@@ -25,6 +26,11 @@ class NativeDocs:
 
     async def handle(self, request):
         path = request.url.path
+        if path.endswith("/about"):
+            assert request.url.params["fields"] == "user(permissionId,me)"
+            return httpx.Response(
+                200, json={"user": {"permissionId": "principal-a", "me": True}}
+            )
         if request.url.host == "docs.googleapis.com":
             if self.fail:
                 raise ConnectionError("interrupted native acquisition")
@@ -84,7 +90,7 @@ async def test_recapture_original_uuid_atomically_adds_manifest_and_withdraws_al
     native = NativeDocs()
     pipeline, ctx, runtime, client = await setup(database, source, native)
     pipeline.files = files
-    async with client:
+    async with aclosing(client):
         with pytest.raises(ConnectionError, match="interrupted"):
             await run(pipeline, ctx, runtime)
     async with database() as db:
@@ -96,7 +102,7 @@ async def test_recapture_original_uuid_atomically_adds_manifest_and_withdraws_al
     native.fail = False
     pipeline, ctx, runtime, client = await setup(database, source, native, attempt=2)
     pipeline.files = files
-    async with client:
+    async with aclosing(client):
         await run(pipeline, ctx, runtime)
     async with database() as db:
         completed = await service.read_cycle(db, pipeline._writer())
