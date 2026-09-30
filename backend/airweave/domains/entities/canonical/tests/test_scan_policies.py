@@ -6,7 +6,11 @@ from uuid import uuid4
 import pytest
 
 from airweave.domains.entities.canonical.coverage import capture_coverage
-from airweave.domains.entities.canonical.cycle_models import BeginCycle, CycleConfiguration
+from airweave.domains.entities.canonical.cycle_models import (
+    BeginCycle,
+    CompleteCycle,
+    CycleConfiguration,
+)
 from airweave.domains.entities.canonical.cycle_store import CycleConflict
 from airweave.domains.entities.canonical.requests import CompletedScope
 from airweave.domains.entities.canonical.scan_models import (
@@ -108,6 +112,15 @@ async def test_incomplete_discovery_preserves_known_record_and_reports_policy(
                     ),
                 ),
             )
+
+    async with database() as db:
+        current = await service.read_cycle(db, fence)
+    async with database() as db:
+        await service.complete_cycle(db, CompleteCycle(fence=fence, expected=current.version))
+    async with database() as db:
+        completed_coverage = await capture_coverage(db, fence.organization_id, (fence.sync_id,))
+    assert completed_coverage[fence.sync_id].phase == "complete"
+    assert completed_coverage[fence.sync_id].discovery == "incomplete"
 
 
 async def test_exact_validation_restores_tombstone_but_rejects_stale_or_wrong_identity(
