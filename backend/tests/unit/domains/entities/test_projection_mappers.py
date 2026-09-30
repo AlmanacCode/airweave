@@ -1,7 +1,8 @@
 """Search projections preserve canonical data and cannot fetch missing source content."""
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -184,6 +185,7 @@ async def test_owned_drive_spreadsheet_uses_real_converter():
 
     from airweave.domains.converters.registry import ConverterRegistry
     from airweave.domains.entities.canonical.requests import BlobReference
+    from airweave.domains.sync_pipeline.pipeline.text_builder import TextualRepresentationBuilder
 
     workbook = openpyxl.Workbook()
     workbook.active.append(["Project", "Status"])
@@ -209,10 +211,16 @@ async def test_owned_drive_spreadsheet_uses_real_converter():
     async with map_record(item, "google_drive", storage) as entities:
         path = entities[0].local_path
         assert Path(path).suffix == ".xlsx"
-        converter = ConverterRegistry().for_extension(".xlsx")
-        assert converter is not None
-        result = await converter.convert_batch([path])
-        assert "Owned capture" in result[path] and "Verified" in result[path]
+        tracker = AsyncMock()
+        result = await TextualRepresentationBuilder(ConverterRegistry()).build_for_batch(
+            list(entities),
+            SimpleNamespace(source_short_name="google_drive", logger=MagicMock()),
+            SimpleNamespace(entity_tracker=tracker),
+        )
+        assert len(result) == 1
+        assert "Owned capture" in result[0].textual_representation
+        assert "Verified" in result[0].textual_representation
+        tracker.record_skipped.assert_not_awaited()
     assert not Path(path).exists()
 
 

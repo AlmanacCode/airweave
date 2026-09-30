@@ -3,7 +3,7 @@
 Single source of truth for supported file types across downloader and pipeline.
 """
 
-_DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".pptx"}
+_DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".pptx", ".xlsx"}
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 _HTML_EXTENSIONS = {".html", ".htm"}
 _TEXT_EXTENSIONS = {".txt", ".json", ".xml", ".md", ".yaml", ".yml", ".toml"}
