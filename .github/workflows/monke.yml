@@ -1,13 +1,9 @@
 name: Monke – parallel runners
 
 on:
+  # The owned fork uses credential-free source-store checks on pull requests.
+  # Upstream's live connector mutators require separate disposable accounts.
   workflow_dispatch:
-  pull_request:
-    paths:
-      # Only trigger on platform-related changes (reduced footprint)
-      - "monke/**"
-      - "backend/airweave/platform/**"
-      - ".github/workflows/monke.yml"
 
 concurrency:
   group: monke-${{ github.ref }}
