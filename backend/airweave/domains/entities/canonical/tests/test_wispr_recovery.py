@@ -213,15 +213,17 @@ async def test_scratchpad_failure_resumes_failed_body_without_replaying_complete
             attempt_id=uuid4(),
             attempt_number=2,
         )
+    assert failed_native is not None and failed_native not in completed
     failing = False
     calls.clear()
     second = await connector([], [])
     second._execute = execute
     after = await driver(service, database, newer, second).run()
     assert before.version.cycle_id == after.version.cycle_id
+    # Durable scope order follows stored UUIDs, not the provider listing order.
     assert calls == [
-        ("n2", 0),
-        ("n2", 3),
+        (failed_native, 0),
+        (failed_native, 3),
     ]  # Bodies commit atomically, ranges do not checkpoint separately.
     async with database() as db:
         rows = list(
