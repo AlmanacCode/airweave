@@ -10,11 +10,13 @@ from airweave.domains.sources.exceptions import SourceError
 async def test_limited_final_history_preserves_prior_originals_and_committed_progress(
     database, source
 ):
-    baseline, _, _ = runner(database, source, [ROOT, {"messages": [{"ts": "1", "text": "old"}]}])
+    baseline, _, _ = await runner(
+        database, source, [ROOT, {"messages": [{"ts": "1", "text": "old"}]}]
+    )
     await run(baseline)
     _, before, _ = await saved(database)
     source = await next_job(database, source)
-    refresh, _, _ = runner(
+    refresh, _, _ = await runner(
         database,
         source,
         [

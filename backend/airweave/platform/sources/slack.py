@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -16,6 +17,7 @@ from pydantic import (
     StrictBool,
     TypeAdapter,
     ValidationError,
+    model_validator,
 )
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
@@ -132,6 +134,22 @@ class SlackApiError(ValueError):
         super().__init__(f"Slack request failed: {code}")
 
 
+class SlackPrincipal(BaseModel):
+    """Native authorized workspace/user identity, with no display-name inference."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    ok: StrictBool
+    team_id: str = Field(min_length=1, pattern=r"^\S+$")
+    user_id: str = Field(min_length=1, pattern=r"^\S+$")
+
+    @model_validator(mode="after")
+    def successful(self):
+        """Only an explicit successful auth.test response attests identity."""
+        if not self.ok:
+            raise ValueError("Slack identity request did not succeed")
+        return self
+
+
 class SlackHistoryCoverage(BaseModel):
     """Slack omits this flag unless older history is unavailable under its limit."""
 
@@ -186,11 +204,36 @@ class SlackSource(BaseSource):
 
     canonical_record_types = ("channel", "message")
     canonical_container_parents = {"message": "channel"}
-    capture_cycle_configuration = CycleConfiguration.from_source(
-        fingerprint=hashlib.sha256(b"slack:whole-conversations:history-and-replies:v1").hexdigest(),
-        record_types=canonical_record_types,
-        container_parents=canonical_container_parents,
-    )
+    slack_config: SlackConfig | None = None
+    _verified_principal: SlackPrincipal | None = None
+
+    def _require_principal(self) -> SlackPrincipal:
+        """Unbound legacy search cannot bypass canonical capture identity checks."""
+        principal = self._verified_principal
+        if (
+            principal is None
+            or self.slack_config is None
+            or principal.team_id != self.slack_config.expected_team_id
+            or principal.user_id != self.slack_config.expected_user_id
+        ):
+            raise ValueError("Owned Slack capture requires an attested workspace and user")
+        return principal
+
+    @property
+    def capture_cycle_configuration(self) -> CycleConfiguration:
+        """Existing cycle ownership includes the trusted visibility principal."""
+        principal = self._require_principal()
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {"version": 2, "team_id": principal.team_id, "user_id": principal.user_id},
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        return CycleConfiguration.from_source(
+            fingerprint=fingerprint,
+            record_types=self.canonical_record_types,
+            container_parents=self.canonical_container_parents,
+        )
 
     @classmethod
     async def create(
@@ -202,7 +245,11 @@ class SlackSource(BaseSource):
         config: SlackConfig,
     ) -> SlackSource:
         """Create a new Slack source."""
-        return cls(auth=auth, logger=logger, http_client=http_client)
+        instance = cls(auth=auth, logger=logger, http_client=http_client)
+        instance.slack_config = config
+        if config.expected_team_id is not None:
+            await instance.validate()
+        return instance
 
     # ------------------------------------------------------------------
     # HTTP
@@ -277,6 +324,7 @@ class SlackSource(BaseSource):
         parent: SourceRecord | None = None,
     ) -> CapturePage:
         """Fetch one page; record and nested reply progress are committed by the pipeline."""
+        self._require_principal()
         try:
             return await self._validated_capture_page(scope, continuation)
         except ValidationError:
@@ -410,6 +458,7 @@ class SlackSource(BaseSource):
 
     async def confirm_absent(self, record: SourceRecord) -> None:
         """Require provider confirmation before hiding an omitted prior conversation."""
+        self._require_principal()
         native_id = record.identity.native_id
         try:
             await self._get("https://slack.com/api/conversations.info", {"channel": native_id})
@@ -579,5 +628,17 @@ class SlackSource(BaseSource):
         yield  # make this a generator  # noqa: RUF027
 
     async def validate(self) -> None:
-        """Validate credentials by calling Slack auth.test."""
-        await self._get("https://slack.com/api/auth.test")
+        """Re-attest the exact bound workspace/user, clearing old evidence first."""
+        self._verified_principal = None
+        raw = await self._get("https://slack.com/api/auth.test")
+        try:
+            principal = SlackPrincipal.model_validate(raw)
+        except ValidationError:
+            raise ValueError("Slack returned an invalid native identity") from None
+        if self.slack_config is not None and self.slack_config.expected_team_id is not None:
+            if (
+                principal.team_id != self.slack_config.expected_team_id
+                or principal.user_id != self.slack_config.expected_user_id
+            ):
+                raise ValueError("Slack identity does not match the trusted binding")
+            self._verified_principal = principal

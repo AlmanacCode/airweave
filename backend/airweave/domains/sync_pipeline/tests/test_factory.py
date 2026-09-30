@@ -182,11 +182,17 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
         mock_source.generate_entities = MagicMock(return_value=AsyncMock())
         if canonical == "page":
             from airweave.domains.sources.token_providers.static import StaticTokenProvider
+            from airweave.platform.configs.config import SlackConfig
             from airweave.platform.sources.slack import SlackSource
 
             mock_source = SlackSource(
                 auth=StaticTokenProvider("synthetic"), logger=MagicMock(), http_client=MagicMock()
             )
+            mock_source.slack_config = SlackConfig(expected_team_id="T1", expected_user_id="U1")
+            mock_source._get = AsyncMock(
+                return_value={"ok": True, "team_id": "T1", "user_id": "U1"}
+            )
+            await mock_source.validate()
         elif canonical:
             mock_source.canonical_record_types = ("event",)
             mock_source.generate_observations = MagicMock(return_value=AsyncMock())

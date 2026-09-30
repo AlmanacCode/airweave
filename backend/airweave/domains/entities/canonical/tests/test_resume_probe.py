@@ -61,7 +61,7 @@ async def main():
         responses = [ROOT, SlackApiError("not_in_channel")]
     if mode == "expired":
         responses = [ROOT, SlackApiError("invalid_cursor"), HISTORY, REPLIES]
-    instance, connector, pipeline = runner(sessions, (service, fence), responses,
+    instance, connector, pipeline = await runner(sessions, (service, fence), responses,
                                           attempt=2 if retry else 1)
     counters = {"provider_requests": 0, "records_observed": 0}
     get = connector._get

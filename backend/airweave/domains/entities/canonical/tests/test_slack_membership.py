@@ -10,6 +10,7 @@ from airweave.domains.entities.canonical.tests.test_capture_pipeline import comp
 from airweave.domains.sources.token_providers.static import StaticTokenProvider
 from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
 from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
+from airweave.platform.configs.config import SlackConfig
 from airweave.platform.sources.slack import SlackApiError, SlackSource
 
 pytestmark = pytest.mark.integration
@@ -39,6 +40,9 @@ async def test_first_completed_membership_hides_prior_partial_channel(
     connector = SlackSource(
         auth=StaticTokenProvider("fixture"), logger=MagicMock(), http_client=MagicMock()
     )
+    connector.slack_config = SlackConfig(expected_team_id="T1", expected_user_id="U1")
+    connector._get = AsyncMock(return_value={"ok": True, "team_id": "T1", "user_id": "U1"})
+    await connector.validate()
     connector._get = AsyncMock(
         side_effect=(
             ConnectionError("membership page failed")

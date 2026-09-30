@@ -1,6 +1,6 @@
 """Slack native page contracts; durable recovery is tested separately against PostgreSQL."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -8,18 +8,25 @@ from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.requests import CompletedScope, RecordIdentity
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
 from airweave.domains.sources.token_providers.static import StaticTokenProvider
+from airweave.platform.configs.config import SlackConfig
 from airweave.platform.sources.slack import SlackApiError, SlackSource
 
 
-def source():
-    return SlackSource(
+async def source():
+    connector = SlackSource(
         auth=StaticTokenProvider("token"), logger=MagicMock(), http_client=MagicMock()
     )
+    connector.slack_config = SlackConfig(expected_team_id="T1", expected_user_id="U1")
+    with patch.object(
+        connector, "_get", AsyncMock(return_value={"ok": True, "team_id": "T1", "user_id": "U1"})
+    ):
+        await connector.validate()
+    return connector
 
 
 @pytest.mark.asyncio
 async def test_page_commits_history_before_threads_and_preserves_native_fields():
-    connector = source()
+    connector = await source()
     connector._get = AsyncMock(
         side_effect=[
             {"channels": [{"id": "C1", "unknown_native_field": "kept"}]},
@@ -59,7 +66,7 @@ async def test_page_commits_history_before_threads_and_preserves_native_fields()
     ],
 )
 async def test_incomplete_pagination_fails(pages):
-    connector = source()
+    connector = await source()
     connector._get = AsyncMock(side_effect=pages)
     progress = ScanContinuation()
     with pytest.raises(ValueError):
@@ -74,7 +81,7 @@ async def test_incomplete_pagination_fails(pages):
 
 @pytest.mark.asyncio
 async def test_prior_channel_loss_requires_explicit_provider_confirmation():
-    connector = source()
+    connector = await source()
     connector._get = AsyncMock(side_effect=SlackApiError("channel_not_found"))
     await connector.confirm_absent(
         SourceRecord.model_construct(identity=RecordIdentity(record_type="channel", native_id="C1"))
@@ -95,7 +102,7 @@ async def test_rate_limit_honors_entire_wait_and_preserves_proxy_type(kind):
 
     from airweave.domains.auth_provider.exceptions import AuthProviderRateLimitError
 
-    connector = source()
+    connector = await source()
     request = httpx.Request("GET", "https://slack.com/api/conversations.list")
     first = (
         AuthProviderRateLimitError(provider_name="composio", retry_after=240)
@@ -121,7 +128,7 @@ async def test_rate_limit_honors_entire_wait_and_preserves_proxy_type(kind):
 async def test_proxy_rate_limit_stops_after_five_attempts():
     from airweave.domains.auth_provider.exceptions import AuthProviderRateLimitError
 
-    connector = source()
+    connector = await source()
     connector.http_client.get = AsyncMock(
         side_effect=AuthProviderRateLimitError(provider_name="composio", retry_after=240)
     )
@@ -150,7 +157,7 @@ async def test_queued_thread_failure_preserves_error_meaning(code, expected):
         ScopeAccessLost,
     )
 
-    connector = source()
+    connector = await source()
     connector._get = AsyncMock(side_effect=SlackApiError(code))
     error = {"restart": InvalidScanContinuation, "access": ScopeAccessLost, "error": SlackApiError}[
         expected
@@ -166,7 +173,7 @@ async def test_queued_thread_failure_preserves_error_meaning(code, expected):
 
 @pytest.mark.asyncio
 async def test_thread_not_found_outside_reply_fetch_does_not_invalidate_inventory():
-    connector = source()
+    connector = await source()
     connector._get = AsyncMock(side_effect=SlackApiError("thread_not_found"))
     with pytest.raises(SlackApiError):
         await connector.capture_page(
@@ -202,7 +209,7 @@ def test_message_native_dates_preserve_precision_and_unknowns(native, created, u
 
 @pytest.mark.asyncio
 async def test_conversation_dates_use_distinct_native_units():
-    connector = source()
+    connector = await source()
     connector._get = AsyncMock(
         return_value={
             "channels": [
