@@ -334,7 +334,7 @@ from .trello import (
     TrelloMemberEntity,
 )
 from .web import WebFileEntity
-from .wispr import WisprMeetingEntity
+from .wispr import WisprMeetingEntity, WisprNoteEntity
 from .word import WordDocumentEntity
 from .zendesk import (
     ZendeskAttachmentEntity,
@@ -704,7 +704,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
     "web": [
         WebFileEntity,
     ],
-    "wispr": [WisprMeetingEntity],
+    "wispr": [WisprMeetingEntity, WisprNoteEntity],
     "word": [
         WordDocumentEntity,
     ],

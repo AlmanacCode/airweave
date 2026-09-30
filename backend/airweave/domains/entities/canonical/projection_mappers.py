@@ -22,7 +22,7 @@ from airweave.platform.entities.google_calendar import (
 )
 from airweave.platform.entities.google_drive import GoogleDriveFileEntity, GoogleDriveFolderEntity
 from airweave.platform.entities.slack import SlackChannelEntity, SlackMessageEntity
-from airweave.platform.entities.wispr import WisprMeetingEntity
+from airweave.platform.entities.wispr import WisprMeetingEntity, WisprNoteEntity
 
 
 class ProjectionMappingError(ValueError):
@@ -163,11 +163,16 @@ def _wispr_text(responses: list[JsonValue], field: str) -> str:
         if not isinstance(window, dict) or window.get("start_char") != expected or complete:
             raise ProjectionMappingError("Wispr text ranges overlap or have a gap")
         text = _string(response.get(field))
-        marker = re.search(
-            rf"(?m)^\(\.\.\.truncated, \d+ chars remaining; continue with "
-            rf"view_{field}\.start_char=(\d+)\.\.\.\)\s*$",
-            text,
+        markers = list(
+            re.finditer(
+                rf"(?m)^\(\.\.\.truncated, \d+ chars remaining; continue with "
+                rf"view_{field}\.start_char=(\d+)\.\.\.\)\s*$",
+                text,
+            )
         )
+        if len(markers) > 1:
+            raise ProjectionMappingError("Wispr returned ambiguous continuation markers")
+        marker = markers[0] if markers else None
         if marker:
             following = int(marker.group(1))
             if following <= expected:
@@ -183,9 +188,9 @@ def _wispr_text(responses: list[JsonValue], field: str) -> str:
 
 
 def _wispr(record: SourceRecord) -> tuple[BaseEntity, ...]:
-    if record.identity.record_type == "meeting_listing":
+    if record.identity.record_type in {"meeting_listing", "scratchpad_listing"}:
         return ()
-    if record.identity.record_type != "meeting":
+    if record.identity.record_type not in {"meeting", "scratchpad_note"}:
         raise ProjectionMappingError("Unsupported Wispr record type")
     responses = record.payload.get("responses")
     if not isinstance(responses, list) or not responses or not isinstance(responses[0], dict):
@@ -193,6 +198,18 @@ def _wispr(record: SourceRecord) -> tuple[BaseEntity, ...]:
     first = responses[0].get("response")
     if not isinstance(first, dict):
         raise ProjectionMappingError("Wispr meeting response is invalid")
+    if record.identity.record_type == "scratchpad_note":
+        if first.get("id") != record.identity.native_id:
+            raise ProjectionMappingError("Wispr scratchpad identity differs from retained identity")
+        return (
+            WisprNoteEntity(
+                note_id=record.identity.native_id,
+                title=_string(first.get("title"), default="Note"),
+                content=_wispr_text(responses, "content"),
+                modified_at=_datetime(first.get("modified_at")),
+                breadcrumbs=[],
+            ),
+        )
     return (
         WisprMeetingEntity(
             meeting_id=record.identity.native_id,
@@ -210,11 +227,9 @@ def _wispr(record: SourceRecord) -> tuple[BaseEntity, ...]:
 
 def excluded_from_search(record: SourceRecord, source_name: str) -> bool:
     """Retained calendar exclusions intentionally publish no searchable meeting."""
-    return (
-        source_name == "google_calendar"
-        and (record.identity.record_type == "event_occurrence" or (
-            record.identity.record_type == "event" and is_cancelled_recurring_event(record.payload)
-        ))
+    return source_name == "google_calendar" and (
+        record.identity.record_type == "event_occurrence"
+        or (record.identity.record_type == "event" and is_cancelled_recurring_event(record.payload))
     )
 
 

@@ -214,3 +214,59 @@ async def test_owned_drive_spreadsheet_uses_real_converter():
         result = await converter.convert_batch([path])
         assert "Owned capture" in result[path] and "Verified" in result[path]
     assert not Path(path).exists()
+
+
+@pytest.mark.asyncio
+async def test_wispr_scratchpad_retains_all_text_ranges_without_meeting_fields():
+    payload = {
+        "responses": [
+            {
+                "requested_ranges": {"view_content": {"start_char": 0}},
+                "response": {
+                    "id": "note",
+                    "title": "Ideas",
+                    "content": (
+                        "abc\n(...truncated, 3 chars remaining; "
+                        "continue with view_content.start_char=3...)"
+                    ),
+                    "modified_at": "2026-09-30T00:00:00Z",
+                },
+            },
+            {
+                "requested_ranges": {"view_content": {"start_char": 3}},
+                "response": {
+                    "id": "note",
+                    "title": "Ideas",
+                    "content": "def",
+                    "modified_at": "2026-09-30T00:00:00Z",
+                },
+            },
+        ]
+    }
+    original = record("scratchpad_note", payload, native_id="note")
+    before = original.model_dump()
+    storage = AsyncMock()
+    async with map_record(original, "wispr", storage) as entities:
+        assert entities[0].note_id == "note"
+        assert entities[0].content == "abc\ndef"
+        assert entities[0].web_url == ""
+    assert original.model_dump() == before
+    assert storage.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_wispr_projection_rejects_ambiguous_stored_continuation():
+    marker = "(...truncated, 3 chars remaining; continue with view_content.start_char=3...)"
+    payload = {
+        "responses": [
+            {
+                "requested_ranges": {"view_content": {"start_char": 0}},
+                "response": {"id": "note", "content": marker + "\n" + marker},
+            }
+        ]
+    }
+    with pytest.raises(ProjectionMappingError, match="ambiguous"):
+        async with map_record(
+            record("scratchpad_note", payload, native_id="note"), "wispr", AsyncMock()
+        ):
+            pass

@@ -30,3 +30,19 @@ class WisprMeetingEntity(BaseEntity):
     def web_url(self) -> str:
         """Use only the provider-supplied sharing link."""
         return self.share_link or ""
+
+
+class WisprNoteEntity(BaseEntity):
+    """Search projection of a retained scratchpad note, independent of meetings."""
+
+    note_id: str = AirweaveField(..., description="Native scratchpad note ID", is_entity_id=True)
+    title: str = AirweaveField(..., description="Note title", is_name=True, embeddable=True)
+    content: str = AirweaveField(..., description="Captured normalized note text", embeddable=True)
+    modified_at: datetime | None = AirweaveField(
+        None, description="Provider modification", is_updated_at=True
+    )
+
+    @computed_field(return_type=str)
+    def web_url(self) -> str:
+        """The scratchpad response supplies no native URL."""
+        return ""
