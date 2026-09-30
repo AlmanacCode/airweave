@@ -45,19 +45,9 @@ from airweave.domains.entities.canonical.requests import CaptureBatch, CaptureRe
 from airweave.domains.entities.canonical.service import CanonicalCaptureService  # noqa: E402
 from airweave.domains.entities.canonical.store import CanonicalRecordStore  # noqa: E402
 from airweave.domains.entities.canonical.tests.conftest import migrate  # noqa: E402
-from airweave.domains.sources.token_providers.protocol import ManagedAuthProvider  # noqa: E402
 from airweave.domains.storage.file_service import FileService  # noqa: E402
 from airweave.domains.storage.paths import StoragePaths  # noqa: E402
 from airweave.models import Organization, Sync, SyncJob  # noqa: E402
-from airweave.platform.configs.config import (  # noqa: E402
-    GmailConfig,
-    GoogleCalendarConfig,
-    GoogleDriveConfig,
-)
-from airweave.platform.http_client.airweave_client import AirweaveHttpClient  # noqa: E402
-from airweave.platform.http_client.composio_transport import ComposioTransport  # noqa: E402
-from airweave.platform.sources import GmailSource, GoogleDriveSource  # noqa: E402
-from airweave.platform.sources.google_calendar import GoogleCalendarSource  # noqa: E402
 
 logging.disable(logging.CRITICAL)
 PROBE_STAGE = "initialization"
@@ -88,72 +78,66 @@ def test_database_url() -> str:
 
 async def fetch_records(name, account, expected_email, key, fence, root):
     """Exercise actual source capture, bounded before any complete-scope claim."""
-    host = "gmail.googleapis.com" if name == "gmail" else "www.googleapis.com"
-    auth = ManagedAuthProvider(api_key=key, connected_account_id=account, allowed_hosts={host})
-    transport = ComposioTransport(api_key=key, connected_account_id=account, allowed_hosts={host})
-    transport.MAX_BINARY_BYTES = 10 * 1024 * 1024
+    from provider_sample import rest_source, wispr_source
+
+    from airweave.domains.entities.canonical.requests import RecordIdentity
+    from airweave.domains.entities.canonical.source import ContainerScopedSource
+
     storage = FilesystemBackend(root / "blobs")
     files = FileService(fence.job_id, storage, sync_id=fence.sync_id)
     files.MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
-    async with httpx.AsyncClient(transport=transport, timeout=180) as client:
-        wrapped = AirweaveHttpClient(
-            client, fence.organization_id, name, feature_flag_enabled=False
+    connection = (
+        wispr_source(account, key, fence)
+        if name == "wispr"
+        else rest_source(name, account, expected_email, key, fence)
+    )
+    records = {}
+    observations = 0
+    async with asyncio.timeout(180), connection as (source, identity_verification):
+        parents = (
+            source.canonical_container_parents if isinstance(source, ContainerScopedSource) else {}
         )
-        if name == "gmail":
-            source = await GmailSource.create(
-                auth=auth,
-                logger=logging.getLogger("probe"),
-                http_client=wrapped,
-                config=GmailConfig(gmail_query="newer_than:7d smaller:5M"),
-            )
-            profile = await source._get("https://gmail.googleapis.com/gmail/v1/users/me/profile")
-            email = profile.get("emailAddress", "")
-        elif name == "google_calendar":
-            source = await GoogleCalendarSource.create(
-                auth=auth,
-                logger=logging.getLogger("probe"),
-                http_client=wrapped,
-                config=GoogleCalendarConfig(),
-            )
-            profile = await source._get(
-                "https://www.googleapis.com/calendar/v3/users/me/calendarList/primary"
-            )
-            email = profile.get("id", "")
-        else:
-            source = await GoogleDriveSource.create(
-                auth=auth,
-                logger=logging.getLogger("probe"),
-                http_client=wrapped,
-                config=GoogleDriveConfig(),
-            )
-            profile = await source._get(
-                "https://www.googleapis.com/drive/v3/about", params={"fields": "user(emailAddress)"}
-            )
-            email = profile.get("user", {}).get("emailAddress", "")
-        if email.casefold() != expected_email.casefold():
-            raise ValueError("The connected account did not match the explicitly selected identity")
-        records = []
-        async with (
-            asyncio.timeout(180),
-            aclosing(source.generate_observations(files=files)) as stream,
-        ):
+        async with aclosing(source.generate_observations(files=files)) as stream:
             async for item in stream:
-                # Deliberately ignore Started/CompletedScope and cursor checkpoints: this
-                # selected sample does not prove exhaustive source enumeration.
-                if isinstance(item, CaptureRecord):
-                    records.append(item)
-                    if len(records) >= 25 or (
-                        name != "google_calendar"
-                        and len(records) >= 3
-                        and any(x.blobs for x in records)
-                    ):
-                        break
-        if name == "google_calendar":
-            if not any(x.identity.record_type == "event" for x in records):
-                raise ValueError("Bounded Calendar sample did not contain an event")
-        elif not records or not any(x.blobs for x in records):
-            raise ValueError("Bounded source sample did not contain a real owned blob")
-    return records, storage
+                # No scope-completion marker/checkpoint is saved by a bounded sample.
+                if not isinstance(item, CaptureRecord):
+                    continue
+                observations += 1
+                parent_type = parents.get(item.identity.record_type)
+                if parent_type is not None:
+                    # Apply the declared source relationship just as the pipeline does;
+                    # preserve the provider payload verbatim.
+                    parent = RecordIdentity(
+                        record_type=parent_type, native_id=item.identity.container_id
+                    )
+                    if item.parent is not None and item.parent != parent:
+                        raise ValueError("Source parent conflicts with its declared relationship")
+                    item = item.model_copy(update={"parent": parent})
+                identity = (item.identity.record_type, item.identity.entity_key)
+                records[identity] = item
+                if sample_complete(name, list(records.values()), observations):
+                    break
+    values = list(records.values())
+    required = {"google_calendar": "event", "slack": "message", "wispr": "meeting"}.get(name)
+    if required and not any(x.identity.record_type == required for x in values):
+        raise ValueError("Bounded source sample did not contain the required record type")
+    if name in {"gmail", "google_drive"} and not any(x.blobs for x in values):
+        raise ValueError("Bounded source sample did not contain a real owned blob")
+    return values, storage, identity_verification, observations
+
+
+def sample_complete(name, records, observations):
+    """Bound provider work; a sample is not a completed enumeration."""
+    if observations >= 25:
+        return True
+    if name == "google_calendar":
+        return False
+    if len(records) < 3:
+        return False
+    if name in {"gmail", "google_drive"}:
+        return any(record.blobs for record in records)
+    required = "message" if name == "slack" else "meeting"
+    return any(record.identity.record_type == required for record in records)
 
 
 async def verify(name, account, email, key, sessions, engine, root):
@@ -177,14 +161,16 @@ async def verify(name, account, email, key, sessions, engine, root):
         )
     global PROBE_STAGE
     PROBE_STAGE = name + ":provider_capture"
-    records, _ = await fetch_records(name, account, email, key, fence, root)
+    records, _, identity_verification, observations = await fetch_records(
+        name, account, email, key, fence, root
+    )
     PROBE_STAGE = name + ":durable_capture"
     async with sessions() as db:
         committed = await service.capture(db, CaptureBatch(fence=fence, records=tuple(records)))
     await engine.dispose()  # Force readback over fresh PostgreSQL connections.
     PROBE_STAGE = name + ":durable_readback"
     storage = FilesystemBackend(root / "blobs")  # New filesystem storage instance.
-    expected = {item.identity.entity_key: item for item in records}
+    expected = {(item.identity.record_type, item.identity.entity_key): item for item in records}
     listed = []
     cursor = None
     while True:
@@ -202,7 +188,10 @@ async def verify(name, account, email, key, sessions, engine, root):
     assert len(listed) == len(expected)
     total_bytes = blob_count = 0
     for stored in listed:
-        assert stored.payload == expected[stored.identity.entity_key].payload
+        assert (
+            stored.payload
+            == expected[(stored.identity.record_type, stored.identity.entity_key)].payload
+        )
         async with sessions() as db:
             reread = await query.read(db, organization_id, sync_id, stored.id)
         assert reread.payload == stored.payload and reread.revision == 1
@@ -246,6 +235,10 @@ async def verify(name, account, email, key, sessions, engine, root):
     return {
         "almanac_reader": consumer,
         "provider": name,
+        "identity_verification": identity_verification,
+        "observations": observations,
+        "partial_records": sum(record.completeness != "complete" for record in listed),
+        "record_types": sorted({record.identity.record_type for record in listed}),
         "records": len(listed),
         "journal_changes": len(changes),
         "blobs": blob_count,
@@ -263,14 +256,24 @@ async def main():
     url = test_database_url()
     key = os.environ["COMPOSIO_API_KEY"]
     selected = os.environ.get("LIVE_PROVIDERS", "gmail,google_drive").split(",")
-    if not selected or set(selected) - {"gmail", "google_drive", "google_calendar"}:
-        raise ValueError("LIVE_PROVIDERS must select gmail, google_drive and/or google_calendar")
+    if not selected or set(selected) - {
+        "gmail",
+        "google_drive",
+        "google_calendar",
+        "slack",
+        "wispr",
+    }:
+        raise ValueError(
+            "LIVE_PROVIDERS must select gmail, google_drive, google_calendar, slack or wispr"
+        )
     inputs = [
-        (name, os.environ[variable], os.environ["LIVE_EXPECTED_EMAIL"])
+        (name, os.environ[variable], os.environ["LIVE_EXPECTED_EMAIL"] if name != "wispr" else "")
         for name, variable in (
             ("gmail", "LIVE_GMAIL_ACCOUNT_ID"),
             ("google_drive", "LIVE_DRIVE_ACCOUNT_ID"),
             ("google_calendar", "LIVE_CALENDAR_ACCOUNT_ID"),
+            ("slack", "LIVE_SLACK_ACCOUNT_ID"),
+            ("wispr", "LIVE_WISPR_ACCOUNT_ID"),
         )
         if name in selected
     ]

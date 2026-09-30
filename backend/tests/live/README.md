@@ -75,3 +75,30 @@ synthetic tests, not claimed as live-covered by this sample. After the initial
 venv-launch failure and successful rerun, independent checks found 0 retained
 `canonical_live_*` schemas and 0 private live directories. No complete-source
 coverage, checkpoint, hosted authentication, or deployed product proof is claimed.
+
+## Slack and Wispr durable samples
+
+`LIVE_PROVIDERS=slack,wispr` selects the existing source adapters. Set
+`LIVE_SLACK_ACCOUNT_ID`, `LIVE_WISPR_ACCOUNT_ID` and `LIVE_WISPR_USER_ID` for
+previously connected, authorized accounts. Slack verifies `auth.test` identity
+and the matching `users.info` email against `LIVE_EXPECTED_EMAIL`. Wispr verifies
+exact ACTIVE Composio account ID, toolkit and principal; this is weaker than a
+provider mailbox/profile check and is not an Almanac user binding. A Wispr-only
+run does not require the email variable.
+
+Slack/Wispr stop after three distinct records containing a message/meeting, or
+25 observations. No file/blob presence is required. Repeated native identities
+are reduced to their latest raw observation in this bounded sample before
+capture and replay; Slack history/replies can return the same parent twice.
+Declared channel/container parent relationships are retained. Every record's
+native JSON is compared after durable readback; identical replay must add no
+journal changes. Source markers/checkpoints remain deliberately uncommitted.
+
+Verified 2026-09-30: Slack produced four observations and three distinct records
+(channel/message), with three journal changes, exact fresh-connection readback
+and zero replay changes. Its provider email matched. No file-bearing message was
+in that sample, so attachment bytes/partial file coverage were not live-tested.
+Wispr produced three meeting records and three journal changes; all three remain
+explicitly partial because the provider omits raw editor data/deletion history.
+Its replay added zero changes. Neither sample contained blobs or proved complete
+source coverage. Both private schema and files were removed afterward.
