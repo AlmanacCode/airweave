@@ -6,7 +6,6 @@ import pytest
 
 from airweave.schemas.health import CheckStatus
 
-
 # ---------------------------------------------------------------------------
 # PostgresHealthProbe
 # ---------------------------------------------------------------------------
@@ -104,7 +103,7 @@ class TestTemporalHealthProbe:
         from airweave.adapters.health.temporal import TemporalHealthProbe
 
         client = MagicMock()
-        client.service_client.check_health = AsyncMock()
+        client.service_client.check_health = AsyncMock(return_value=True)
         probe = TemporalHealthProbe(lambda: client)
 
         result = await probe.check()
@@ -113,6 +112,16 @@ class TestTemporalHealthProbe:
         assert result.latency_ms is not None
         assert result.latency_ms >= 0
         client.service_client.check_health.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_server_not_serving_returns_down(self):
+        from airweave.adapters.health.temporal import TemporalHealthProbe
+
+        client = MagicMock()
+        client.service_client.check_health = AsyncMock(return_value=False)
+        result = await TemporalHealthProbe(lambda: client).check()
+
+        assert result.status == CheckStatus.down
 
     @pytest.mark.asyncio
     async def test_client_available_but_unhealthy(self):

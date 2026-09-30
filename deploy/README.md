@@ -33,8 +33,10 @@ package; local MiniLM inference; and a private S3 bucket for canonical bytes.
 Use the repository's existing dependency configurations as inputs, not its local
 Compose file as a production deployment: that file enables local auth and exposes
 ports. Dependency image pins, persistent volumes, backups and a restore exercise
-remain deployment work. The stock readiness route gates PostgreSQL only; verify
-index, worker and capture readiness separately.
+remain deployment work. This manifest gates API readiness on PostgreSQL, Redis
+and Temporal reporting up. Missing/skipped critical probes do not pass. Verify
+index, worker polling and capture readiness separately; API dependency health
+does not prove those workflows work.
 
 Create the Porter environment group `almanac-source-store-staging` with only the
 owned service's values. Supply database connection settings, Redis endpoint,

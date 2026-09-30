@@ -13,6 +13,7 @@ env:
   ENVIRONMENT: dev
   LOCAL_DEVELOPMENT: "false"
   AUTH_MODE: api_key
+  HEALTH_CRITICAL_PROBES: postgres,redis,temporal
   ANALYTICS_ENABLED: "false"
   STRIPE_ENABLED: "false"
   STORAGE_BACKEND: aws

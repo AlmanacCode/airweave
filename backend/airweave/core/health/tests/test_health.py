@@ -2,6 +2,7 @@
 
 import asyncio
 import errno
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,7 +13,7 @@ from airweave.core.health.fakes import (
     FakeSlowProbe,
 )
 from airweave.core.health.service import HealthService
-from airweave.schemas.health import CheckStatus
+from airweave.schemas.health import CheckStatus, DependencyCheck
 
 # ---------------------------------------------------------------------------
 # check_readiness
@@ -21,6 +22,30 @@ from airweave.schemas.health import CheckStatus
 
 class TestCheckReadiness:
     """Tests for the readiness orchestrator."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [CheckStatus.down, CheckStatus.skipped])
+    @pytest.mark.parametrize("critical", [True, False])
+    async def test_returned_non_up_status_gates_only_critical_dependencies(self, status, critical):
+        probe = FakeProbe("temporal")
+        probe.check = AsyncMock(return_value=DependencyCheck(status=status))
+        svc = HealthService(
+            critical=[probe] if critical else [],
+            informational=[] if critical else [probe],
+        )
+
+        result = await svc.check_readiness(debug=False)
+
+        assert result.status == ("not_ready" if critical else "ready")
+        assert result.checks["temporal"].status == status
+
+    @pytest.mark.asyncio
+    async def test_cancelled_critical_probe_cannot_report_ready(self):
+        probe = FakeProbe("temporal")
+        probe.check = AsyncMock(side_effect=asyncio.CancelledError())
+        svc = HealthService(critical=[probe], informational=[])
+
+        assert (await svc.check_readiness(debug=False)).status == "not_ready"
 
     @pytest.mark.asyncio
     async def test_all_up(self):

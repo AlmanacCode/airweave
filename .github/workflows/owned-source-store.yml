@@ -71,6 +71,8 @@ jobs:
         run: make test-search
       - name: Verify service authentication
         run: make test-auth
+      - name: Verify dependency readiness
+        run: make test-health
       - name: Record tested Vespa image
         run: docker image inspect vespaengine/vespa@sha256:5c30f5c41e7563498c4f925db6a837a3848f04726a3ed26aed4a7c8ab69f18fd --format '{{json .RepoDigests}}'
       - name: Verify real Vespa schema and retrieval

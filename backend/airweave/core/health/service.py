@@ -70,8 +70,6 @@ class HealthService(HealthServiceProtocol):
         )
 
         checks: dict[str, DependencyCheck] = {}
-        ready = True
-
         for entry in results:
             if isinstance(entry, BaseException):
                 continue
@@ -83,11 +81,14 @@ class HealthService(HealthServiceProtocol):
                     status=CheckStatus.down,
                     error=self._sanitize_error(outcome, debug=debug),
                 )
-                if name in critical_names:
-                    ready = False
             else:
                 checks[name] = outcome
 
+        # Critical means positively verified up, including when a probe returns
+        # a status rather than raising or is cancelled before reporting one.
+        ready = all(
+            name in checks and checks[name].status == CheckStatus.up for name in critical_names
+        )
         return ReadinessResponse(
             status="ready" if ready else "not_ready",
             checks=checks,

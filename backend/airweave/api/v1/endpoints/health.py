@@ -39,9 +39,8 @@ async def readiness(
 ) -> ReadinessResponse:
     """Readiness probe — checks critical dependencies.
 
-    Only critical probes (Postgres) gate the HTTP status code.  Informational
-    probes (Redis, Temporal) are reported for observability but do not cause
-    a 503.
+    Configured critical probes must report up. Informational probes are reported
+    for observability but do not cause a 503.
     """
     result = await health.check_readiness(debug=settings.DEBUG)
 
