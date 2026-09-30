@@ -1,0 +1,337 @@
+"""Original-record indexed retrieval using the existing executor and SQL authority."""
+
+from collections import defaultdict
+from uuid import UUID
+
+from fastapi import HTTPException
+from sqlalchemy import and_, func, or_, select, tuple_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from airweave.api.context import ApiContext
+from airweave.domains.entities.canonical.projection_models import ProjectionLocator
+from airweave.domains.entities.canonical.projection_store import publication_matches
+from airweave.domains.entities.canonical.requests import RecordIdentity
+from airweave.domains.entities.canonical.store import content_is_available
+from airweave.domains.search.owned_models import (
+    OwnedSearchCoverage,
+    OwnedSearchHit,
+    OwnedSearchRequest,
+    OwnedSearchResponse,
+)
+from airweave.domains.search.protocols import SearchPlanExecutorProtocol
+from airweave.domains.search.types import FilterCondition, FilterGroup, SearchPlan, SearchQuery
+from airweave.domains.search.types.results import SearchResult, SearchResults
+from airweave.domains.sources.protocols import SourceRegistryProtocol
+from airweave.models.collection import Collection
+from airweave.models.entity import Entity
+from airweave.models.source_connection import SourceConnection
+from airweave.models.sync import Sync
+
+
+class OwnedSearchService:
+    """No provider lifecycle, planner, answer generator or reranker dependency."""
+
+    def __init__(self, executor: SearchPlanExecutorProtocol, registry: SourceRegistryProtocol):
+        """Reuse the executor and registry without another retrieval stack."""
+        self._executor = executor
+        self._registry = registry
+
+    async def search(
+        self, db: AsyncSession, ctx: ApiContext, request: OwnedSearchRequest
+    ) -> OwnedSearchResponse:
+        """Resolve exact authorized scopes before any embedding/index request."""
+        scopes, groups = await self._resolve_scopes(db, ctx, request)
+        scope_snapshot = self._scope_identity(scopes)
+        hits, scores, exclusions, postfiltered = {}, {}, 0, 0
+        engine_partial, full = False, False
+        for (collection_id, readable_id), sync_ids in groups.items():
+            results = await self._executor.execute(
+                plan=SearchPlan(
+                    query=SearchQuery(primary=request.query),
+                    limit=200,
+                    offset=0,
+                    retrieval_strategy=request.mode,
+                ),
+                user_filter=[
+                    FilterGroup(
+                        conditions=[
+                            FilterCondition(
+                                field="airweave_system_metadata.sync_id",
+                                operator="in",
+                                value=[str(item) for item in sync_ids],
+                            )
+                        ]
+                    )
+                ],
+                collection_id=str(collection_id),
+                db=db,
+                ctx=ctx,
+                collection_readable_id=readable_id,
+                indexed_only=True,
+            )
+            engine_partial |= results.engine_partial
+            exclusions += results.excluded_candidates
+            full |= len(results.results) + results.excluded_candidates >= 200
+            group_hits, group_scores, rejected, filtered = await self._enrich(
+                db, ctx, request, sync_ids, scopes, results
+            )
+            hits.update(group_hits)
+            scores.update(group_scores)
+            exclusions += rejected
+            postfiltered += filtered
+        sources = await self._coverage(db, ctx, request)
+        fresh_scopes, _ = await self._resolve_scopes(db, ctx, request)
+        if self._scope_identity(fresh_scopes) != scope_snapshot:
+            raise HTTPException(404, "Requested indexed sources changed during retrieval")
+        eligible = await self._final_publications(db, ctx, request, scores, scope_snapshot)
+        exclusions += len(hits.keys() - eligible)
+        ranked = sorted(hits.keys() & eligible, key=lambda key: (-scores[key][0], str(key)))
+        return OwnedSearchResponse(
+            items=tuple(hits[key] for key in ranked[: request.limit]),
+            sources=sources,
+            candidate_window_full=full,
+            engine_partial=engine_partial,
+            excluded_candidates=exclusions,
+            postfilter_excluded=postfiltered,
+            retrieval_incomplete=engine_partial
+            or full
+            or exclusions > 0
+            or postfiltered > 0
+            or len(ranked) > request.limit
+            or any(row.pending_records for row in sources),
+        )
+
+    async def _resolve_scopes(
+        self, db: AsyncSession, ctx: ApiContext, request: OwnedSearchRequest
+    ) -> tuple[dict[UUID, SourceConnection], dict[tuple[UUID, str], list[UUID]]]:
+        rows = (
+            await db.execute(
+                select(SourceConnection, Collection.id)
+                .join(
+                    Collection,
+                    and_(
+                        Collection.readable_id == SourceConnection.readable_collection_id,
+                        Collection.organization_id == ctx.organization.id,
+                    ),
+                )
+                .join(
+                    Sync,
+                    and_(
+                        Sync.id == SourceConnection.sync_id,
+                        Sync.organization_id == ctx.organization.id,
+                    ),
+                )
+                .where(
+                    SourceConnection.organization_id == ctx.organization.id,
+                    SourceConnection.is_authenticated.is_(True),
+                    SourceConnection.sync_id.in_(request.sync_ids),
+                )
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+        if len(rows) != len(request.sync_ids) or {row[0].sync_id for row in rows} != set(
+            request.sync_ids
+        ):
+            raise HTTPException(404, "Requested indexed sources are unavailable")
+        scopes = {row[0].sync_id: row[0] for row in rows}
+        allowed_types = set()
+        groups = defaultdict(list)
+        for connection, collection_id in rows:
+            types = getattr(
+                self._registry.get(connection.short_name).source_class_ref,
+                "canonical_record_types",
+                (),
+            )
+            if not types:
+                raise HTTPException(422, "Source does not support owned indexed records")
+            allowed_types.update(types)
+            groups[(collection_id, connection.readable_collection_id)].append(connection.sync_id)
+        if set(request.record_types) - allowed_types:
+            raise HTTPException(422, "Record type is unsupported by selected sources")
+        return scopes, groups
+
+    async def _enrich(
+        self,
+        db: AsyncSession,
+        ctx: ApiContext,
+        request: OwnedSearchRequest,
+        sync_ids: list[UUID],
+        scopes: dict[UUID, SourceConnection],
+        results: SearchResults,
+    ) -> tuple[dict[UUID, OwnedSearchHit], dict[UUID, tuple[float, ProjectionLocator]], int, int]:
+        locators = [value for result in results.results if (value := self._locator(result))]
+        if not locators:
+            return {}, {}, len(results.results), 0
+        hits, scores, exclusions, postfiltered = {}, {}, 0, 0
+        # Recheck current publication while obtaining native identity. Never enrich
+        # from an unvalidated cached hit after a concurrent capture/permission change.
+        records = (
+            await db.scalars(
+                select(Entity)
+                .join(Sync, Sync.id == Entity.sync_id)
+                .where(
+                    Entity.organization_id == ctx.organization.id,
+                    Sync.organization_id == ctx.organization.id,
+                    Entity.sync_id.in_(sync_ids),
+                    or_(*(publication_matches(item) for item in locators)),
+                )
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+        by_id = {record.id: record for record in records}
+        for rank, result in enumerate(results.results, 1):
+            locator = self._locator(result)
+            row = by_id.get(locator.record_id) if locator else None
+            if (
+                row is None
+                or row.record_revision != locator.revision
+                or row.indexed_generation != locator.generation
+                or row.indexed_pipeline_version != locator.pipeline_version
+                or str(row.sync_id) != result.airweave_system_metadata.sync_id
+                or scopes[row.sync_id].short_name != result.airweave_system_metadata.source_name
+            ):
+                exclusions += 1
+                continue
+            if not self._matches(row, request):
+                postfiltered += 1
+                continue
+            if row.id not in hits:
+                hits[row.id] = OwnedSearchHit(
+                    record_id=row.id,
+                    revision=row.record_revision,
+                    sync_id=row.sync_id,
+                    source_connection_id=scopes[row.sync_id].id,
+                    provider=scopes[row.sync_id].short_name,
+                    identity=RecordIdentity(
+                        record_type=row.entity_definition_short_name,
+                        native_id=row.native_id,
+                        container_id=row.container_id,
+                    ),
+                    title=result.name,
+                    excerpts=(),
+                    observed_at=row.observed_at,
+                    source_created_at=row.source_created_at,
+                    source_updated_at=row.source_updated_at,
+                    completeness=row.completeness,
+                )
+                scores[row.id] = (1 / (60 + rank), locator)
+            excerpt = result.textual_representation[:2000]
+            current = hits[row.id]
+            if excerpt and excerpt not in current.excerpts and len(current.excerpts) < 3:
+                hits[row.id] = current.model_copy(update={"excerpts": (*current.excerpts, excerpt)})
+        return hits, scores, exclusions, postfiltered
+
+    @staticmethod
+    def _scope_identity(scopes: dict[UUID, SourceConnection]) -> set[tuple]:
+        return {
+            (sync, row.id, row.short_name, row.readable_collection_id)
+            for sync, row in scopes.items()
+        }
+
+    @staticmethod
+    async def _final_publications(
+        db: AsyncSession,
+        ctx: ApiContext,
+        request: OwnedSearchRequest,
+        scores: dict[UUID, tuple[float, ProjectionLocator]],
+        scope_snapshot: set[tuple],
+    ) -> set[UUID]:
+        # Later collection retrieval may outlive an edit/revocation of earlier hits.
+        # Recheck the exact publication, including parent visibility, at the final
+        # SQL read boundary. No network I/O occurs after this authorization check.
+        if not scores:
+            return set()
+        identities = [
+            (locator.record_id, locator.revision, locator.pipeline_version, locator.generation)
+            for _, locator in scores.values()
+        ]
+        # One statement snapshots all candidates, including current authentication.
+        # The 20*200 bound keeps these tuple parameters below PostgreSQL's limit.
+        return set(
+            await db.scalars(
+                select(Entity.id)
+                .join(Sync, Sync.id == Entity.sync_id)
+                .join(
+                    SourceConnection,
+                    and_(
+                        SourceConnection.sync_id == Sync.id,
+                        SourceConnection.organization_id == ctx.organization.id,
+                        SourceConnection.is_authenticated.is_(True),
+                    ),
+                )
+                .where(
+                    Entity.organization_id == ctx.organization.id,
+                    Sync.organization_id == ctx.organization.id,
+                    Entity.sync_id.in_(request.sync_ids),
+                    tuple_(
+                        SourceConnection.sync_id,
+                        SourceConnection.id,
+                        SourceConnection.short_name,
+                        SourceConnection.readable_collection_id,
+                    ).in_(list(scope_snapshot)),
+                    Entity.deleted_at.is_(None),
+                    content_is_available(),
+                    Entity.indexed_revision == Entity.record_revision,
+                    Entity.indexed_pipeline_version == Sync.index_pipeline_version,
+                    tuple_(
+                        Entity.id,
+                        Entity.record_revision,
+                        Entity.indexed_pipeline_version,
+                        Entity.indexed_generation,
+                    ).in_(identities),
+                )
+            )
+        )
+
+    @staticmethod
+    def _locator(result: SearchResult) -> ProjectionLocator | None:
+        try:
+            return ProjectionLocator.parse(result.airweave_system_metadata.original_entity_id)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _matches(row: Entity, request: OwnedSearchRequest) -> bool:
+        if request.record_types and row.entity_definition_short_name not in request.record_types:
+            return False
+        for value, after, before in (
+            (row.source_created_at, request.created_after, request.created_before),
+            (row.source_updated_at, request.updated_after, request.updated_before),
+        ):
+            if (after is not None and (value is None or value < after)) or (
+                before is not None and (value is None or value >= before)
+            ):
+                return False
+        return True
+
+    @staticmethod
+    async def _coverage(
+        db: AsyncSession, ctx: ApiContext, request: OwnedSearchRequest
+    ) -> tuple[OwnedSearchCoverage, ...]:
+        pending = or_(
+            Entity.indexed_revision.is_distinct_from(Entity.record_revision),
+            Entity.indexed_pipeline_version.is_distinct_from(Sync.index_pipeline_version),
+            Entity.indexed_generation.is_(None),
+        )
+        rows = await db.execute(
+            select(Entity.sync_id, func.count(), func.count().filter(pending))
+            .join(Sync, Sync.id == Entity.sync_id)
+            .where(
+                Entity.organization_id == ctx.organization.id,
+                Sync.organization_id == ctx.organization.id,
+                Entity.sync_id.in_(request.sync_ids),
+                Entity.record_revision > 0,
+                Entity.deleted_at.is_(None),
+                content_is_available(),
+            )
+            .group_by(Entity.sync_id)
+        )
+        counts = {sync: (active, pending) for sync, active, pending in rows}
+        return tuple(
+            OwnedSearchCoverage(
+                sync_id=sync,
+                active_records=counts.get(sync, (0, 0))[0],
+                pending_records=counts.get(sync, (0, 0))[1],
+            )
+            for sync in request.sync_ids
+        )

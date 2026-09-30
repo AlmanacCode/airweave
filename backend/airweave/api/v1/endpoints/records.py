@@ -23,7 +23,20 @@ from airweave.domains.entities.canonical.query_models import (
 )
 from airweave.domains.entities.canonical.store import CanonicalStoreError
 
+from airweave.domains.search.owned_models import OwnedSearchRequest, OwnedSearchResponse
+
 router = TrailingSlashRouter()
+
+
+@router.post("/search", response_model=OwnedSearchResponse)
+async def search_records(
+    request: OwnedSearchRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    container: Container = Depends(deps.get_container),
+) -> OwnedSearchResponse:
+    """Retrieve bounded indexed originals; no provider requests or agent execution."""
+    return await container.owned_search.search(db, ctx, request)
 
 
 async def record_error_response(request: Request, error: CanonicalStoreError) -> JSONResponse:

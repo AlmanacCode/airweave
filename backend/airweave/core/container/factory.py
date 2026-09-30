@@ -113,6 +113,7 @@ from airweave.domains.search.classic.service import ClassicSearchService
 from airweave.domains.search.config import SearchConfig
 from airweave.domains.search.executor import SearchPlanExecutor
 from airweave.domains.search.instant.service import InstantSearchService
+from airweave.domains.search.owned import OwnedSearchService
 from airweave.domains.source_connections.create import SourceConnectionCreationService
 from airweave.domains.source_connections.delete import SourceConnectionDeletionService
 from airweave.domains.source_connections.repository import SourceConnectionRepository
@@ -613,6 +614,7 @@ def create_container(settings: Settings) -> Container:
         organization_service=org_service,
         user_service=user_service,
         email_service=email_service,
+        owned_search=search_deps["owned_search"],
         instant_search=search_deps["instant_search"],
         classic_search=search_deps["classic_search"],
         agentic_search=search_deps["agentic_search"],
@@ -1366,6 +1368,7 @@ def _create_search_services(
     )
 
     return {
+        "owned_search": OwnedSearchService(executor, source_registry),
         "instant_search": instant_search,
         "classic_search": classic_search,
         "agentic_search": agentic_search,

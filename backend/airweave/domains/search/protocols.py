@@ -42,6 +42,7 @@ class SearchPlanExecutorProtocol(Protocol):
         ctx: ApiContext,
         collection_readable_id: str,
         user_principal: Optional[str] = None,
+        indexed_only: bool = False,
     ) -> SearchResults:
         """Execute a search plan and return results."""
         ...

@@ -239,13 +239,17 @@ class SearchResults(BaseModel):
         description="Search results ordered by relevance (highest first).",
     )
 
+    engine_partial: bool = False
+    engine_coverage_percent: float | None = None
+
     retrieval_incomplete: bool = Field(
         default=False,
         description="Some retrieved candidates were unavailable; this page may underfill.",
     )
     excluded_candidates: int = Field(
-        default=0, ge=0,
-        description="Stale or unauthorized index candidates omitted from this page."
+        default=0,
+        ge=0,
+        description="Stale or unauthorized index candidates omitted from this page.",
     )
 
     def __len__(self) -> int:

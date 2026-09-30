@@ -89,6 +89,7 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         ctx: ApiContext,
         collection_readable_id: str,
         user_principal: Optional[str] = None,
+        indexed_only: bool = False,
     ) -> SearchResults:
         """Execute the full search pipeline including federated sources."""
         # 0. Resolve access control principals
@@ -100,7 +101,11 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         complete_plan = SearchPlanBuilder.build(plan, user_filter)
 
         # 2. Discover federated sources for this collection
-        federated_sources = await self._discover_federated_sources(db, ctx, collection_readable_id)
+        federated_sources = (
+            []
+            if indexed_only
+            else await self._discover_federated_sources(db, ctx, collection_readable_id)
+        )
 
         # 3. Adjust limit/offset for RRF pagination (if federated sources exist)
         original_limit = complete_plan.limit
@@ -131,10 +136,18 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
                 )
             )
 
-        retrieved = await vector_task
+        engine_results = await vector_task
+        retrieved = engine_results.results
+        coverage = {
+            "engine_partial": engine_results.engine_partial,
+            "engine_coverage_percent": engine_results.engine_coverage_percent,
+        }
         vector_results = await visible_results(
-            db, ctx.organization.id, collection_readable_id,
-            retrieved, self._source_registry,
+            db,
+            ctx.organization.id,
+            collection_readable_id,
+            retrieved,
+            self._source_registry,
         )
         excluded = len(retrieved) - len(vector_results)
         fed_results = await fed_task if fed_task else []
@@ -142,7 +155,9 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         # 5. If no federated sources, vector DB already has correct limit/offset
         if not federated_sources:
             return SearchResults(
-                results=vector_results, retrieval_incomplete=excluded > 0,
+                results=vector_results,
+                retrieval_incomplete=excluded > 0 or engine_results.engine_partial,
+                **coverage,
                 excluded_candidates=excluded,
             )
 
@@ -158,13 +173,17 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
             merged = self._merge_with_rrf(vector_results, fed_filtered)
             return SearchResults(
                 results=merged[original_offset : original_offset + original_limit],
-                retrieval_incomplete=excluded > 0, excluded_candidates=excluded,
+                retrieval_incomplete=excluded > 0 or engine_results.engine_partial,
+                **coverage,
+                excluded_candidates=excluded,
             )
 
         # All federated results filtered out — slice vector results to original window
         return SearchResults(
             results=vector_results[original_offset : original_offset + original_limit],
-            retrieval_incomplete=excluded > 0, excluded_candidates=excluded,
+            retrieval_incomplete=excluded > 0 or engine_results.engine_partial,
+            **coverage,
+            excluded_candidates=excluded,
         )
 
     async def _execute_vector_search(
@@ -172,7 +191,7 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         plan: SearchPlan,
         collection_id: str,
         acl_principals: Optional[list[str]] = None,
-    ) -> list[SearchResult]:
+    ) -> SearchResults:
         """Embed, compile, and execute vector DB search.
 
         Adapter exceptions (EmbedderError, VectorDBError) propagate directly
@@ -205,7 +224,7 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
             collection_id=collection_id,
             acl_principals=acl_principals,
         )
-        return (await self._vector_db.execute_query(compiled_query)).results
+        return await self._vector_db.execute_query(compiled_query)
 
     # ------------------------------------------------------------------
     # Access control resolution

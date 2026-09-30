@@ -155,7 +155,14 @@ class VespaVectorDB:
             f"coverage={coverage_pct:.1f}%"
         )
 
-        return self._convert_hits_to_results(hits)
+        results = self._convert_hits_to_results(hits)
+        results.engine_coverage_percent = coverage.get("coverage")
+        results.engine_partial = bool(
+            coverage.get("degraded") or coverage.get("full") is False
+            or coverage.get("coverage", 100) < 100 or root.get("errors")
+        )
+        results.retrieval_incomplete = results.engine_partial
+        return results
 
     async def count(
         self,
