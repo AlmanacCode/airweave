@@ -92,3 +92,16 @@ Unsupported means no configured converter for that part. It does not turn an
 installed converter's failure into success: malformed PDFs, OCR errors, and
 other attempted-conversion failures still leave publication pending. Scanned
 PDFs with a configured PDF converter but no OCR fallback remain in that category.
+
+### Drive originals omitted during capture
+
+A non-folder Drive file explicitly captured as `metadata_only` with no blobs
+publishes `unavailable_original` / `original_not_captured` extraction evidence,
+zero searchable chunks, and unavailable text. It does not index a title as if it
+were the document. A complete record missing its required blob remains an error.
+The retained evaluation presentation failure was this omission, not a converter
+failure: native size exceeded the initial capture limit and no bytes were stored.
+
+| Native capability/resource | Product name | Access operation | Stored representation | Sync/change guarantee | Proof | Gap |
+| --- | --- | --- | --- | --- | --- | --- |
+| File metadata without captured body | Original / extraction availability | Existing record and extraction reads | Native metadata plus explicit unavailable-original coverage | Later captured bytes form a new revision; loss of body retires previous text eligibility | Real SQL metadata-only → retained text → metadata-only lifecycle; complete/missing-blob remains error | Actual recapture depends on provider access and configured limits; no converter success claimed |

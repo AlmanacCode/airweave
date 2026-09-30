@@ -248,6 +248,29 @@ async def map_record(
     if excluded_from_search(record, source_name):
         yield ProjectionInputs(parts=())
         return
+    if (
+        source_name == "google_drive"
+        and record.identity.record_type == "file"
+        and record.completeness == "metadata_only"
+        and not record.blobs
+        and record.payload.get("mimeType") != "application/vnd.google-apps.folder"
+    ):
+        # Capture explicitly omitted bytes. Publish the omission, not invented
+        # title-only document content; complete records still require their blob.
+        yield ProjectionInputs(
+            parts=(
+                ProjectionInput(
+                    part=ExtractionPart(
+                        part_index=0,
+                        key=record.identity.native_id,
+                        kind="file",
+                        media_type=_string(record.payload.get("mimeType")) or None,
+                    ),
+                    entity=None,
+                ),
+            )
+        )
+        return
     with TemporaryDirectory(prefix="airweave-projection-") as temporary:
         directory = Path(temporary)
         if source_name == "gmail":

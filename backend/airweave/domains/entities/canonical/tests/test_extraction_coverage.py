@@ -393,3 +393,67 @@ async def test_inline_image_without_ocr_keeps_body_partial_but_converter_failure
             )
             is None
         )
+
+
+async def test_drive_metadata_only_reports_missing_original_then_new_bytes_are_indexed(
+    database, source, tmp_path
+):
+    from airweave.domains.entities.canonical.tests.test_gmail_projection import blob, record
+
+    service, fence = source
+    identity = RecordIdentity(record_type="file", native_id="retained-file")
+    payload = {"id": identity.native_id, "name": "Notes.txt", "mimeType": "text/plain"}
+    metadata = observation(identity=identity, payload=payload, completeness="metadata_only")
+    await capture(database, service, fence, metadata)
+    storage = FilesystemBackend(tmp_path)
+    target = destination()
+    project = projector(database, storage)
+    assert (
+        await project.batch(fence.organization_id, fence.sync_id, "google_drive", target, logger)
+    ).published == 1
+    async with database() as db:
+        row = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
+        coverage = await current_extraction(
+            db, fence.organization_id, fence.sync_id, row.id, row.record_revision
+        )
+        assert coverage.status == "unavailable" and row.indexed_chunk_count == 0
+        assert coverage.parts[0].outcome == "unavailable_original"
+        assert coverage.parts[0].reason == "original_not_captured"
+    content = b"Recovered original text contains the complete available document."
+    ref = blob(record({}, sync_id=fence.sync_id), content).model_copy(
+        update={"media_type": "text/plain"}
+    )
+    await storage.write_file(ref.key, content)
+    await capture(
+        database, service, fence, observation(identity=identity, payload=payload, blobs=(ref,))
+    )
+    assert (
+        await project.batch(fence.organization_id, fence.sync_id, "google_drive", target, logger)
+    ).published == 1
+    async with database() as db:
+        row = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
+        assert row.indexed_chunk_count > 0
+        previous = ProjectionLocator(
+            record_id=row.id,
+            revision=row.record_revision,
+            pipeline_version=row.indexed_pipeline_version,
+            generation=row.indexed_generation,
+            part_index=0,
+        )
+    # Losing retained body availability withdraws the prior text generation.
+    await capture(database, service, fence, metadata)
+    assert (
+        await project.batch(fence.organization_id, fence.sync_id, "google_drive", target, logger)
+    ).published == 1
+    async with database() as db:
+        row = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
+        assert row.indexed_chunk_count == 0
+        assert (
+            await db.scalar(select(Entity.id).join(Sync).where(publication_matches(previous)))
+            is None
+        )
+        assert (
+            await current_extraction(
+                db, fence.organization_id, fence.sync_id, row.id, row.record_revision
+            )
+        ).status == "unavailable"
