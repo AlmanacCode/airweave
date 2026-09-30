@@ -478,6 +478,9 @@ async def test_capture_discovery_coverage_is_separate_from_retrieval(
     body = response.json()
     assert body["sources"][0]["capture"] == {
         "phase": "active",
+        "mode": "full",
+        "last_full_capture": None,
+        "provider_checkpoint_promoted_at": None,
         "policies": {"event": "discovery_only"},
         "discovery": "incomplete",
     }
