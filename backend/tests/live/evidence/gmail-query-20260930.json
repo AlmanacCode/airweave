@@ -1,0 +1,26 @@
+{
+  "verified_at": "2026-09-30",
+  "source_commit": "cd423b8",
+  "provider": "gmail",
+  "mode": "frozen_seven_day_query_two_cycle_attempt",
+  "provider_writes": false,
+  "completed_runs": 0,
+  "attempted_runs": 1,
+  "harness_exit_code": 1,
+  "error_type": "SourceServerError",
+  "last_operation": "metadata",
+  "provider_requests": 184,
+  "records_observed": 100,
+  "blob_bytes_written": 3482736,
+  "full_scope_completed": false,
+  "schema_removed": true,
+  "blob_directory_removed": true,
+  "independent_remaining_private_schemas": 0,
+  "independent_remaining_private_live_directories": 0,
+  "immutable_archive_removed": true,
+  "limitations": [
+    "Second cycle did not run.",
+    "No complete query scope or subsequent cycle proof.",
+    "Error type identifies an upstream server failure; originating provider versus authentication proxy was not established by sanitized output."
+  ]
+}
