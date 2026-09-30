@@ -75,6 +75,7 @@ async def test_native_quota_retry_is_bounded_and_preserves_evidence(method, reas
             }
         },
         "not json",
+        b"{broken",
     ],
 )
 async def test_permission_unknown_and_malformed_errors_do_not_retry(method, body):
@@ -83,7 +84,11 @@ async def test_permission_unknown_and_malformed_errors_do_not_retry(method, body
     def handler(request):
         nonlocal calls
         calls += 1
-        return httpx.Response(403, json=body)
+        return (
+            httpx.Response(403, content=body)
+            if isinstance(body, bytes)
+            else httpx.Response(403, json=body)
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         source = await GmailSource.create(
