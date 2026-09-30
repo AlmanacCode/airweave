@@ -34,10 +34,13 @@ def event(native_id):
 
 
 class NativeHTTP:
-    def __init__(self, replies):
+    def __init__(self, replies, principal="fixture-primary"):
+        self.principal = principal
         self.replies, self.calls = list(replies), []
 
     async def handle(self, request):
+        if request.url.path.endswith("/calendars/primary"):
+            return httpx.Response(200, json={"id": self.principal})
         self.calls.append((request.url.path, dict(request.url.params)))
         path, value = self.replies.pop(0)
         assert str(request.url).split("?")[0] == BASE + path
@@ -49,6 +52,7 @@ class NativeHTTP:
 
 async def setup(database, source, native, attempt=1, config=CONFIG):
     service, fence = source
+    config = config.model_copy(update={"expected_primary_calendar_id": "fixture-primary"})
     client = httpx.AsyncClient(transport=httpx.MockTransport(native.handle))
     connector = await GoogleCalendarSource.create(
         auth=StaticTokenProvider("synthetic"), logger=MagicMock(), http_client=client, config=config
@@ -414,3 +418,24 @@ async def test_reader_role_change_hides_children_until_same_identity_recaptured(
         parent = await db.scalar(select(Entity).where(Entity.native_id == "cal"))
         assert parent.visibility_epoch == old_epoch + 1
     await client.aclose()
+
+
+async def test_wrong_primary_identity_never_writes_capture(database, source):
+    from airweave.models.sync_cursor import SyncCursor
+
+    native = NativeHTTP([], principal="wrong-primary")
+    async with database() as db:
+        before = [(row.id, row.cursor_data) for row in (await db.scalars(select(SyncCursor))).all()]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(native.handle)) as client:
+        with pytest.raises(ValueError, match="does not match"):
+            await GoogleCalendarSource.create(
+                auth=StaticTokenProvider("same-broker-account"),
+                logger=MagicMock(),
+                http_client=client,
+                config=GoogleCalendarConfig(expected_primary_calendar_id="trusted-primary"),
+            )
+    assert native.calls == []
+    async with database() as db:
+        assert (await db.scalars(select(Entity))).all() == []
+        after = [(row.id, row.cursor_data) for row in (await db.scalars(select(SyncCursor))).all()]
+        assert after == before

@@ -15,7 +15,6 @@ sys.path.insert(0, 'tests/live')
 import conftest
 import httpx
 import provider_lifecycle as lifecycle
-from provider_sample import verify_rest_identity
 from airweave.domains.entities.canonical.tests.test_calendar_recovery import NativeHTTP, event
 from airweave.domains.sources.token_providers.static import StaticTokenProvider
 from airweave.platform.sources.google_calendar import GoogleCalendarSource
@@ -26,17 +25,16 @@ async def synthetic_source(name, account, expected_email, key, fence, **options)
     path = '/calendars/' + quote(expected_email, safe='') + '/events'
     first = os.environ['TEST_STAGE'] == 'first'
     native = NativeHTTP([
-        ('/users/me/calendarList/primary', {'id': expected_email, 'primary': True}),
         ('/users/me/calendarList', {'items': [{'id': expected_email, 'timeZone': 'UTC'}]}),
         (path, {'items': [event('a')] if first else [],
                 'nextSyncToken': 'full' if first else 'delta'}),
         (path, {'items': [event('a')]}),
-    ])
+    ], principal=expected_email)
     async with httpx.AsyncClient(transport=httpx.MockTransport(native.handle),
             event_hooks={'request': [options['request_hook']]}) as client:
         connector = await GoogleCalendarSource.create(auth=StaticTokenProvider('synthetic'),
-            logger=MagicMock(), http_client=client, config=options['calendar_config'])
-        await verify_rest_identity(name, connector, expected_email)
+            logger=MagicMock(), http_client=client, config=options['calendar_config'].model_copy(
+                update={'expected_primary_calendar_id': expected_email}))
         yield connector, 'provider_email'
         assert not native.replies
 

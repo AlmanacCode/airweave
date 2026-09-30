@@ -63,7 +63,7 @@ class CalendarPages:
     @property
     def configuration(self) -> CycleConfiguration:
         """Fingerprint native selection and capture semantics, not moving wall-clock bounds."""
-        raw = {"version": 2, "config": self.config.model_dump(mode="json")}
+        raw = {"version": 3, "config": self.config.model_dump(mode="json")}
         return CycleConfiguration(
             fingerprint=hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest(),
             parents={

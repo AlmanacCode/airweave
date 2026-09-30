@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from tenacity import retry, retry_if_exception, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
@@ -80,6 +81,13 @@ def _retry_capture(exception: BaseException) -> bool:
     return should_retry_on_rate_limit_or_timeout(exception)
 
 
+class CalendarPrincipal(BaseModel):
+    """Primary calendar resource identity, not a Google OIDC subject."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(min_length=1, pattern=r"^\S+$")
+
+
 @source(
     name="Google Calendar",
     short_name="google_calendar",
@@ -106,17 +114,32 @@ class GoogleCalendarSource(BaseSource):
     Google Calendar scheduling information for productivity and time management insights.
     """
 
+    _verified_primary_calendar_id: str | None = None
+
+    def _require_principal(self) -> None:
+        """Guard direct capture and resume even outside shared lifecycle validation."""
+        expected = self.calendar_config.expected_primary_calendar_id
+        if expected is None or self._verified_primary_calendar_id != expected:
+            raise ValueError(
+                "Owned Calendar capture requires an attested primary calendar identity"
+            )
+
+    def _calendar_pages(self) -> CalendarPages:
+        """Keep native page logic behind the same attestation gate."""
+        self._require_principal()
+        return CalendarPages(self._get_capture_json, self.calendar_config)
+
     canonical_record_types = ("calendar", "event", "event_occurrence")
     canonical_container_parents = {"event": "calendar", "event_occurrence": "calendar"}
 
     @property
     def capture_cycle_configuration(self) -> CycleConfiguration:
         """Calendar membership owns exact native event and occurrence scopes."""
-        return CalendarPages(self._get_capture_json, self.calendar_config).configuration
+        return self._calendar_pages().configuration
 
     async def prepare_cycle(self, previous: CaptureCycle | None) -> CapturePlan:
         """Resolve the expansion window once per persisted cycle."""
-        return CalendarPages(self._get_capture_json, self.calendar_config).prepare()
+        return self._calendar_pages().prepare()
 
     async def prepare_scope(
         self,
@@ -128,7 +151,7 @@ class GoogleCalendarSource(BaseSource):
         force_full: bool,
     ) -> ScopePlan:
         """Choose native delta only from compatible completed exact-scope evidence."""
-        return CalendarPages(self._get_capture_json, self.calendar_config).scope_plan(
+        return self._calendar_pages().scope_plan(
             scope, cycle, previous, parent=parent, force_full=force_full
         )
 
@@ -136,6 +159,7 @@ class GoogleCalendarSource(BaseSource):
         self, scope: CompletedScope, cycle: CaptureCycle, plan: ScopePlan
     ) -> ScanContinuation:
         """Provider progress starts from the immutable engine-attested scope plan."""
+        self._require_principal()
         return CalendarPages.initial(plan)
 
     def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
@@ -153,17 +177,13 @@ class GoogleCalendarSource(BaseSource):
         parent: SourceRecord | None = None,
     ) -> CapturePage:
         """Originals and pagination commit together through the production page driver."""
-        return await CalendarPages(self._get_capture_json, self.calendar_config).page(
-            scope, continuation
-        )
+        return await self._calendar_pages().page(scope, continuation)
 
     async def confirm_absent(self, record: SourceRecord) -> None:
         """An accessible omitted calendar prevents premature membership reconciliation."""
         if record.identity.record_type != "calendar" or record.parent is not None:
             raise ValueError("Calendar omission must identify root membership")
-        await CalendarPages(self._get_capture_json, self.calendar_config).confirm_member_absent(
-            record.identity.native_id
-        )
+        await self._calendar_pages().confirm_member_absent(record.identity.native_id)
 
     # -----------------------
     # Construction / Config
@@ -187,6 +207,8 @@ class GoogleCalendarSource(BaseSource):
         instance.max_queue_size = int(config_dict.get("max_queue_size", 200))
         instance.preserve_order = bool(config_dict.get("preserve_order", False))
         instance.stop_on_error = bool(config_dict.get("stop_on_error", False))
+        if config.expected_primary_calendar_id is not None:
+            await instance.validate()
 
         return instance
 
@@ -493,8 +515,23 @@ class GoogleCalendarSource(BaseSource):
                 yield entity
 
     async def validate(self) -> None:
-        """Validate credentials by pinging the Calendar API calendarList endpoint."""
-        await self._get(
-            "https://www.googleapis.com/calendar/v3/users/me/calendarList",
-            params={"maxResults": "1"},
+        """Verify the bound primary calendar without inferring a Google subject."""
+        self._verified_primary_calendar_id = None
+        expected = self.calendar_config.expected_primary_calendar_id
+        if expected is None:
+            # Legacy extraction retains its original credential check.
+            await self._get(
+                "https://www.googleapis.com/calendar/v3/users/me/calendarList",
+                params={"maxResults": "1"},
+            )
+            return
+        raw = await self._get_capture_json(
+            "https://www.googleapis.com/calendar/v3/calendars/primary", params={"fields": "id"}
         )
+        try:
+            principal = CalendarPrincipal.model_validate(raw)
+        except ValidationError:
+            raise ValueError("Calendar returned an invalid primary identity") from None
+        if principal.id != expected:
+            raise ValueError("Calendar primary identity does not match the trusted binding")
+        self._verified_primary_calendar_id = expected
