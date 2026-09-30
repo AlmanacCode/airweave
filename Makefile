@@ -3,16 +3,20 @@ BACKEND := backend
 PYTHON := .venv/bin/python
 PYTEST := .venv/bin/pytest
 
-.PHONY: help setup test-store test-capture test-search
+.PHONY: help setup test-store test-capture test-search validate-deploy
 
 help:
 	@echo 'setup         Install the locked backend and development dependencies'
 	@echo 'test-store    Verify record transactions and publication on disposable PostgreSQL'
 	@echo 'test-capture  Verify source capture, transport and blob handling'
 	@echo 'test-search   Verify search services and visibility behavior'
+	@echo 'validate-deploy Validate the Porter application manifest locally (no deployment)'
 	@echo ''
 	@echo 'test-store requires CANONICAL_TEST_DATABASE_URL; it creates and removes test schemas.'
-	@echo 'Deployment is not configured yet. See backend/SERVICE_AUTH.md for service setup.'
+	@echo 'See deploy/README.md for staging prerequisites and explicit deployment steps.'
+
+validate-deploy:
+	porter apply validate -f porter.yaml
 
 setup:
 	cd $(BACKEND) && POETRY_VIRTUALENVS_IN_PROJECT=true uvx --from poetry==2.3.2 poetry install --with dev,lint --no-root --no-interaction
