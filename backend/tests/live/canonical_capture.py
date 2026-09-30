@@ -84,6 +84,11 @@ async def fetch_records(name, account, expected_email, key, fence, root):
     from airweave.domains.entities.canonical.requests import RecordIdentity
     from airweave.domains.entities.canonical.source import ContainerScopedSource
 
+    if name == "google_drive" and os.environ.get("LIVE_WORKSPACE_DOCUMENT") == "1":
+        from workspace_document import fetch_workspace_document
+
+        return await fetch_workspace_document(account, expected_email, key, fence, root)
+
     storage = FilesystemBackend(root / "blobs")
     files = FileService(fence.job_id, storage, sync_id=fence.sync_id)
     files.MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
@@ -235,7 +240,16 @@ async def verify(name, account, email, key, sessions, engine, root):
             sync_id=sync_id,
             root=root,
         )
+    document_reader = None
+    if name == "google_drive" and os.environ.get("LIVE_WORKSPACE_DOCUMENT") == "1":
+        from workspace_document import verify_workspace_document_reader
+
+        document_reader = await verify_workspace_document_reader(
+            records=listed, storage=storage, query=query, sessions=sessions,
+            organization_id=organization_id, sync_id=sync_id, root=root,
+        )
     return {
+        "document_reader": document_reader,
         "almanac_reader": consumer,
         "provider": name,
         "identity_verification": identity_verification,
@@ -269,6 +283,8 @@ async def main():
         raise ValueError(
             "LIVE_PROVIDERS must select gmail, google_drive, google_calendar, slack or wispr"
         )
+    if os.environ.get("LIVE_WORKSPACE_DOCUMENT") == "1" and selected != ["google_drive"]:
+        raise ValueError("Workspace document trial requires only google_drive")
     inputs = [
         (name, os.environ[variable], os.environ["LIVE_EXPECTED_EMAIL"] if name != "wispr" else "")
         for name, variable in (

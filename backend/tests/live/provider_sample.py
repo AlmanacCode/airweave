@@ -72,8 +72,9 @@ async def rest_source(
     max_file_bytes=10 * 1024 * 1024,
 ):
     host = {"gmail": "gmail.googleapis.com", "slack": "slack.com"}.get(name, "www.googleapis.com")
-    auth = ManagedAuthProvider(api_key=key, connected_account_id=account, allowed_hosts={host})
-    transport = ComposioTransport(api_key=key, connected_account_id=account, allowed_hosts={host})
+    hosts = {host, "docs.googleapis.com"} if name == "google_drive" else {host}
+    auth = ManagedAuthProvider(api_key=key, connected_account_id=account, allowed_hosts=hosts)
+    transport = ComposioTransport(api_key=key, connected_account_id=account, allowed_hosts=hosts)
     transport.MAX_BINARY_BYTES = max_file_bytes
     hooks = {"request": [request_hook]} if request_hook is not None else {}
     if response_hook is not None:
