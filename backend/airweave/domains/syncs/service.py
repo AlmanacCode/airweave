@@ -29,6 +29,9 @@ from airweave.core.shared_models import (
 )
 from airweave.db.session import get_db_context
 from airweave.db.unit_of_work import UnitOfWork
+from airweave.domains.entities.canonical.page_source import CanonicalPageSource
+from airweave.domains.entities.canonical.search_metadata import SEARCH_METADATA_PIPELINE_VERSION
+from airweave.domains.entities.canonical.source import CanonicalSource
 from airweave.domains.sources.exceptions.classifier import classify_error
 from airweave.domains.sources.types import SourceRegistryEntry
 from airweave.domains.sync_pipeline.config import SyncConfig
@@ -131,6 +134,11 @@ class SyncService(SyncServiceProtocol):
             destination_connection_ids=destination_connection_ids,
             cron_schedule=cron,
             run_immediately=run_immediately,
+            initial_pipeline_version=(
+                SEARCH_METADATA_PIPELINE_VERSION
+                if isinstance(source_entry.source_class_ref, (CanonicalSource, CanonicalPageSource))
+                else 1
+            ),
             ctx=ctx,
             uow=uow,
         )
@@ -470,6 +478,7 @@ class SyncService(SyncServiceProtocol):
         destination_connection_ids: List[UUID],
         cron_schedule: Optional[str],
         run_immediately: bool,
+        initial_pipeline_version: int,
         ctx: ApiContext,
         uow: UnitOfWork,
     ) -> Tuple[schemas.Sync, Optional[schemas.SyncJob]]:
@@ -486,7 +495,13 @@ class SyncService(SyncServiceProtocol):
             run_immediately=run_immediately,
         )
 
-        sync_schema = await self._sync_repo.create(uow.session, obj_in=sync_in, ctx=ctx, uow=uow)
+        sync_schema = await self._sync_repo.create(
+            uow.session,
+            obj_in=sync_in,
+            ctx=ctx,
+            uow=uow,
+            initial_pipeline_version=initial_pipeline_version,
+        )
         await uow.session.flush()
 
         sync_job_schema: Optional[schemas.SyncJob] = None

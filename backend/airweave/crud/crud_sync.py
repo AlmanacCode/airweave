@@ -333,6 +333,7 @@ class CRUDSync(CRUDBaseOrganization[Sync, SyncCreate, SyncUpdate]):
         obj_in: SyncCreate,
         ctx: BaseContext,
         uow: Optional[UnitOfWork] = None,
+        initial_pipeline_version: int = 1,
     ) -> schemas.Sync:
         """Create a sync.
 
@@ -347,11 +348,16 @@ class CRUDSync(CRUDBaseOrganization[Sync, SyncCreate, SyncUpdate]):
             obj_in (SyncCreate): The sync to create
             ctx (BaseContext): The API context
             uow (UnitOfWork, optional): The unit of work
+            initial_pipeline_version: Server-selected version for this new sync only.
+
         Returns:
             schemas.Sync: The model validated schema of the created sync
         """
         # Dump the obj_in to a dict
+        if initial_pipeline_version < 1:
+            raise ValueError("Initial projection version must be positive")
         obj_in_dict = obj_in.model_dump()
+        obj_in_dict["index_pipeline_version"] = initial_pipeline_version
         obj_in_dict.pop("run_immediately")
 
         # Pop off the connection ids

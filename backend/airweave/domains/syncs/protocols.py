@@ -53,6 +53,7 @@ class SyncRepositoryProtocol(Protocol):
         obj_in: SyncCreate,
         ctx: ApiContext,
         uow: Optional[UnitOfWork] = None,
+        initial_pipeline_version: int = 1,
     ) -> schemas.Sync:
         """Create a new sync with its connection associations."""
         ...

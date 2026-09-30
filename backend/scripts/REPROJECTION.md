@@ -40,11 +40,10 @@ retrieval. Following the bump, pending publication coverage remains explicit;
 older generations cannot pass SQL validation. Relevance search is still bounded,
 not exhaustive, and this change introduces no chronological ordering or cursor.
 
-New Sync creation still defaults to version 1 in this isolated implementation.
-Until integrated initialization is changed, newly captured sources also need the
-explicit upgrade. The next coherent creation change is in the existing sync
-creation transaction (`domains/syncs/service.py::_create_sync_records`): initialize
-new canonical sources to the current projection contract after source capability
-resolution, without resetting any existing Sync version. That change is deferred
-while the independent capture engine/live lifecycle is active; it must be finished
-before presenting new-source date/type search as automatically ready.
+New canonical sources initialize their projection version to the current contract
+inside the existing sync-creation transaction, before creating a pending job.
+Capability resolution uses the same CanonicalSource/CanonicalPageSource protocols
+as the capture factory. Legacy sources retain their existing initial version.
+The version is an internal repository argument, not a client-controlled SyncCreate
+field; existing syncs are never upgraded implicitly. Sync service tests verify
+legacy, Gmail and Slack creation paths; this does not prove hosted provisioning.

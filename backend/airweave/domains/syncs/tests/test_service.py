@@ -953,6 +953,7 @@ async def test_cancel_job_temporal_failure():
 
 def _mock_source_entry(*, short_name="github", continuous=False, federated=False):
     entry = MagicMock()
+    entry.source_class_ref = object
     entry.short_name = short_name
     entry.supports_continuous = continuous
     entry.federated_search = federated
@@ -1065,7 +1066,10 @@ async def test_create_no_cron_no_run_immediately():
 
 
 @pytest.mark.asyncio
-async def test_create_with_cron_calls_temporal_schedule():
+@pytest.mark.parametrize(
+    "source_kind, expected_version", [("legacy", 1), ("gmail", 2), ("slack", 2)]
+)
+async def test_create_with_cron_calls_temporal_schedule(source_kind, expected_version):
     from airweave.schemas.source_connection import ScheduleConfig
 
     sync_repo = AsyncMock()
@@ -1086,6 +1090,13 @@ async def test_create_with_cron_calls_temporal_schedule():
         temporal_schedule_service=temporal_sched,
     )
 
+    from airweave.platform.sources.gmail import GmailSource
+    from airweave.platform.sources.slack import SlackSource
+
+    source_entry = _mock_source_entry()
+    source_entry.source_class_ref = {"legacy": object, "gmail": GmailSource, "slack": SlackSource}[
+        source_kind
+    ]
     result = await svc.create(
         AsyncMock(),
         name="test",
@@ -1093,7 +1104,7 @@ async def test_create_with_cron_calls_temporal_schedule():
         destination_connection_ids=[uuid4()],
         collection_id=uuid4(),
         collection_readable_id="col-x",
-        source_entry=_mock_source_entry(),
+        source_entry=source_entry,
         schedule_config=ScheduleConfig(cron="0 6 * * *"),
         run_immediately=False,
         ctx=_mock_ctx(),
@@ -1102,6 +1113,8 @@ async def test_create_with_cron_calls_temporal_schedule():
     assert result is not None
     assert result.sync_id == mock_sync.id
     temporal_sched.create_or_update_schedule.assert_awaited_once()
+    assert sync_repo.create.call_args.kwargs["initial_pipeline_version"] == expected_version
+    assert "index_pipeline_version" not in sync_repo.create.call_args.kwargs["obj_in"].model_dump()
 
 
 # ---------------------------------------------------------------------------
