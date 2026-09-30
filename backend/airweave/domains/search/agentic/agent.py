@@ -47,6 +47,7 @@ from airweave.core.protocols.llm import LLMProtocol
 from airweave.core.protocols.reranker import RerankerProtocol
 from airweave.core.protocols.tokenizer import TokenizerProtocol
 from airweave.domains.collections.protocols import CollectionRepositoryProtocol
+from airweave.domains.search.adapters.vector_db.exceptions import VectorDBError
 from airweave.domains.search.adapters.vector_db.protocol import VectorDBProtocol
 from airweave.domains.search.agentic.context_manager import ContextManager
 from airweave.domains.search.agentic.exceptions import (
@@ -85,12 +86,15 @@ from airweave.domains.search.agentic.tools.types import (
     ToolErrorResult,
     ToolName,
 )
+from airweave.domains.search.canonical_visibility import visible_results
 from airweave.domains.search.config import SearchConfig
 from airweave.domains.search.protocols import (
     CollectionMetadataBuilderProtocol,
     SearchPlanExecutorProtocol,
 )
 from airweave.domains.search.types import SearchResults
+from airweave.domains.search.visible_vector_db import VisibleVectorDB
+from airweave.domains.sources.protocols import SourceRegistryProtocol
 
 if TYPE_CHECKING:
     from airweave.schemas.search_v2 import AgenticSearchRequest
@@ -110,6 +114,7 @@ class Agent:
         collection_repo: CollectionRepositoryProtocol,
         event_bus: EventBus,
         config: SearchConfig,
+        source_registry: SourceRegistryProtocol,
     ) -> None:
         """Initialize with all dependencies (injected by service)."""
         self._llm = llm
@@ -117,6 +122,7 @@ class Agent:
         self._reranker = reranker
         self._executor = executor
         self._vector_db = vector_db
+        self._source_registry = source_registry
         self._metadata_builder = metadata_builder
         self._collection_repo = collection_repo
         self._event_bus = event_bus
@@ -237,6 +243,14 @@ class Agent:
 
         for iteration in range(max_iter):
             diag.iteration = iteration
+
+            # Never resend cached text after its authoritative publication changes.
+            current = await visible_results(
+                db, ctx.organization.id, readable_id, list(state.results.values()),
+                self._source_registry,
+            )
+            if len(current) != len(state.results):
+                raise VectorDBError("Source content changed during search; retry the query")
 
             # 1. Call LLM
             llm_start = time.monotonic()
@@ -395,6 +409,14 @@ class Agent:
             state.results[eid] for eid in state.collected_ids if eid in state.results
         ]
 
+        collected_before_validation = len(collected_results)
+        collected_results = await visible_results(
+            db, ctx.organization.id, readable_id, collected_results, self._source_registry
+        )
+        excluded_at_finish = collected_before_validation - len(collected_results)
+        state.retrieval_incomplete |= excluded_at_finish > 0
+        state.excluded_candidates += excluded_at_finish
+
         # Optional reranking
         if self._reranker and collected_results:
             rerank_start = time.monotonic()
@@ -472,7 +494,11 @@ class Agent:
             )
         )
 
-        return SearchResults(results=collected_results)
+        return SearchResults(
+            results=collected_results,
+            retrieval_incomplete=state.retrieval_incomplete,
+            excluded_candidates=state.excluded_candidates,
+        )
 
     @staticmethod
     def _append_iteration_messages(
@@ -599,6 +625,9 @@ class Agent:
         user_principal: str | None = None,
     ) -> ToolDispatcher:
         """Construct tools and dispatcher for this request."""
+        visible_db = VisibleVectorDB(
+            self._vector_db, db, ctx, collection_readable_id, collection_id, self._source_registry
+        )
         return ToolDispatcher(
             {
                 ToolName.SEARCH: SearchTool(
@@ -611,27 +640,27 @@ class Agent:
                     user_principal=user_principal,
                 ),
                 ToolName.READ: ReadTool(
-                    vector_db=self._vector_db,
+                    vector_db=visible_db,
                     collection_id=collection_id,
                     surrounding_chunks=self._config.READ_SURROUNDING_CHUNKS,
                 ),
                 ToolName.ADD_TO_RESULTS: AddToResultsTool(),
                 ToolName.REMOVE_FROM_RESULTS: RemoveFromResultsTool(),
                 ToolName.COUNT: CountTool(
-                    vector_db=self._vector_db,
+                    vector_db=visible_db,
                     collection_id=collection_id,
                     user_filter=user_filter,
                 ),
                 ToolName.GET_CHILDREN: GetChildrenTool(
-                    vector_db=self._vector_db,
+                    vector_db=visible_db,
                     collection_id=collection_id,
                 ),
                 ToolName.GET_SIBLINGS: GetSiblingsTool(
-                    vector_db=self._vector_db,
+                    vector_db=visible_db,
                     collection_id=collection_id,
                 ),
                 ToolName.GET_PARENT: GetParentTool(
-                    vector_db=self._vector_db,
+                    vector_db=visible_db,
                     collection_id=collection_id,
                 ),
                 ToolName.REVIEW_RESULTS: ReviewResultsTool(),

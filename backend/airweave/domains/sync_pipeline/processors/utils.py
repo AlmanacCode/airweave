@@ -5,14 +5,16 @@ from typing import TYPE_CHECKING, List
 from airweave.platform.entities._base import BaseEntity
 
 if TYPE_CHECKING:
-    from airweave.domains.sync_pipeline.contexts import SyncContext
-    from airweave.domains.sync_pipeline.contexts.runtime import SyncRuntime
+    from airweave.domains.sync_pipeline.processors.context import (
+        ProcessingContext,
+        ProcessingRuntime,
+    )
 
 
 async def filter_empty_representations(
     entities: List[BaseEntity],
-    sync_context: "SyncContext",
-    runtime: "SyncRuntime",
+    sync_context: "ProcessingContext",
+    runtime: "ProcessingRuntime",
     processor_name: str = "Processor",
 ) -> List[BaseEntity]:
     """Filter entities with empty textual_representation.

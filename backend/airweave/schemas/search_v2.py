@@ -185,7 +185,10 @@ class BrowseResponse(BaseModel):
     results: list[SearchResult] = Field(
         default_factory=list, description="Rows on this page (one per source entity)."
     )
-    total: int = Field(..., description="Total entity count matching the filter.")
+    total: int | None = Field(
+        ..., description="Exact visible count, or null when the index cannot prove it."
+    )
+    retrieval_incomplete: bool = False
     limit: int = Field(..., description="Limit echoed back from the request.")
     offset: int = Field(..., description="Offset echoed back from the request.")
 
@@ -286,3 +289,8 @@ class SearchV2Response(BaseModel):
     results: list[SearchResult] = Field(
         default_factory=list, description="Search results ordered by relevance."
     )
+
+    retrieval_incomplete: bool = Field(
+        default=False, description="Unavailable index candidates may leave this page incomplete."
+    )
+    excluded_candidates: int = Field(default=0, ge=0)

@@ -5,10 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from airweave.domains.search.adapters.vector_db.protocol import VectorDBProtocol
+from airweave.domains.search.agentic.exceptions import ToolExecutionError
 from airweave.domains.search.agentic.state import AgentState
 from airweave.domains.search.agentic.tools.dispatcher import Tool
 from airweave.domains.search.agentic.tools.types import CountToolResult
 from airweave.domains.search.types.filters import FilterGroup
+from airweave.domains.search.visible_vector_db import UnavailableExactCount
 
 COUNT_TOOL: dict[str, Any] = {
     "type": "function",
@@ -76,5 +78,12 @@ class CountTool(Tool):
         else:
             combined = validated
 
-        count = await self._vector_db.count(combined, self._collection_id)
+        try:
+            count = await self._vector_db.count(combined, self._collection_id)
+        except UnavailableExactCount as exc:
+            raise ToolExecutionError(
+                "Exact current count is unavailable for this indexed collection. "
+                "Search or browse the available records instead; do not infer zero. "
+                "Retrying count does not resolve this capability limitation."
+            ) from exc
         return CountToolResult(count=count)

@@ -29,6 +29,9 @@ class AgentState:
         self.collected_ids: set[str] = set()
         self.should_finish: bool = False
         self.return_warned: bool = False
+        self.retrieval_incomplete: bool = False
+        # Candidate occurrences across calls, not a unique-record total.
+        self.excluded_candidates: int = 0
 
     def add_to_collected(self, entity_ids: list[str]) -> tuple[list[str], list[str], list[str]]:
         """Add entity IDs to the collected result set.

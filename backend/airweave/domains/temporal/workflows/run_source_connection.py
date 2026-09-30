@@ -31,6 +31,9 @@ with workflow.unsafe.imports_passed_through():
         CLASSIFIED_USER_ERROR_TYPE,
         ORPHANED_SYNC_ERROR_TYPE,
     )
+    from airweave.domains.temporal.workflows.project_canonical_records import (
+        ProjectCanonicalRecordsWorkflow,
+    )
 
 # ---------------------------------------------------------------------------
 # Execution policies
@@ -189,22 +192,34 @@ class RunSourceConnectionWorkflow:
         local_development = ctx_dict.get("local_development", False)
         heartbeat_timeout = _HEARTBEAT_TIMEOUT_LOCAL if local_development else _HEARTBEAT_TIMEOUT
 
-        await workflow.execute_activity(
-            run_sync_activity,
-            args=[
-                sync_dict,
-                sync_job_dict,
-                collection_dict,
-                connection_dict,
-                ctx_dict,
-                access_token,
-                force_full_sync,
-            ],
-            start_to_close_timeout=_SYNC_TIMEOUT,
-            heartbeat_timeout=heartbeat_timeout,
-            cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
-            retry_policy=_NO_RETRY,
-        )
+        try:
+            await workflow.execute_activity(
+                run_sync_activity,
+                args=[
+                    sync_dict,
+                    sync_job_dict,
+                    collection_dict,
+                    connection_dict,
+                    ctx_dict,
+                    access_token,
+                    force_full_sync,
+                ],
+                start_to_close_timeout=_SYNC_TIMEOUT,
+                heartbeat_timeout=heartbeat_timeout,
+                cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+                retry_policy=_NO_RETRY,
+            )
+        finally:
+            # Starting the child is durable workflow history. Capture may be partial;
+            # projection consumes only committed rows and owns its own retries/status.
+            await asyncio.shield(
+                workflow.start_child_workflow(
+                    ProjectCanonicalRecordsWorkflow.run,
+                    args=[str(ctx_dict["organization"]["id"]), str(sync_dict["id"])],
+                    id=f"projection:{sync_dict['id']}:{workflow.info().run_id}",
+                    parent_close_policy=workflow.ParentClosePolicy.ABANDON,
+                )
+            )
 
     # ------------------------------------------------------------------
     # Phase 3: State transitions

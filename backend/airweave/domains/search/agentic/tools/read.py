@@ -85,6 +85,9 @@ class ReadTool(Tool):
 
         for orig_id, group_results in groups.items():
             chunks = await self._fetch_chunks(orig_id, group_results, state)
+            if not chunks:
+                not_found.extend(result.entity_id for result in group_results)
+                continue
             all_read_results.extend(chunks)
 
             # Side-load fetched chunks into state
@@ -156,14 +159,11 @@ class ReadTool(Tool):
             )
         ]
 
-        try:
-            results = await self._vector_db.filter_search(
-                filter_groups=filter_groups,
-                collection_id=self._collection_id,
-                limit=max(max_chunk - min_chunk + 1, 10),
-            )
-        except Exception:
-            results = list(group_results)
+        results = await self._vector_db.filter_search(
+            filter_groups=filter_groups,
+            collection_id=self._collection_id,
+            limit=max(max_chunk - min_chunk + 1, 10),
+        )
 
         results.sort(key=lambda r: r.airweave_system_metadata.chunk_index)
         return results

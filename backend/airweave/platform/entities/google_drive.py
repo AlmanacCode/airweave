@@ -303,3 +303,16 @@ class GoogleDriveFileDeletionEntity(DeletionEntity):
         if self.drive_id:
             return f"https://drive.google.com/drive/folders/{self.drive_id}"
         return "https://drive.google.com/drive/my-drive"
+
+
+class GoogleDriveFolderEntity(BaseEntity):
+    """Searchable folder metadata; folders never require a fabricated file body."""
+
+    folder_id: str = AirweaveField(..., description="Native folder ID", is_entity_id=True)
+    title: str = AirweaveField(..., description="Folder name", is_name=True, embeddable=True)
+    description: str = AirweaveField(..., description="Folder description", embeddable=True)
+
+    @computed_field(return_type=str)
+    def web_url(self) -> str:
+        """Direct folder locator."""
+        return f"https://drive.google.com/drive/folders/{self.folder_id}"

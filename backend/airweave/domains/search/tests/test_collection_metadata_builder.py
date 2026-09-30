@@ -23,6 +23,7 @@ def _make_source_connection(short_name: str = "slack", sync_id=None):
     """Create a mock source connection."""
     sc = MagicMock()
     sc.short_name = short_name
+    sc.is_authenticated = True
     sc.sync_id = sync_id or uuid4()
     return sc
 
@@ -178,3 +179,33 @@ class TestCollectionMetadataBuilder:
         """Unknown sources raise ValueError."""
         with pytest.raises(ValueError, match="No description found"):
             builder._get_source_description("unknown_source_xyz")
+
+
+async def test_wispr_collection_builds_metadata_for_search_planning(builder):
+    """An owned Wispr connection must not abort classic/agentic prompt construction."""
+    from airweave.platform.entities.wispr import WisprMeetingEntity
+
+    builder._collection_repo.get_by_readable_id.return_value = _make_collection()
+    builder._sc_repo.get_by_collection_ids.return_value = [_make_source_connection("wispr")]
+    builder._entity_definition_registry.list_for_source.return_value = [
+        _make_entity_definition_entry(
+            "WisprMeetingEntity", "WisprMeetingEntity", WisprMeetingEntity.model_json_schema()
+        )
+    ]
+    builder._entity_count_repo.get_counts_per_sync_and_type.return_value = []
+    builder._source_registry.get.return_value.federated_search = False
+    result = await builder.build(AsyncMock(), MagicMock(), "test-collection")
+    assert result.sources[0].short_name == "wispr"
+    assert "partial" in result.sources[0].description
+    assert result.sources[0].entity_types[0].fields
+
+
+async def test_unauthenticated_source_is_omitted_not_reported_empty(builder):
+    builder._collection_repo.get_by_readable_id.return_value = _make_collection()
+    source = _make_source_connection("wispr")
+    source.is_authenticated = False
+    builder._sc_repo.get_by_collection_ids.return_value = [source]
+    metadata = await builder.build(AsyncMock(), MagicMock(), "test-collection")
+    assert metadata.sources == []
+    builder._entity_definition_registry.list_for_source.assert_not_called()
+    builder._entity_count_repo.get_counts_per_sync_and_type.assert_not_called()

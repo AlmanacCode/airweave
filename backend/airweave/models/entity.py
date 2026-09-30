@@ -60,6 +60,8 @@ class Entity(OrganizationBase):
     completeness: Mapped[Optional[str]] = mapped_column(String)
     blob_references: Mapped[Optional[list]] = mapped_column(JSONB)
     last_seen_run_id: Mapped[Optional[UUID]] = mapped_column(nullable=True)
+    indexed_generation: Mapped[Optional[UUID]] = mapped_column(nullable=True)
+    indexed_chunk_count: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     indexed_revision: Mapped[Optional[int]] = mapped_column(BigInteger)
     indexed_pipeline_version: Mapped[Optional[int]] = mapped_column(BigInteger)
     projection_error: Mapped[Optional[str]] = mapped_column(String)

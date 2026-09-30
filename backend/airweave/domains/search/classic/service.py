@@ -172,7 +172,9 @@ class ClassicSearchService(ClassicSearchServiceProtocol):
                 documents=documents,
                 top_n=request.limit,
             )
-            results = SearchResults(results=[results.results[r.index] for r in reranked])
+            results = results.model_copy(
+                update={"results": [results.results[r.index] for r in reranked]}
+            )
 
         # 7. Emit event + return
         duration_ms = int((time.monotonic() - start_time) * 1000)

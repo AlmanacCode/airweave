@@ -104,6 +104,7 @@ async def database(request):
             if getattr(request, "param", None) == "legacy":
                 await connection.run_sync(seed_legacy)
             await connection.run_sync(migrate, "0001_canonical_records.py")
+            await connection.run_sync(migrate, "0002_projection_publication.py")
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()

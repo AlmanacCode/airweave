@@ -28,12 +28,13 @@ from airweave.domains.sources.token_providers.protocol import (
     authorization_headers,
 )
 from airweave.domains.storage.exceptions import FileSkippedException
+from airweave.domains.storage.limits import MAX_FILE_SIZE_BYTES
 from airweave.domains.storage.paths import paths
 from airweave.domains.storage.protocols import StorageBackend
 from airweave.domains.sync_pipeline.file_types import SUPPORTED_FILE_EXTENSIONS
 from airweave.platform.entities._base import FileEntity
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
-from airweave.platform.sources.retry_helpers import (
+from airweave.platform.http_client.retry_helpers import (
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
 )
@@ -43,7 +44,7 @@ from airweave.platform.utils.ssrf import validate_url
 class FileService:
     """Unified file service for downloading and restoring files."""
 
-    MAX_FILE_SIZE_BYTES = 209715200
+    MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_BYTES
 
     def __init__(
         self,

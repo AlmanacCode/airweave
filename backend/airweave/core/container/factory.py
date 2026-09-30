@@ -1354,12 +1354,14 @@ def _create_search_services(
         reranker=reranker,
         executor=executor,
         vector_db=vector_db,
+        source_registry=source_registry,
         metadata_builder=metadata_builder,
         collection_repo=collection_repo,
         event_bus=event_bus,
     )
     browse_service = BrowseService(
         vector_db=vector_db,
+        source_registry=source_registry,
         collection_repo=collection_repo,
     )
 

@@ -140,7 +140,7 @@ class VespaDestination(VectorDBDestination):
         """
         self.logger.debug("Vespa schema is managed via vespa-deploy, skipping setup_collection")
 
-    async def bulk_insert(self, entities: List[BaseEntity]) -> None:
+    async def bulk_insert(self, entities: List[BaseEntity], *, strict: bool = False) -> None:
         """Transform entities and batch feed to Vespa.
 
         Args:
@@ -162,6 +162,8 @@ class VespaDestination(VectorDBDestination):
         # Convert to dict format for client
         docs_dict = dict(docs_by_schema.items())
         total_docs = sum(len(docs) for docs in docs_dict.values())
+        if strict and total_docs != len(entities):
+            raise RuntimeError("Vespa transformation dropped required projection chunks")
         transform_ms = (time.perf_counter() - transform_start) * 1000
 
         self.logger.info(

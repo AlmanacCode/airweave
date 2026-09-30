@@ -2,13 +2,14 @@
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query_models import RecordFilters
 from airweave.domains.entities.canonical.store import (
     SourceNotFound,
+    content_is_available,
     parent_is_visible,
     source_record,
     with_content_access,
@@ -19,6 +20,26 @@ from airweave.models.sync import Sync
 
 class CanonicalQueryStore:
     """No provider or index calls; reads only committed canonical rows."""
+
+    async def captured_counts(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        sync_id: UUID,
+    ) -> dict[str, int]:
+        """Count currently visible captured records, independent of index publication."""
+        rows = await db.execute(
+            select(Entity.entity_definition_short_name, func.count(Entity.id))
+            .where(
+                Entity.organization_id == organization_id,
+                Entity.sync_id == sync_id,
+                Entity.record_revision > 0,
+                Entity.deleted_at.is_(None),
+                content_is_available(),
+            )
+            .group_by(Entity.entity_definition_short_name)
+        )
+        return dict(rows.all())
 
     async def list_records(
         self,

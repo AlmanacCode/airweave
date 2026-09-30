@@ -6,7 +6,6 @@ in parallel. Forces chunk_index = 0 so each source entity shows up as a single r
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -23,6 +22,8 @@ from airweave.domains.search.types.filters import (
     FilterGroup,
     FilterOperator,
 )
+from airweave.domains.search.visible_vector_db import UnavailableExactCount, VisibleVectorDB
+from airweave.domains.sources.protocols import SourceRegistryProtocol
 from airweave.schemas.search_v2 import BrowseResponse
 
 if TYPE_CHECKING:
@@ -36,9 +37,11 @@ class BrowseService(BrowseServiceProtocol):
         self,
         vector_db: VectorDBProtocol,
         collection_repo: CollectionRepositoryProtocol,
+        source_registry: SourceRegistryProtocol,
     ) -> None:
         """Initialize with vector DB and collection repository."""
         self._vector_db = vector_db
+        self._source_registry = source_registry
         self._collection_repo = collection_repo
 
     async def browse(
@@ -62,20 +65,19 @@ class BrowseService(BrowseServiceProtocol):
         collection_id = str(collection.id)
         name_substring = (request.name_query or "").strip() or None
 
-        results, total = await asyncio.gather(
-            self._vector_db.filter_search(
-                filter_groups=filter_groups,
-                collection_id=collection_id,
-                limit=request.limit,
-                offset=request.offset,
-                name_substring=name_substring,
-            ),
-            self._vector_db.count(
-                filter_groups=filter_groups,
-                collection_id=collection_id,
-                name_substring=name_substring,
-            ),
+        visible_db = VisibleVectorDB(
+            self._vector_db, db, ctx, readable_id, collection_id, self._source_registry
         )
+        # One SQL session is never used concurrently by validation/count.
+        retrieved = await self._vector_db.filter_search(
+            filter_groups=filter_groups, collection_id=collection_id,
+            limit=request.limit, offset=request.offset, name_substring=name_substring,
+        )
+        results = await visible_db.validate(retrieved)
+        try:
+            total = await visible_db.count(filter_groups, collection_id, name_substring)
+        except UnavailableExactCount:
+            total = None
 
         duration_ms = int((time.monotonic() - start) * 1000)
         ctx.logger.info(
@@ -86,6 +88,7 @@ class BrowseService(BrowseServiceProtocol):
         return BrowseResponse(
             results=results,
             total=total,
+            retrieval_incomplete=len(results) != len(retrieved),
             limit=request.limit,
             offset=request.offset,
         )

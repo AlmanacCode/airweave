@@ -1,0 +1,150 @@
+"""Bounded original-record projection using existing conversion/embed/feed primitives."""
+
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
+from uuid import UUID, uuid4
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from airweave.core.logging import ContextualLogger
+from airweave.domains.entities.canonical.projection_models import (
+    ProjectionBatchResult,
+    ProjectionLocator,
+    ProjectionWork,
+)
+from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
+from airweave.domains.storage.protocols import StorageBackend
+from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
+from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
+from airweave.platform.destinations.vespa.destination import VespaDestination
+from airweave.platform.entities._base import AirweaveSystemMetadata
+
+
+@dataclass
+class ProjectionContext:
+    """Projection processing has no source credentials or artificial capture job."""
+
+    logger: ContextualLogger
+    source_short_name: str
+
+
+class StrictProjectionTracker:
+    """A replay publication cannot silently omit failed conversion inputs."""
+
+    async def record_skipped(self, count: int) -> None:
+        """Fail publication when an existing converter tries to skip required input."""
+        if count:
+            raise ValueError("Required projection input could not be converted")
+
+
+@dataclass
+class ProjectionRuntime:
+    """Only processing diagnostics are required; source runtime is not recreated."""
+
+    entity_tracker: StrictProjectionTracker
+
+
+class CanonicalProjector:
+    """Read snapshot, compute outside transaction, then atomically publish generation."""
+
+    def __init__(
+        self,
+        store: CanonicalProjectionStore,
+        sessions: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+        processor: ChunkEmbedProcessor,
+        storage: StorageBackend,
+    ):
+        """Inject existing processor, storage, and transaction session ownership."""
+        self._store = store
+        self._sessions = sessions
+        self._processor = processor
+        self._storage = storage
+
+    async def project_one(
+        self,
+        work: ProjectionWork,
+        source_name: str,
+        destination: VespaDestination,
+        logger: ContextualLogger,
+    ) -> bool:
+        """Never feed native capture JSON; mapper emits explicit safe projection entities."""
+        from airweave.domains.entities.canonical.projection_mappers import map_record
+
+        generation = uuid4()
+        chunks = []
+        if work.record.deleted_at is None:
+            async with map_record(work.record, source_name, self._storage) as mapped:
+                if not mapped:
+                    raise ValueError("Projection mapper returned no required content")
+                for part_index, entity in enumerate(mapped):
+                    populate_base_fields(entity)
+                    if entity.airweave_system_metadata is None:
+                        entity.airweave_system_metadata = AirweaveSystemMetadata()
+                    locator = ProjectionLocator(
+                        record_id=work.record.id,
+                        revision=work.record.revision,
+                        pipeline_version=work.pipeline_version,
+                        generation=generation,
+                        part_index=part_index,
+                    )
+                    entity.entity_id = locator.encode()
+                    meta = entity.airweave_system_metadata
+                    meta.source_name = source_name
+                    meta.entity_type = type(entity).__name__
+                    meta.sync_id = work.record.sync_id
+                    meta.sync_job_id = None
+                    meta.db_entity_id = work.record.id
+                chunks = await self._processor.process(
+                    list(mapped),
+                    ProjectionContext(logger, source_name),
+                    ProjectionRuntime(StrictProjectionTracker()),
+                    strict=True,
+                )
+                await destination.bulk_insert(chunks, strict=True)
+        async with self._sessions() as db:
+            return await self._store.publish(db, work, generation, len(chunks))
+
+    async def batch(
+        self,
+        organization_id: UUID,
+        sync_id: UUID,
+        source_name: str,
+        destination: VespaDestination,
+        logger: ContextualLogger,
+        *,
+        after_id: UUID | None = None,
+        limit: int = 25,
+    ) -> ProjectionBatchResult:
+        """Failed rows stay pending; other rows in the page continue to make progress."""
+        async with self._sessions() as db:
+            pending = await self._store.pending(
+                db,
+                organization_id,
+                sync_id,
+                after_id=after_id,
+                limit=limit,
+            )
+        published = superseded = failed = 0
+        for work in pending[:limit]:
+            try:
+                if await self.project_one(work, source_name, destination, logger):
+                    published += 1
+                else:
+                    superseded += 1
+            except Exception as error:
+                failed += 1
+                async with self._sessions() as db:
+                    await self._store.fail(db, work, type(error).__name__)
+                logger.warning(
+                    "Canonical projection failed for record %s (%s)",
+                    work.record.id,
+                    type(error).__name__,
+                )
+        return ProjectionBatchResult(
+            after_id=pending[min(limit, len(pending)) - 1].record.id if pending else after_id,
+            has_more=len(pending) > limit,
+            published=published,
+            superseded=superseded,
+            failed=failed,
+        )

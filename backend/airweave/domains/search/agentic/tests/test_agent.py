@@ -33,10 +33,23 @@ from airweave.domains.search.config import SearchConfig
 from airweave.domains.search.fakes.executor import FakeSearchPlanExecutor
 from airweave.domains.search.fakes.metadata_builder import FakeCollectionMetadataBuilder
 from airweave.domains.search.types import SearchResults
+from airweave.domains.sources.fakes.registry import FakeSourceRegistry
 from airweave.models.collection import Collection
 from airweave.schemas.search_v2 import AgenticSearchRequest
 
 # ── Test constants ────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def isolated_publication_gate(monkeypatch):
+    """Synthetic orchestration fixtures do not query the real publication database."""
+
+    async def passthrough(db, organization_id, collection, results, registry):
+        return results
+
+    monkeypatch.setattr("airweave.domains.search.visible_vector_db.visible_results", passthrough)
+    monkeypatch.setattr("airweave.domains.search.agentic.agent.visible_results", passthrough)
+
 
 DEFAULT_ORG_ID = uuid4()
 DEFAULT_COLLECTION_ID = uuid4()
@@ -167,6 +180,7 @@ def _build_agent(
         reranker=None,
         executor=executor or FakeSearchPlanExecutor(),
         vector_db=FakeVectorDB(),
+        source_registry=FakeSourceRegistry(),
         metadata_builder=metadata_builder,
         collection_repo=collection_repo,
         event_bus=event_bus or FakeEventBus(),
@@ -448,9 +462,7 @@ class TestAgentLLMErrors:
     async def test_llm_all_providers_failed_emits_failed_event(self) -> None:
         """LLMAllProvidersFailedError → SearchFailedEvent published."""
         llm = FakeLLM(make_model_spec())
-        llm.seed_error(
-            LLMAllProvidersFailedError([("p1", LLMFatalError("down", provider="p1"))])
-        )
+        llm.seed_error(LLMAllProvidersFailedError([("p1", LLMFatalError("down", provider="p1"))]))
 
         event_bus = FakeEventBus()
         agent = _build_agent(llm=llm, event_bus=event_bus)
@@ -622,3 +634,96 @@ class TestAgentReranker:
         # Completed event should still be emitted
         completed = event_bus.get_events("search.completed")
         assert len(completed) == 1
+
+
+@pytest.mark.asyncio
+async def test_revoked_cached_text_stops_before_next_llm_call(monkeypatch):
+    """A result found on turn one must be revalidated before turn two sees its text."""
+    from airweave.domains.search.adapters.vector_db.exceptions import VectorDBError
+
+    executor = FakeSearchPlanExecutor()
+    executor.seed_result(SearchResults(results=[make_result("revoked", content="private text")]))
+    llm = FakeLLM(make_model_spec())
+    llm.seed_tool_response(_make_search_response(tool_calls=[_search_tool_call()]))
+    llm.seed_tool_response(_make_search_response(tool_calls=[_return_results_tool_call()]))
+    gate = AsyncMock(return_value=[])
+    monkeypatch.setattr("airweave.domains.search.agentic.agent.visible_results", gate)
+    agent = _build_agent(llm=llm, executor=executor)
+    with pytest.raises(VectorDBError, match="changed during search"):
+        await agent.run(AsyncMock(), _make_ctx(), DEFAULT_READABLE_ID, _make_request())
+    assert len([call for call in llm._calls if call[0] == "chat"]) == 1
+    assert gate.await_count == 2
+    assert gate.await_args.args[3][0].entity_id == "revoked"
+
+
+def test_all_original_read_and_navigation_tools_receive_visibility_wrapper():
+    """Composition must not accidentally hand the raw adapter to one navigation tool."""
+    from airweave.domains.search.visible_vector_db import VisibleVectorDB
+
+    agent = _build_agent()
+    dispatcher = agent._build_dispatcher(
+        str(DEFAULT_COLLECTION_ID),
+        [],
+        AsyncMock(),
+        _make_ctx(),
+        DEFAULT_READABLE_ID,
+    )
+    for name in ("read", "count", "get_children", "get_siblings", "get_parent"):
+        assert isinstance(dispatcher._tools[name]._vector_db, VisibleVectorDB)
+
+
+@pytest.mark.asyncio
+async def test_final_response_preserves_search_exclusions_and_finish_time_drop(monkeypatch):
+    result = make_result("fresh-until-finish")
+    executor = FakeSearchPlanExecutor()
+    executor.seed_result(
+        SearchResults(results=[result], retrieval_incomplete=True, excluded_candidates=2)
+    )
+    llm = FakeLLM(make_model_spec())
+    llm.seed_tool_response(_make_search_response(tool_calls=[_search_tool_call()]))
+    llm.seed_tool_response(
+        _make_search_response(
+            tool_calls=[
+                _add_results_tool_call(entity_ids=[result.entity_id]),
+                _return_results_tool_call(),
+            ]
+        )
+    )
+    gate = AsyncMock(side_effect=[[], [result], []])
+    monkeypatch.setattr("airweave.domains.search.agentic.agent.visible_results", gate)
+    response = await _build_agent(llm=llm, executor=executor).run(
+        AsyncMock(),
+        _make_ctx(),
+        DEFAULT_READABLE_ID,
+        _make_request(),
+    )
+    assert response.results == []
+    assert response.retrieval_incomplete is True
+    assert response.excluded_candidates == 3
+
+
+@pytest.mark.asyncio
+async def test_unavailable_count_allows_agent_to_continue_with_other_tools(monkeypatch):
+    from airweave.domains.search.visible_vector_db import UnavailableExactCount
+
+    monkeypatch.setattr(
+        "airweave.domains.search.visible_vector_db.VisibleVectorDB.count",
+        AsyncMock(side_effect=UnavailableExactCount("exact count unavailable")),
+    )
+    llm = FakeLLM(make_model_spec())
+    llm.seed_tool_response(
+        _make_search_response(
+            tool_calls=[
+                LLMToolCall(id="count-1", name="count", arguments={"filter_groups": []}),
+            ]
+        )
+    )
+    llm.seed_tool_response(_make_search_response(tool_calls=[_return_results_tool_call()]))
+    response = await _build_agent(llm=llm).run(
+        AsyncMock(),
+        _make_ctx(),
+        DEFAULT_READABLE_ID,
+        _make_request(),
+    )
+    assert response.results == []
+    assert len([call for call in llm._calls if call[0] == "chat"]) == 2

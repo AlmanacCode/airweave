@@ -48,6 +48,17 @@ from airweave.platform.configs._base import Fields
 from airweave.platform.entities._base import AirweaveSystemMetadata, BaseEntity, Breadcrumb
 from airweave.platform.entities.slack import SlackMessageEntity
 
+
+@pytest.fixture(autouse=True)
+def isolated_publication_gate(monkeypatch):
+    """Pipeline unit tests use fake retrieval; real SQL eligibility has PostgreSQL tests."""
+
+    async def passthrough(db, organization_id, collection, results, registry):
+        return results
+
+    monkeypatch.setattr("airweave.domains.search.executor.visible_results", passthrough)
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -483,9 +494,7 @@ class TestApplyFiltersInMemory:
     def test_entity_type_filter(self):
         slack = _make_federated_result(entity_id="f1", entity_type="SlackMessageEntity")
         github = _make_search_result(entity_id="g1", entity_type="GitHubPREntity")
-        filters = [
-            _make_filter("airweave_system_metadata.entity_type", "equals", "GitHubPREntity")
-        ]
+        filters = [_make_filter("airweave_system_metadata.entity_type", "equals", "GitHubPREntity")]
         filtered = SearchPlanExecutor._apply_filters_in_memory([slack, github], filters)
         assert len(filtered) == 1
         assert filtered[0].entity_id == "g1"
@@ -494,9 +503,7 @@ class TestApplyFiltersInMemory:
         """Federated results have sync_id=None, so filtering on sync_id excludes them."""
         fed = _make_federated_result(entity_id="f1")
         synced = _make_search_result(entity_id="s1", sync_id="some-sync-id")
-        filters = [
-            _make_filter("airweave_system_metadata.sync_id", "equals", "some-sync-id")
-        ]
+        filters = [_make_filter("airweave_system_metadata.sync_id", "equals", "some-sync-id")]
         filtered = SearchPlanExecutor._apply_filters_in_memory([fed, synced], filters)
         assert len(filtered) == 1
         assert filtered[0].entity_id == "s1"
@@ -533,19 +540,13 @@ class TestApplyFiltersInMemory:
             _make_filter("airweave_system_metadata.source_name", "equals", "slack"),
             _make_filter("airweave_system_metadata.source_name", "equals", "github"),
         ]
-        filtered = SearchPlanExecutor._apply_filters_in_memory(
-            [slack, github, notion], filters
-        )
+        filtered = SearchPlanExecutor._apply_filters_in_memory([slack, github, notion], filters)
         assert len(filtered) == 2
         assert {r.entity_id for r in filtered} == {"f1", "g1"}
 
     def test_date_filter(self):
-        old = _make_federated_result(
-            entity_id="f1", created_at=datetime(2025, 1, 1)
-        )
-        new = _make_federated_result(
-            entity_id="f2", created_at=datetime(2026, 3, 1)
-        )
+        old = _make_federated_result(entity_id="f1", created_at=datetime(2025, 1, 1))
+        new = _make_federated_result(entity_id="f2", created_at=datetime(2026, 3, 1))
         filters = [_make_filter("created_at", "greater_than", "2026-01-01T00:00:00")]
         filtered = SearchPlanExecutor._apply_filters_in_memory([old, new], filters)
         assert len(filtered) == 1
@@ -760,9 +761,7 @@ class TestExecutorFederated:
             source_lifecycle=source_lifecycle,
         )
 
-        user_filter = [
-            _make_filter("airweave_system_metadata.source_name", "equals", "github")
-        ]
+        user_filter = [_make_filter("airweave_system_metadata.source_name", "equals", "github")]
 
         results = await executor.execute(
             plan=_make_plan(),
@@ -774,9 +773,7 @@ class TestExecutorFederated:
         )
 
         # Only GitHub results should remain — Slack filtered out in-memory
-        assert all(
-            r.airweave_system_metadata.source_name == "github" for r in results.results
-        )
+        assert all(r.airweave_system_metadata.source_name == "github" for r in results.results)
 
     @pytest.mark.asyncio
     async def test_filter_source_name_slack_returns_federated_only(self):
@@ -805,9 +802,7 @@ class TestExecutorFederated:
             source_lifecycle=source_lifecycle,
         )
 
-        user_filter = [
-            _make_filter("airweave_system_metadata.source_name", "equals", "slack")
-        ]
+        user_filter = [_make_filter("airweave_system_metadata.source_name", "equals", "slack")]
 
         results = await executor.execute(
             plan=_make_plan(),
@@ -1082,9 +1077,7 @@ class TestExecutorFilterEdgeCases:
 
     def test_empty_filter_groups_passes_all(self):
         """filter_groups=[] → all results pass through unfiltered."""
-        results = [
-            _make_federated_result(entity_id=f"f{i}") for i in range(5)
-        ]
+        results = [_make_federated_result(entity_id=f"f{i}") for i in range(5)]
         filtered = SearchPlanExecutor._apply_filters_in_memory(results, [])
         assert len(filtered) == 5
         assert filtered == results
@@ -1151,9 +1144,7 @@ class TestFederatedRetry:
         source = _TransientSource()
         executor = _build_executor()
 
-        results = await executor._search_single_source(
-            source, "test", 10, _make_ctx()
-        )
+        results = await executor._search_single_source(source, "test", 10, _make_ctx())
         assert results == []
         assert source._attempt == 2
 
@@ -1201,3 +1192,26 @@ class TestFederatedRetry:
 
         # 1 initial + 2 retries = 3 total
         assert source._attempt == 3
+
+
+@pytest.mark.asyncio
+async def test_executor_returns_only_publication_gate_survivors(monkeypatch):
+    """Classic/instant callers never receive a rejected candidate for reranking."""
+    vector_db = FakeVectorDB()
+    fresh, stale = _make_search_result("fresh"), _make_search_result("stale")
+    vector_db.seed_results(SearchResults(results=[fresh, stale]))
+    gate = AsyncMock(return_value=[fresh])
+    monkeypatch.setattr("airweave.domains.search.executor.visible_results", gate)
+    executor = _build_executor(vector_db=vector_db)
+    result = await executor.execute(
+        plan=_make_plan(),
+        user_filter=[],
+        collection_id="col-1",
+        db=AsyncMock(),
+        ctx=_make_ctx(),
+        collection_readable_id="my-collection",
+    )
+    assert result.results == [fresh]
+    assert result.retrieval_incomplete is True
+    assert result.excluded_candidates == 1
+    assert gate.await_args.args[3] == [fresh, stale]

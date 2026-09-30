@@ -147,6 +147,7 @@ from .google_drive import (
     GoogleDriveDriveEntity,
     GoogleDriveFileDeletionEntity,
     GoogleDriveFileEntity,
+    GoogleDriveFolderEntity,
 )
 from .google_slides import (
     GoogleSlidesPresentationEntity,
@@ -287,7 +288,7 @@ from .slab import (
     SlabPostEntity,
     SlabTopicEntity,
 )
-from .slack import SlackMessageEntity
+from .slack import SlackChannelEntity, SlackMessageEntity
 from .slite import SliteNoteEntity
 from .stripe import (
     StripeBalanceEntity,
@@ -335,6 +336,7 @@ from .trello import (
     TrelloMemberEntity,
 )
 from .web import WebFileEntity
+from .wispr import WisprMeetingEntity
 from .word import WordDocumentEntity
 from .zendesk import (
     ZendeskAttachmentEntity,
@@ -518,6 +520,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
         GoogleDocsDocumentEntity,
     ],
     "google_drive": [
+        GoogleDriveFolderEntity,
         GoogleDriveDriveEntity,
         GoogleDriveFileDeletionEntity,
         GoogleDriveFileEntity,
@@ -651,6 +654,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
         SlabTopicEntity,
     ],
     "slack": [
+        SlackChannelEntity,
         SlackMessageEntity,
     ],
     "stripe": [
@@ -704,6 +708,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
     "web": [
         WebFileEntity,
     ],
+    "wispr": [WisprMeetingEntity],
     "word": [
         WordDocumentEntity,
     ],

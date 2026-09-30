@@ -19,6 +19,7 @@ from airweave.domains.access_control.protocols import AccessBrokerProtocol
 from airweave.domains.embedders.protocols import DenseEmbedderProtocol, SparseEmbedderProtocol
 from airweave.domains.search.adapters.vector_db.protocol import VectorDBProtocol
 from airweave.domains.search.builders.search_plan import SearchPlanBuilder
+from airweave.domains.search.canonical_visibility import visible_results
 from airweave.domains.search.exceptions import FederatedSearchError
 from airweave.domains.search.protocols import SearchPlanExecutorProtocol
 from airweave.domains.search.types import (
@@ -130,12 +131,20 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
                 )
             )
 
-        vector_results = await vector_task
+        retrieved = await vector_task
+        vector_results = await visible_results(
+            db, ctx.organization.id, collection_readable_id,
+            retrieved, self._source_registry,
+        )
+        excluded = len(retrieved) - len(vector_results)
         fed_results = await fed_task if fed_task else []
 
         # 5. If no federated sources, vector DB already has correct limit/offset
         if not federated_sources:
-            return SearchResults(results=vector_results)
+            return SearchResults(
+                results=vector_results, retrieval_incomplete=excluded > 0,
+                excluded_candidates=excluded,
+            )
 
         # 6. We over-fetched from vector DB (limit=offset+limit, offset=0) for RRF.
         #    Filter federated results in-memory and merge, or slice vector-only.
@@ -147,11 +156,15 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
 
         if fed_filtered:
             merged = self._merge_with_rrf(vector_results, fed_filtered)
-            return SearchResults(results=merged[original_offset : original_offset + original_limit])
+            return SearchResults(
+                results=merged[original_offset : original_offset + original_limit],
+                retrieval_incomplete=excluded > 0, excluded_candidates=excluded,
+            )
 
         # All federated results filtered out — slice vector results to original window
         return SearchResults(
-            results=vector_results[original_offset : original_offset + original_limit]
+            results=vector_results[original_offset : original_offset + original_limit],
+            retrieval_incomplete=excluded > 0, excluded_candidates=excluded,
         )
 
     async def _execute_vector_search(
@@ -279,7 +292,9 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         federated_sources: list[BaseSource] = []
         for sc in source_connections:
             entry = self._source_registry.get(sc.short_name)
-            if not entry.federated_search:
+            if not entry.federated_search or getattr(
+                entry.source_class_ref, "canonical_record_types", ()
+            ):
                 continue
 
             try:

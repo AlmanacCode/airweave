@@ -42,12 +42,12 @@ from airweave.platform.entities.gmail import (
     GmailThreadEntity,
 )
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+from airweave.platform.http_client.retry_helpers import (
+    wait_rate_limit_with_backoff,
+)
 from airweave.platform.sources._base import BaseSource
 from airweave.platform.sources.gmail_capture import GmailCapture
 from airweave.platform.sources.http_helpers import raise_for_status
-from airweave.platform.sources.retry_helpers import (
-    wait_rate_limit_with_backoff,
-)
 from airweave.platform.utils.filename_utils import safe_filename
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 

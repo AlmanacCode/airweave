@@ -132,3 +132,12 @@ class SlackMessageEntity(BaseEntity):
     def web_url(self) -> str:
         """Permalink for the Slack message."""
         return self.web_url_value or self.url or ""
+
+
+class SlackChannelEntity(BaseEntity):
+    """Captured conversation metadata, without inferring visibility from its name."""
+
+    channel_id: str = AirweaveField(..., description="Native conversation ID", is_entity_id=True)
+    title: str = AirweaveField(..., description="Conversation name", is_name=True, embeddable=True)
+    purpose: str = AirweaveField(..., description="Conversation purpose", embeddable=True)
+    topic: str = AirweaveField(..., description="Conversation topic", embeddable=True)

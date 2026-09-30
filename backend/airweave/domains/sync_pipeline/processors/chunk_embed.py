@@ -23,8 +23,10 @@ from airweave.domains.sync_pipeline.processors.utils import filter_empty_represe
 from airweave.platform.entities._base import BaseEntity, CodeFileEntity
 
 if TYPE_CHECKING:
-    from airweave.domains.sync_pipeline.contexts import SyncContext
-    from airweave.domains.sync_pipeline.contexts.runtime import SyncRuntime
+    from airweave.domains.sync_pipeline.processors.context import (
+        ProcessingContext,
+        ProcessingRuntime,
+    )
 
 
 class ChunkEmbedProcessor:
@@ -44,12 +46,18 @@ class ChunkEmbedProcessor:
     async def process(
         self,
         entities: List[BaseEntity],
-        sync_context: "SyncContext",
-        runtime: "SyncRuntime",
+        sync_context: "ProcessingContext",
+        runtime: "ProcessingRuntime",
+        *,
+        strict: bool = False,
     ) -> List[BaseEntity]:
         """Process entities through full chunk+embed pipeline."""
         if not entities:
             return []
+
+        expected_ids = {entity.entity_id for entity in entities}
+        if strict and len(expected_ids) != len(entities):
+            raise EntityProcessingError("Projection mapper returned duplicate part identities")
 
         # Step 1: Build textual representations
         processed = await self._text_builder.build_for_batch(entities, sync_context, runtime)
@@ -58,6 +66,8 @@ class ChunkEmbedProcessor:
         processed = await filter_empty_representations(
             processed, sync_context, runtime, "ChunkEmbed"
         )
+        if strict and {entity.entity_id for entity in processed} != expected_ids:
+            raise EntityProcessingError("Projection conversion dropped required content")
         if not processed:
             sync_context.logger.debug("[ChunkEmbedProcessor] No entities after text building")
             return []
@@ -65,12 +75,22 @@ class ChunkEmbedProcessor:
         # Step 3: Chunk entities
         chunk_entities = await self._chunk_entities(processed, sync_context, runtime)
 
+        if (
+            strict
+            and {entity.airweave_system_metadata.original_entity_id for entity in chunk_entities}
+            != expected_ids
+        ):
+            raise EntityProcessingError("Projection chunking dropped required content")
+        expected_chunks = {entity.entity_id for entity in chunk_entities}
+
         # Step 4: Release parent text (memory optimization)
         for entity in processed:
             entity.textual_representation = None
 
         # Step 5: Embed chunks (may remove entities that fail embedding)
         chunk_entities = await self._embed_entities(chunk_entities, sync_context)
+        if strict and {entity.entity_id for entity in chunk_entities} != expected_chunks:
+            raise EntityProcessingError("Projection embedding dropped required chunks")
 
         sync_context.logger.debug(
             f"[ChunkEmbedProcessor] {len(entities)} entities -> {len(chunk_entities)} chunks"
@@ -85,8 +105,8 @@ class ChunkEmbedProcessor:
     async def _chunk_entities(
         self,
         entities: List[BaseEntity],
-        sync_context: "SyncContext",
-        runtime: "SyncRuntime",
+        sync_context: "ProcessingContext",
+        runtime: "ProcessingRuntime",
     ) -> List[BaseEntity]:
         """Route entities to appropriate chunker."""
         code_entities = [e for e in entities if isinstance(e, CodeFileEntity)]
@@ -107,8 +127,8 @@ class ChunkEmbedProcessor:
     async def _chunk_code_entities(
         self,
         entities: List[BaseEntity],
-        sync_context: "SyncContext",
-        runtime: "SyncRuntime",
+        sync_context: "ProcessingContext",
+        runtime: "ProcessingRuntime",
     ) -> List[BaseEntity]:
         """Chunk code with AST-aware CodeChunker."""
         from airweave.platform.chunkers.code import CodeChunker
@@ -134,7 +154,7 @@ class ChunkEmbedProcessor:
     async def _chunk_textual_entities(
         self,
         entities: List[BaseEntity],
-        sync_context: "SyncContext",
+        sync_context: "ProcessingContext",
     ) -> List[BaseEntity]:
         """Chunk text with SemanticChunker."""
         from airweave.platform.chunkers.semantic import SemanticChunker
@@ -180,7 +200,7 @@ class ChunkEmbedProcessor:
         self,
         entities: List[BaseEntity],
         chunk_lists: List[List[Dict[str, Any]]],
-        sync_context: "SyncContext",
+        sync_context: "ProcessingContext",
     ) -> List[BaseEntity]:
         """Create chunk entities from chunker output."""
         chunk_entities: List[BaseEntity] = []
@@ -213,7 +233,7 @@ class ChunkEmbedProcessor:
     async def _embed_entities(
         self,
         chunk_entities: List[BaseEntity],
-        sync_context: "SyncContext",
+        sync_context: "ProcessingContext",
     ) -> List[BaseEntity]:
         """Compute dense and sparse embeddings for all destinations.
 
@@ -279,7 +299,7 @@ class ChunkEmbedProcessor:
     async def _dense_embed_with_fallback(
         self,
         chunk_entities: List[BaseEntity],
-        sync_context: "SyncContext",
+        sync_context: "ProcessingContext",
     ) -> Tuple[List[Any], List[BaseEntity]]:
         """Run dense embedding with fallback to individual embedding on failure.
 
@@ -325,7 +345,7 @@ class ChunkEmbedProcessor:
     async def _embed_individually(
         self,
         chunk_entities: List[BaseEntity],
-        sync_context: "SyncContext",
+        sync_context: "ProcessingContext",
     ) -> Tuple[List[Any], List[BaseEntity]]:
         """Embed entities one-by-one, skipping any that fail.
 

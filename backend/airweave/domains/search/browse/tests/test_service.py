@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -16,14 +17,27 @@ from airweave.domains.collections.fakes.repository import FakeCollectionReposito
 from airweave.domains.search.adapters.vector_db.fakes.vector_db import FakeVectorDB
 from airweave.domains.search.agentic.tests.conftest import make_result
 from airweave.domains.search.browse.service import BrowseService
+from airweave.domains.search.tests.test_executor import _make_registry_entry
 from airweave.domains.search.types.filters import (
+    FilterableField,
     FilterCondition,
     FilterGroup,
     FilterOperator,
-    FilterableField,
 )
+from airweave.domains.sources.fakes.registry import FakeSourceRegistry
 from airweave.models.collection import Collection
 from airweave.schemas.search_v2 import BrowseRequest
+
+
+@pytest.fixture(autouse=True)
+def isolated_publication_gate(monkeypatch):
+    """Synthetic orchestration fixtures do not query the real publication database."""
+
+    async def passthrough(db, organization_id, collection, results, registry):
+        return results
+
+    monkeypatch.setattr("airweave.domains.search.visible_vector_db.visible_results", passthrough)
+
 
 DEFAULT_ORG_ID = uuid4()
 DEFAULT_COLLECTION_ID = uuid4()
@@ -64,10 +78,20 @@ def _make_collection() -> Collection:
     return col
 
 
+def _make_db():
+    db = AsyncMock()
+    db.scalars.return_value = [SimpleNamespace(short_name="legacy", sync_id=uuid4())]
+    return db
+
+
 def _make_service() -> tuple[BrowseService, FakeVectorDB, FakeCollectionRepository]:
     vector_db = FakeVectorDB()
     collection_repo = FakeCollectionRepository()
-    svc = BrowseService(vector_db=vector_db, collection_repo=collection_repo)
+    registry = FakeSourceRegistry()
+    registry.seed(_make_registry_entry("legacy"))
+    svc = BrowseService(
+        vector_db=vector_db, collection_repo=collection_repo, source_registry=registry
+    )
     return svc, vector_db, collection_repo
 
 
@@ -84,7 +108,7 @@ class TestBrowseService:
         vector_db.seed_count(42)
 
         response = await svc.browse(
-            AsyncMock(), _make_ctx(), DEFAULT_READABLE_ID, BrowseRequest(limit=10, offset=0)
+            _make_db(), _make_ctx(), DEFAULT_READABLE_ID, BrowseRequest(limit=10, offset=0)
         )
 
         assert response.total == 42
@@ -98,7 +122,7 @@ class TestBrowseService:
         svc, _, _ = _make_service()
 
         with pytest.raises(HTTPException) as exc_info:
-            await svc.browse(AsyncMock(), _make_ctx(), "nonexistent", BrowseRequest())
+            await svc.browse(_make_db(), _make_ctx(), "nonexistent", BrowseRequest())
 
         assert exc_info.value.status_code == 404
         assert "nonexistent" in exc_info.value.detail
@@ -109,7 +133,7 @@ class TestBrowseService:
         svc, vector_db, repo = _make_service()
         repo.seed_readable(DEFAULT_READABLE_ID, _make_collection())
 
-        await svc.browse(AsyncMock(), _make_ctx(), DEFAULT_READABLE_ID, BrowseRequest())
+        await svc.browse(_make_db(), _make_ctx(), DEFAULT_READABLE_ID, BrowseRequest())
 
         filter_call = next(c for c in vector_db._calls if c[0] == "filter_search")
         filter_groups = filter_call[1]
@@ -124,7 +148,7 @@ class TestBrowseService:
 
         sync_id = str(uuid4())
         await svc.browse(
-            AsyncMock(),
+            _make_db(),
             _make_ctx(),
             DEFAULT_READABLE_ID,
             BrowseRequest(sync_ids=[sync_id]),
@@ -145,7 +169,7 @@ class TestBrowseService:
         repo.seed_readable(DEFAULT_READABLE_ID, _make_collection())
 
         await svc.browse(
-            AsyncMock(),
+            _make_db(),
             _make_ctx(),
             DEFAULT_READABLE_ID,
             BrowseRequest(entity_types=["NotionPageEntity", "SlackMessageEntity"]),
@@ -186,7 +210,7 @@ class TestBrowseService:
             ),
         ]
         await svc.browse(
-            AsyncMock(),
+            _make_db(),
             _make_ctx(),
             DEFAULT_READABLE_ID,
             BrowseRequest(filter=user_filter),
@@ -210,7 +234,7 @@ class TestBrowseService:
         repo.seed_readable(DEFAULT_READABLE_ID, _make_collection())
 
         await svc.browse(
-            AsyncMock(),
+            _make_db(),
             _make_ctx(),
             DEFAULT_READABLE_ID,
             BrowseRequest(name_query="  Quick  "),
@@ -229,7 +253,7 @@ class TestBrowseService:
         repo.seed_readable(DEFAULT_READABLE_ID, _make_collection())
 
         await svc.browse(
-            AsyncMock(),
+            _make_db(),
             _make_ctx(),
             DEFAULT_READABLE_ID,
             BrowseRequest(name_query="   "),
@@ -251,3 +275,24 @@ class TestBrowseService:
 
         with pytest.raises(ValidationError):
             BrowseRequest(sync_ids=[str(uuid4()) for _ in range(101)])
+
+
+@pytest.mark.asyncio
+async def test_browse_filters_before_output_and_reports_unknown_canonical_count(monkeypatch):
+    from airweave.domains.search.visible_vector_db import UnavailableExactCount
+
+    svc, vector_db, repo = _make_service()
+    repo.seed_readable(DEFAULT_READABLE_ID, _make_collection())
+    fresh, stale = make_result("fresh"), make_result("stale")
+    vector_db.seed_filter_results([fresh, stale])
+    gate = AsyncMock(return_value=[fresh])
+    monkeypatch.setattr("airweave.domains.search.visible_vector_db.visible_results", gate)
+    monkeypatch.setattr(
+        "airweave.domains.search.visible_vector_db.VisibleVectorDB.count",
+        AsyncMock(side_effect=UnavailableExactCount("unknown")),
+    )
+    response = await svc.browse(_make_db(), _make_ctx(), DEFAULT_READABLE_ID, BrowseRequest())
+    assert response.results == [fresh]
+    assert response.total is None
+    assert response.retrieval_incomplete is True
+    assert gate.await_args.args[3] == [fresh, stale]

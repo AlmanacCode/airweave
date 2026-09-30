@@ -12,8 +12,10 @@ from airweave.domains.sync_pipeline.file_types import SUPPORTED_FILE_EXTENSIONS
 from airweave.platform.entities._base import BaseEntity, CodeFileEntity, FileEntity, WebEntity
 
 if TYPE_CHECKING:
-    from airweave.domains.sync_pipeline.contexts import SyncContext
-    from airweave.domains.sync_pipeline.contexts.runtime import SyncRuntime
+    from airweave.domains.sync_pipeline.processors.context import (
+        ProcessingContext,
+        ProcessingRuntime,
+    )
 
 
 class TextualRepresentationBuilder:
@@ -43,8 +45,8 @@ class TextualRepresentationBuilder:
     async def build_for_batch(
         self,
         entities: List[BaseEntity],
-        sync_context: "SyncContext",
-        runtime: "SyncRuntime",
+        sync_context: "ProcessingContext",
+        runtime: "ProcessingRuntime",
     ) -> List[BaseEntity]:
         """Build textual_representation for all entities in batch.
 
@@ -247,7 +249,7 @@ class TextualRepresentationBuilder:
     def _partition_by_converter(
         self,
         entities: List[BaseEntity],
-        sync_context: "SyncContext",
+        sync_context: "ProcessingContext",
     ) -> Tuple[Dict[Any, List[Tuple[BaseEntity, str]]], List[BaseEntity]]:
         """Partition entities by their converter type.
 
@@ -313,7 +315,7 @@ class TextualRepresentationBuilder:
     async def _convert_partitions(
         self,
         converter_groups: Dict[Any, List[Tuple[BaseEntity, str]]],
-        sync_context: "SyncContext",
+        sync_context: "ProcessingContext",
     ) -> List[BaseEntity]:
         """Execute batch conversion for each converter group.
 
@@ -340,7 +342,7 @@ class TextualRepresentationBuilder:
         self,
         converter: Any,
         sub_batch: List[Tuple[BaseEntity, str]],
-        sync_context: "SyncContext",
+        sync_context: "ProcessingContext",
     ) -> List[BaseEntity]:
         """Convert a sub-batch of entities using the given converter.
 
@@ -403,8 +405,8 @@ class TextualRepresentationBuilder:
         self,
         entities: List[BaseEntity],
         failed_entities: List[BaseEntity],
-        sync_context: "SyncContext",
-        runtime: "SyncRuntime",
+        sync_context: "ProcessingContext",
+        runtime: "ProcessingRuntime",
     ) -> None:
         """Remove failed entities and update progress.
 

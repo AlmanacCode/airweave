@@ -72,6 +72,11 @@ class SearchTool(Tool):
             user_principal=self._user_principal,
         )
 
+        state.retrieval_incomplete |= (
+            results.retrieval_incomplete or results.excluded_candidates > 0
+        )
+        state.excluded_candidates += results.excluded_candidates
+
         # Track new results in state
         new_count = 0
         for r in results.results:
@@ -93,4 +98,6 @@ class SearchTool(Tool):
             new_count=new_count,
             requested_limit=plan.limit,
             requested_offset=plan.offset,
+            retrieval_incomplete=results.retrieval_incomplete,
+            excluded_candidates=results.excluded_candidates,
         )
