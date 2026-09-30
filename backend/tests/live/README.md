@@ -305,6 +305,8 @@ Required secret environment names are `COMPOSIO_API_KEY`, `LIVE_WISPR_ACCOUNT_ID
 and `LIVE_WISPR_USER_ID`; PostgreSQL uses `CANONICAL_TEST_DATABASE_URL`. Do not
 print these values. This mode shares a hard20 HTTP request,600 observed record,
 180 second budget across both processes, including account/session/listing calls.
+Set `LIVE_WISPR_REQUEST_LIMIT=17` to reduce the aggregate request budget; values
+from1 through20 are validated before setup/network. The default remains20.
 No retries or new account grants occur. Errors, including rate failures, stop the trial.
 
 The first process exits before another body call after SQL verifies three completed

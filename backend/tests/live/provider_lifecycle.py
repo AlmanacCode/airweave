@@ -249,6 +249,11 @@ async def child(manifest):
     is_calendar = name == "google_calendar"
     counters["sync_token_requests"] = 0
     counters["resumed_changes_requests"] = 0
+    from functools import partial
+
+    from wispr_diagnostics import WisprDiagnostics, observe_request
+
+    wispr_diagnostics = WisprDiagnostics()
     last_operation = "identity"
     rate_limits = []
     resume_probe = None
@@ -345,7 +350,14 @@ async def child(manifest):
             "wispr": "LIVE_WISPR_ACCOUNT_ID",
         }[name]
         connection = (
-            wispr_source(os.environ[account_variable], key, fence, request_hook=request_hook)
+            wispr_source(
+                os.environ[account_variable],
+                key,
+                fence,
+                request_hook=partial(observe_request, wispr_diagnostics, request_hook),
+                response_hook=wispr_diagnostics.response,
+                envelope_hook=wispr_diagnostics.envelope,
+            )
             if name == "wispr"
             else rest_source(
                 name,
@@ -512,7 +524,8 @@ async def child(manifest):
             "saved_cursor_expired": resume_probe.saved_cursor_expired if resume_probe else False,
             "error_type": type(error).__name__,
             "safe_reason": safe_failure_reason(error),
-            "last_operation": last_operation,
+            "last_operation": wispr_diagnostics.operation if name == "wispr" else last_operation,
+            "wispr_diagnostics": wispr_diagnostics.model_dump() if name == "wispr" else None,
             **counters,
             "rate_limits": rate_limits,
             "checkpoint_unchanged": saved == (previous or None),
@@ -646,6 +659,17 @@ def trial_counter_summary(results):
     }
 
 
+def wispr_request_limit(value: str) -> int:
+    """Validate an explicitly reduced trial budget before setup or network access."""
+    try:
+        limit = int(value)
+    except ValueError:
+        raise ValueError("Wispr request limit must be an integer from 1 to 20") from None
+    if not 1 <= limit <= 20:
+        raise ValueError("Wispr request limit must be an integer from 1 to 20")
+    return limit
+
+
 async def main():
     name = os.environ.get("LIVE_LIFECYCLE_PROVIDER", "gmail")
     if name not in {"gmail", "google_calendar", "google_drive", "slack", "wispr"}:
@@ -653,6 +677,11 @@ async def main():
     wispr_resume = os.environ.get("LIVE_WISPR_RESUME") == "1"
     if wispr_resume and name != "wispr":
         raise ValueError("Wispr resume requires Wispr provider")
+    request_limit = (
+        wispr_request_limit(os.environ.get("LIVE_WISPR_REQUEST_LIMIT", "20"))
+        if wispr_resume
+        else None
+    )
     free_disk_bytes = check_free_disk(name)
     url = harness.test_database_url()
     schema = "canonical_live_" + uuid4().hex
@@ -727,7 +756,9 @@ async def main():
                 "query": f"after:{end - 7 * 86400} before:{end}",
             }
             if wispr_resume:
-                manifest.update(wispr_resume=True, request_limit=20, record_limit=600, timeout=180)
+                manifest.update(
+                    wispr_resume=True, request_limit=request_limit, record_limit=600, timeout=180
+                )
             if name == "google_calendar":
                 now = datetime.now(timezone.utc).replace(microsecond=0)
                 manifest["calendar_config"] = {

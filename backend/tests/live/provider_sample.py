@@ -95,10 +95,14 @@ async def rest_source(
 
 
 @asynccontextmanager
-async def wispr_source(account, key, fence, *, request_hook=None):
+async def wispr_source(
+    account, key, fence, *, request_hook=None, response_hook=None, envelope_hook=None
+):
     """Verify exact Composio account binding; Wispr exposes no identity profile here."""
     expected_user = os.environ["LIVE_WISPR_USER_ID"]
     hooks = {"request": [request_hook]} if request_hook is not None else {}
+    if response_hook is not None:
+        hooks["response"] = [response_hook]
     async with httpx.AsyncClient(timeout=180, event_hooks=hooks) as client:
         metadata_response = await client.get(
             "https://backend.composio.dev/api/v3/connected_accounts/" + quote(account, safe=""),
@@ -122,5 +126,14 @@ async def wispr_source(account, key, fence, *, request_hook=None):
                 client, fence.organization_id, "wispr", feature_flag_enabled=False
             ),
         )
+        if envelope_hook is not None:
+            original_post = source._post
+
+            async def observed_post(path, body):
+                result = await original_post(path, body)
+                envelope_hook(result)
+                return result
+
+            source._post = observed_post
         await source.validate()
         yield source, "composio_account_principal_only"
