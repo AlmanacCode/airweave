@@ -35,6 +35,8 @@ async def verify_rest_identity(name, source, expected_email):
             "https://www.googleapis.com/calendar/v3/users/me/calendarList/primary"
         )
         email = profile.get("id", "")
+        if profile.get("primary") is not True:
+            raise ValueError("Calendar identity response did not identify the primary calendar")
     elif name == "slack":
         identity = await source._get("https://slack.com/api/auth.test")
         if not identity.get("team_id") or not identity.get("user_id"):
@@ -55,19 +57,30 @@ async def verify_rest_identity(name, source, expected_email):
 
 
 @asynccontextmanager
-async def rest_source(name, account, expected_email, key, fence):
+async def rest_source(
+    name,
+    account,
+    expected_email,
+    key,
+    fence,
+    *,
+    gmail_query="newer_than:7d smaller:5M",
+    request_hook=None,
+    calendar_config=None,
+):
     host = {"gmail": "gmail.googleapis.com", "slack": "slack.com"}.get(name, "www.googleapis.com")
     auth = ManagedAuthProvider(api_key=key, connected_account_id=account, allowed_hosts={host})
     transport = ComposioTransport(api_key=key, connected_account_id=account, allowed_hosts={host})
     transport.MAX_BINARY_BYTES = 10 * 1024 * 1024
-    async with httpx.AsyncClient(transport=transport, timeout=180) as client:
+    hooks = {"request": [request_hook]} if request_hook is not None else {}
+    async with httpx.AsyncClient(transport=transport, timeout=180, event_hooks=hooks) as client:
         wrapped = AirweaveHttpClient(
             client, fence.organization_id, name, feature_flag_enabled=False
         )
         source_type, config = {
-            "gmail": (GmailSource, GmailConfig(gmail_query="newer_than:7d smaller:5M")),
+            "gmail": (GmailSource, GmailConfig(gmail_query=gmail_query)),
             "google_drive": (GoogleDriveSource, GoogleDriveConfig()),
-            "google_calendar": (GoogleCalendarSource, GoogleCalendarConfig()),
+            "google_calendar": (GoogleCalendarSource, calendar_config or GoogleCalendarConfig()),
             "slack": (SlackSource, SlackConfig()),
         }[name]
         source = await source_type.create(

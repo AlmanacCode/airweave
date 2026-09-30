@@ -11,6 +11,7 @@ from airweave.domains.entities.canonical.requests import (
     CaptureRecord,
     CompletedScope,
     RecordIdentity,
+    StartedScope,
 )
 from airweave.domains.entities.canonical.source import SourceObservation
 from airweave.domains.storage.exceptions import FileSkippedException
@@ -185,6 +186,7 @@ class GmailCapture:
         successful immutable storage; missing storage or oversize bodies remain partial.
         """
         if self.query:
+            yield StartedScope(record_type="message")
             async for record in self.enumerate():
                 yield record
             yield CompletedScope(record_type="message")
@@ -196,6 +198,7 @@ class GmailCapture:
         if history is None:
             profile = await self.get(f"{BASE}/profile")
             boundary = str(profile["historyId"])
+            yield StartedScope(record_type="message")
             async for record in self.enumerate():
                 yield record
             # If this boundary expires mid-crawl, fail the run. Starting another full

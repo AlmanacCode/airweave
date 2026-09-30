@@ -102,3 +102,56 @@ Wispr produced three meeting records and three journal changes; all three remain
 explicitly partial because the provider omits raw editor data/deletion history.
 Its replay added zero changes. Neither sample contained blobs or proved complete
 source coverage. Both private schema and files were removed afterward.
+
+## Complete configured Gmail reconciliation lifecycle
+
+`PYTHONPATH=. .venv/bin/python tests/live/provider_lifecycle.py` uses the same private
+PostgreSQL, Composio key, `LIVE_GMAIL_ACCOUNT_ID` and `LIVE_EXPECTED_EMAIL` inputs.
+It freezes a seven-day `after:<epoch> before:<epoch>` query before either run,
+with no size or category filter. Each run is a full reconciliation of this query;
+this does **not** verify Gmail history-delta resume or the whole mailbox.
+
+Two fresh Python processes run the production `SyncOrchestrator.run`, source,
+canonical pipeline, job state machine/repository and cursor read/write path.
+The harness injects private database sessions and disables external telemetry;
+billing, non-applicable ACL and sync-pausing collaborators are test doubles.
+It does not exercise the hosted factory, Temporal worker, WorkOS, or a product
+account binding. The second process loads the persisted cursor; the successful
+checkpoint must identify its committed attempt. Native JSON/revision digests
+compare the two reads. A real mailbox change may make the second digest differ.
+
+Per-run limits: 250 message observations, 600 provider requests, 10 MiB per MIME
+blob, 256 MiB total blob writes, and ten minutes. The record/request/storage
+limits raise instead of truncating enumeration; no completed scope or checkpoint
+is claimed on an aborted enumeration. Oversized MIME parts retain the source's explicit
+partial-content status. The parent reaps the child, removes its schema and private
+files on success or failure, and prints only counts, status and digests.
+
+Verified 2026-09-30: both fresh-process seven-day runs completed, each with 239
+message observations, 287 provider requests, 239 stored records, zero partial
+records, and 5,501,801 MIME blob bytes written. Each emitted one start and one
+completion marker and saved a checkpoint; the second loaded the durable cursor.
+Its final change sequence was 270, so the two raw-payload/revision digests were
+**not identical**. This is not a zero-change second-live-run claim. A separate
+bounded diagnostic repeated one attachment-bearing message GET and observed only
+`payload.parts[*].body.attachmentId` differences. Gmail can rotate these original
+attachment locators; the canonical store preserves them. That diagnostic does
+not retrospectively attribute all 31 earlier changes. Duplicate replay of an
+identical captured observation remains independently tested.
+
+Both private schema/file cleanup checks returned zero leftovers. Fifteen Gmail
+source tests and four real-PostgreSQL pipeline tests passed; failure/recovery
+fixtures are simulated provider evidence, not live induced failures. The existing
+Gmail source now emits an explicit `StartedScope` before full enumeration,
+including filtered reconciliation and expired-history bootstrap.
+
+Calendar verification via `LIVE_LIFECYCLE_PROVIDER=google_calendar`: one verified
+primary calendar with a fixed seven-day occurrence window completed both fresh
+processes. Initial run: 4 provider requests, 190 observations, 183 active records,
+3 completed scopes. Second run: 4 requests, 22 observations, 2 completed scopes,
+and one actual event listing with the saved `syncToken`. Both jobs completed and
+saved checkpoints; second-run change sequence stayed 190 and the native
+payload/revision digest was identical. Zero partial records or blobs. Private
+schema/files were removed. No all-day or DST case was observed; those semantics
+remain covered separately by synthetic tests. Calendar limits are 100 provider
+requests, 10,000 observations and 180 seconds per process.

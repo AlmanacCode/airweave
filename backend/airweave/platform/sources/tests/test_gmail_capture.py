@@ -5,7 +5,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from airweave.domains.entities.canonical.requests import CompletedScope
+from airweave.domains.entities.canonical.requests import CompletedScope, StartedScope
 from airweave.domains.syncs.cursors.cursor import SyncCursor
 from airweave.platform.cursors.gmail import GmailCursor
 from airweave.platform.sources.gmail_capture import BASE, GmailCapture
@@ -65,8 +65,9 @@ async def test_bootstrap_boundary_precedes_pagination_and_replays_concurrent_edi
     )
     state = cursor()
     results = [r async for r in GmailCapture(provider.get, None).generate(state)]
-    assert [r.payload["id"] for r in results[:-1]] == ["a", "b", "a", "c"]
-    assert results[2].payload["labelIds"] == []
+    assert results[0] == StartedScope(record_type="message")
+    assert [r.payload["id"] for r in results[1:-1]] == ["a", "b", "a", "c"]
+    assert results[3].payload["labelIds"] == []
     assert isinstance(results[-1], CompletedScope)
     assert state.data["history_id"] == "12"
     assert provider.calls[3][1]["pageToken"] == "p2"
@@ -115,7 +116,7 @@ async def test_expired_incremental_boundary_bootstraps_and_reconciles():
     )
     state = cursor(history_id="20", canonical_query="")
     results = [r async for r in GmailCapture(provider.get, None).generate(state)]
-    assert results == [CompletedScope(record_type="message")]
+    assert results == [StartedScope(record_type="message"), CompletedScope(record_type="message")]
     assert state.data["history_id"] == "31"
 
 
@@ -136,7 +137,8 @@ async def test_failure_after_full_crawl_does_not_finish_scope_or_advance_checkpo
     with pytest.raises(type(error)):
         async for record in GmailCapture(provider.get, None).generate(state):
             observed.append(record)
-    assert len(observed) == 1
+    assert len(observed) == 2
+    assert observed[0] == StartedScope(record_type="message")
     assert state.data == before
 
 
@@ -153,9 +155,10 @@ async def test_filtered_query_always_reconciles_and_external_mime_bytes_are_part
     results = [
         r async for r in GmailCapture(provider.get, "from:person@example.com").generate(state)
     ]
-    assert results[0].payload == raw
-    assert results[0].completeness == "partial"
-    assert results[0].blobs == ()
+    assert results[0] == StartedScope(record_type="message")
+    assert results[1].payload == raw
+    assert results[1].completeness == "partial"
+    assert results[1].blobs == ()
     assert results[-1] == CompletedScope(record_type="message")
     assert provider.calls[0][1]["q"] == "from:person@example.com"
     assert state.data["history_id"] == ""
@@ -171,7 +174,7 @@ async def test_legacy_entity_cursor_cannot_skip_canonical_bootstrap():
         ]
     )
     results = [r async for r in GmailCapture(provider.get, None).generate(cursor(history_id="20"))]
-    assert results == [CompletedScope(record_type="message")]
+    assert results == [StartedScope(record_type="message"), CompletedScope(record_type="message")]
 
 
 @pytest.mark.asyncio
@@ -216,8 +219,9 @@ async def test_filtered_page_failure_never_claims_completed_scope():
     with pytest.raises(RuntimeError):
         async for record in GmailCapture(provider.get, "in:inbox").generate(state):
             results.append(record)
-    assert len(results) == 1
-    assert not any(isinstance(r, CompletedScope) for r in results)
+    assert len(results) == 2
+    assert results[0] == StartedScope(record_type="message")
+    assert not any(type(r) is CompletedScope for r in results)
     assert state.data["history_id"] == "20"
 
 
