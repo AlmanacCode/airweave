@@ -67,6 +67,7 @@ class CanonicalCapturePipeline:
                 fingerprint=config.fingerprint,
                 record_types=record_types,
                 container_parents=self._container_parents,
+                completion_policies=config.completion_policies,
             )
             if config != declared:
                 raise ValueError("Page source cycle must match its declared container topology")

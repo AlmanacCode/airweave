@@ -19,6 +19,11 @@ from airweave.domains.entities.canonical.store import CanonicalRecordStore
 from airweave.domains.entities.canonical.tests.test_wispr_recovery import connector, driver
 from wispr_resume import WisprResumeProbe
 from provider_lifecycle import BoundedPageSource
+from airweave.domains.entities.canonical.tests.test_capture_pipeline import components, orchestrator
+from airweave.domains.entities.canonical.tests.test_slack_recovery import run
+from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
+from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
+from unittest.mock import MagicMock
 
 async def main():
     engine = create_async_engine(os.environ["CANONICAL_TEST_DATABASE_URL"],
@@ -43,7 +48,19 @@ async def main():
     probe = WisprResumeProbe(sessions, fence.organization_id, fence.sync_id, fence.job_id,
         fence.attempt_id, Path(os.environ["TEST_TARGET"]),
         "interrupt" if mode == "fail" else mode, counters)
-    await driver(service, sessions, fence, BoundedPageSource(source, counters, 600, probe)).run()
+    ctx, _, runtime, bus = components(sessions, (service, fence))
+    wrapped = BoundedPageSource(source, counters, 600, probe)
+    if mode == "wrong_topology":
+        parents = {}
+    else:
+        parents = source.canonical_container_parents
+    pipeline = CanonicalCapturePipeline(service, sessions, bus, source.canonical_record_types,
+        CaptureAttempt(id=fence.attempt_id, number=fence.attempt_number), parents,
+        page_source=wrapped, files=MagicMock())
+    runtime.source, runtime.canonical_capture = source, pipeline
+    instance = orchestrator(ctx, pipeline, runtime, None, bus)
+    instance.stream = None
+    await run(instance)
 asyncio.run(main())
 """
 
@@ -123,3 +140,19 @@ asyncio.run(main())
     code, output, error = await subprocess_script(script, {"TEST_ROOT": str(tmp_path)})
     assert code == 0, error
     assert output.splitlines()[-1] == "verified"
+
+
+async def test_wispr_pipeline_rejects_actual_topology_mismatch(database, source, tmp_path):
+    async with database() as db:
+        schema = await db.scalar(text("select current_schema()"))
+    code, output, error = await subprocess_script(
+        SCRIPT,
+        {
+            "TEST_SCHEMA": schema,
+            "TEST_FENCE": source[1].model_dump_json(),
+            "TEST_TARGET": str(tmp_path / "target.json"),
+            "TEST_MODE": "wrong_topology",
+        },
+    )
+    assert code not in (0, 75, 76)
+    assert "Page source cycle must match its declared container topology" in error
