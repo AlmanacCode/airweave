@@ -67,6 +67,7 @@ async def rest_source(
     gmail_query="newer_than:7d smaller:5M",
     request_hook=None,
     response_hook=None,
+    gmail_unfiltered=False,
     calendar_config=None,
     max_file_bytes=10 * 1024 * 1024,
 ):
@@ -82,7 +83,18 @@ async def rest_source(
             client, fence.organization_id, name, feature_flag_enabled=False
         )
         source_type, config = {
-            "gmail": (GmailSource, GmailConfig(gmail_query=gmail_query)),
+            "gmail": (
+                GmailSource,
+                GmailConfig(
+                    gmail_query=None,
+                    included_labels=[],
+                    excluded_labels=[],
+                    excluded_categories=[],
+                    after_date=None,
+                )
+                if gmail_unfiltered
+                else GmailConfig(gmail_query=gmail_query),
+            ),
             "google_drive": (GoogleDriveSource, GoogleDriveConfig()),
             "google_calendar": (GoogleCalendarSource, calendar_config or GoogleCalendarConfig()),
             "slack": (SlackSource, SlackConfig()),

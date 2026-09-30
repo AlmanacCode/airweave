@@ -104,7 +104,44 @@ explicitly partial because the provider omits raw editor data/deletion history.
 Its replay added zero changes. Neither sample contained blobs or proved complete
 source coverage. Both private schema and files were removed afterward.
 
-## Complete configured Gmail reconciliation lifecycle
+## Current Gmail page lifecycle and bounded recovery
+
+The current Gmail source uses the production durable page/checkpoint protocol.
+The existing `provider_lifecycle.py` remains the runner; no live execution of this
+new harness is claimed here. The earlier lifecycle results below describe the
+previous observation adapter.
+
+With `LIVE_LIFECYCLE_PROVIDER=gmail`, the default still freezes one seven-day
+query and runs two complete configured-scope passes in fresh processes. Validation
+now reads `canonical_cycle` and the fenced checkpoint; legacy marker counts and
+`history_id` are not evidence for the page source. Payload digest differences are
+reported honestly rather than requiring a stationary mailbox.
+
+For an explicitly selected unfiltered **partial recovery** probe, additionally set
+`LIVE_GMAIL_UNFILTERED=1 LIVE_GMAIL_RESUME=1`. This clears the source's default
+label/category filters rather than treating an empty custom query as unfiltered.
+The first child exits with code75 only after SQL proves a message page committed.
+A second child uses the same running job and a new attempt, resumes the identical
+cycle/sweep/version, and exits with code76 after another acknowledged page.
+Parent SQL readback independently verifies advancement. No payloads or provider
+cursors enter printed evidence. A mailbox completing before interruption reports
+`recovery_not_exercised`; it is not successful recovery proof.
+
+The existing600 provider-request,250 observation,600-second and256MiB blob-write
+budgets are shared across the interruption/resume pair; each MIME blob remains
+limited to10MiB. Exact known-message refreshes consume request, observation and
+storage budgets too. Normal identity verification still reads Gmail's profile in
+each process. Separate counters require **zero capture-boundary profile reads**
+in the resumed process; identity verification is not counted as a boundary reset.
+
+`LIVE_GMAIL_UNFILTERED=1` without the resume flag selects two bounded full/changes
+processes. A changes claim requires the first baseline actually to finish, the
+next process to load its promoted checkpoint and issue history requests using that
+exact boundary, and the second checkpoint to commit. Budget exhaustion remains
+incomplete; no sampled records or interrupted baseline establish mailbox completion.
+This option does not increase any existing download or process limit.
+
+## Historical configured Gmail reconciliation lifecycle
 
 `PYTHONPATH=. .venv/bin/python tests/live/provider_lifecycle.py` uses the same private
 PostgreSQL, Composio key, `LIVE_GMAIL_ACCOUNT_ID` and `LIVE_EXPECTED_EMAIL` inputs.

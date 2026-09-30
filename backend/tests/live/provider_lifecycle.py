@@ -29,7 +29,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from airweave.adapters.event_bus.fake import FakeEventBus
 from airweave.domains.entities.canonical.page_source import (
     CanonicalPageSource,
+    CheckpointedPageSource,
+    InvalidCaptureCheckpoint,
     InvalidScanContinuation,
+    KnownObjectSource,
 )
 from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope, StartedScope
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
@@ -64,16 +67,19 @@ class BudgetExceeded(RuntimeError):
 class BoundedStorage(harness.FilesystemBackend):
     """Cap all writes, even repeated MIME reads, before retaining another blob."""
 
-    def __init__(self, root, byte_limit):
+    def __init__(self, root, byte_limit, counters=None):
         super().__init__(root)
         self.written_bytes = 0
         self.byte_limit = byte_limit
+        self.counters = counters
 
     async def write_file(self, path, content):
         if self.written_bytes + len(content) > self.byte_limit:
             raise BudgetExceeded("blob_bytes")
         await super().write_file(path, content)
         self.written_bytes += len(content)
+        if self.counters is not None:
+            self.counters["blob_bytes_written"] = self.written_bytes
 
 
 class BoundedPageSource:
@@ -91,11 +97,11 @@ class BoundedPageSource:
             await self.resume_probe.before_page(scope, continuation)
         try:
             page = await self.source.capture_page(scope, continuation, files=files, parent=parent)
-        except InvalidScanContinuation:
+        except (InvalidScanContinuation, InvalidCaptureCheckpoint):
             if self.resume_probe is not None:
                 self.resume_probe.cursor_expired()
             raise
-        self.counters["records_observed"] += len(page.records)
+        self.counters["records_observed"] += len(page.records) + len(page.discovered_records)
         if self.counters["records_observed"] > self.record_limit:
             raise BudgetExceeded("records")
         return page
@@ -105,6 +111,39 @@ class BoundedPageSource:
 
     async def confirm_absent(self, record):
         await self.source.confirm_absent(record)
+
+
+class BoundedKnownSource(BoundedPageSource):
+    async def refresh_known(self, record, *, files):
+        observation = await self.source.refresh_known(record, files=files)
+        self.counters["records_observed"] += 1
+        if self.counters["records_observed"] > self.record_limit:
+            raise BudgetExceeded("records")
+        return observation
+
+
+class BoundedCheckpointSource(BoundedPageSource):
+    async def prepare_cycle(self, previous):
+        return await self.source.prepare_cycle(previous)
+
+    def initial_continuation(self, cycle):
+        return self.source.initial_continuation(cycle)
+
+
+class BoundedCheckpointKnownSource(BoundedCheckpointSource, BoundedKnownSource):
+    pass
+
+
+def bounded_page_source(source, counters, record_limit, probe=None):
+    """Preserve only protocols the actual source implements."""
+    checkpoint = isinstance(source, CheckpointedPageSource)
+    known = isinstance(source, KnownObjectSource)
+    wrapper = (
+        (BoundedCheckpointKnownSource if known else BoundedCheckpointSource)
+        if checkpoint
+        else (BoundedKnownSource if known else BoundedPageSource)
+    )
+    return wrapper(source, counters, record_limit, probe)
 
 
 async def bounded_observations(source, cursor, files, counters, record_limit):
@@ -186,8 +225,16 @@ def validate_checkpoint(name, manifest, counters, saved, previous, loaded, attem
         assert saved["canonical_cycle"]["phase"] == "complete"
         assert saved["canonical_cycle"]["completed_job_id"]
     else:
-        assert saved["canonical_query"] == manifest["query"]
-        assert saved["history_id"] == "" and counters["started"] == counters["completed"] == 1
+        cycle = saved["canonical_cycle"]
+        assert cycle["phase"] == "complete" and cycle["completed_job_id"]
+        if manifest.get("gmail_unfiltered"):
+            assert cycle["promoted_checkpoint"] and cycle["last_full_capture"]
+            if previous.get("canonical_cycle", {}).get("phase") == "complete":
+                assert cycle["mode"] == "changes"
+                assert counters["resumed_changes_requests"] > 0
+                assert counters["capture_profile_requests"] == 0
+        else:
+            assert cycle["mode"] == "full" and cycle["promoted_checkpoint"] is None
     assert saved["canonical_checkpoint"] == {
         "writer_attempt_id": str(attempt.id),
         "observed_change_sequence": sequence,
@@ -218,9 +265,14 @@ def prepare_resume_probe(manifest, sessions, organization_id, sync_id, job_id, a
     if manifest.get("resume_stage") not in {"interrupt", "resume"}:
         return None
     from capture_resume import PageResumeProbe
+    from gmail_resume import GmailResumeProbe
     from wispr_resume import WisprResumeProbe
 
-    probe_type = WisprResumeProbe if manifest.get("wispr_resume") else PageResumeProbe
+    probe_type = (
+        GmailResumeProbe
+        if manifest.get("gmail_resume")
+        else (WisprResumeProbe if manifest.get("wispr_resume") else PageResumeProbe)
+    )
     return probe_type(
         sessions,
         organization_id,
@@ -231,6 +283,23 @@ def prepare_resume_probe(manifest, sessions, organization_id, sync_id, job_id, a
         manifest["resume_stage"],
         counters,
     )
+
+
+def count_gmail_request(name, request, previous, counters, identity_verified):
+    """Count required identity verification separately from production capture planning."""
+    if name != "gmail":
+        return
+    if request.url.path.endswith("/profile"):
+        key = "capture_profile_requests" if identity_verified else "identity_profile_requests"
+        counters[key] += 1
+    if request.url.path.endswith("/history"):
+        boundary = previous.get("canonical_cycle", {}).get("promoted_checkpoint")
+        if (
+            boundary
+            and request.url.params.get("startHistoryId")
+            == boundary["checkpoint"]["value"]["history_id"]
+        ):
+            counters["resumed_changes_requests"] += 1
 
 
 async def child(manifest):
@@ -249,6 +318,10 @@ async def child(manifest):
     is_calendar = name == "google_calendar"
     counters["sync_token_requests"] = 0
     counters["resumed_changes_requests"] = 0
+    counters["identity_profile_requests"] = 0
+    counters["capture_profile_requests"] = 0
+    counters["blob_bytes_written"] = 0
+    identity_verified = False
     from functools import partial
 
     from wispr_diagnostics import WisprDiagnostics, observe_request
@@ -285,6 +358,7 @@ async def child(manifest):
         if counters["provider_requests"] >= manifest["request_limit"]:
             raise BudgetExceeded("provider_requests")
         counters["provider_requests"] += 1
+        count_gmail_request(name, request, previous, counters, identity_verified)
         if request.url.params.get("syncToken"):
             counters["sync_token_requests"] += 1
         if (
@@ -337,7 +411,9 @@ async def child(manifest):
         }.get(name)
         cursor = SyncCursor(sync_id, cursor_schema, previous or None) if cursor_schema else None
         loaded = cursor.loaded_from_db if cursor else False
-        storage = BoundedStorage(Path(manifest["root"]) / "blobs", manifest["blob_byte_limit"])
+        storage = BoundedStorage(
+            Path(manifest["root"]) / "blobs", manifest["blob_byte_limit"], counters
+        )
         files = FileService(job_id, storage, sync_id=sync_id)
         files.MAX_FILE_SIZE_BYTES = manifest["file_byte_limit"]
         fence = SimpleNamespace(organization_id=organization_id, sync_id=sync_id, job_id=job_id)
@@ -366,6 +442,7 @@ async def child(manifest):
                 key,
                 fence,
                 gmail_query=manifest.get("query", ""),
+                gmail_unfiltered=manifest.get("gmail_unfiltered", False),
                 calendar_config=GoogleCalendarConfig.model_validate(manifest["calendar_config"])
                 if is_calendar
                 else None,
@@ -378,6 +455,7 @@ async def child(manifest):
             asyncio.timeout(manifest["timeout"]),
             connection as (source, identity_verification),
         ):
+            identity_verified = True
             assert source.cursor_class == cursor_schema
             bus = FakeEventBus()
             attempt = CaptureAttempt(id=uuid4(), number=attempt_number)
@@ -385,7 +463,7 @@ async def child(manifest):
                 manifest, sessions, organization_id, sync_id, job_id, attempt, counters
             )
             page_source = (
-                BoundedPageSource(source, counters, manifest["record_limit"], resume_probe)
+                bounded_page_source(source, counters, manifest["record_limit"], resume_probe)
                 if isinstance(source, CanonicalPageSource)
                 else None
             )
@@ -480,7 +558,8 @@ async def child(manifest):
             )
         result = {
             "failed": False,
-            "full_scope_completed": name != "wispr",
+            "full_scope_completed": name != "wispr"
+            and not (name == "gmail" and saved["canonical_cycle"]["mode"] == "changes"),
             "counters_complete": True,
             "resumed_saved_page": resume_probe.resumed_saved_page if resume_probe else False,
             "saved_cursor_expired": resume_probe.saved_cursor_expired if resume_probe else False,
@@ -498,7 +577,9 @@ async def child(manifest):
             "job_status": status,
             "payload_revision_digest": digest,
             "mode": {
-                "gmail": "filtered_full_reconciliation",
+                "gmail": ("unfiltered_" + saved["canonical_cycle"]["mode"])
+                if manifest.get("gmail_unfiltered")
+                else "filtered_full_reconciliation",
                 "google_calendar": "calendar_incremental" if loaded else "calendar_initial",
                 "google_drive": "drive_incremental" if loaded else "drive_initial",
                 "slack": "accessible_history_full_reconciliation",
@@ -578,19 +659,43 @@ async def execute_trial(path, timeout):
     return process.returncode, lines[-1]
 
 
+def remaining_blob_budget(manifest, results, total):
+    """Repeated writes consume the same parent-owned trial allowance."""
+    if total is None:
+        return True
+    manifest["blob_byte_limit"] = total - sum(item.get("blob_bytes_written", 0) for item in results)
+    if manifest["blob_byte_limit"] > 0:
+        return True
+    results.append(
+        {"failed": True, "safe_reason": "aggregate_blob_budget", "full_scope_completed": False}
+    )
+    return False
+
+
+def mark_early_completion(gmail_resume, stage, code, result):
+    if gmail_resume and stage == "interrupt" and code == 0:
+        result["recovery_not_exercised"] = True
+
+
 async def run_trials(manifest, evidence_reader=None):
     """One parent-owned aggregate budget across interruption, retry, and new-job proof."""
     path = Path(manifest["root"]) / "manifest.json"
     results = []
     name = manifest["provider"]
     wispr_resume = manifest.get("wispr_resume", False)
-    resume_trial = name == "slack" or wispr_resume
+    gmail_resume = manifest.get("gmail_resume", False)
+    resume_trial = name == "slack" or wispr_resume or gmail_resume
     stages = (
-        (("interrupt", "resume") if wispr_resume else ("interrupt", "resume", "new_cycle"))
+        (
+            ("interrupt", "resume")
+            if wispr_resume or gmail_resume
+            else ("interrupt", "resume", "new_cycle")
+        )
         if resume_trial
         else ("first", "second")
     )
     total_requests, total_records = manifest["request_limit"], manifest["record_limit"]
+    total_blob_bytes = manifest.get("blob_byte_limit")
     deadline = time.monotonic() + manifest["timeout"] if resume_trial else None
     interrupted_job_id = str(uuid4())
     for stage in stages:
@@ -610,6 +715,8 @@ async def run_trials(manifest, evidence_reader=None):
                     }
                 )
                 break
+            if not remaining_blob_budget(manifest, results, total_blob_bytes):
+                break
             manifest.update(
                 resume_stage=stage,
                 job_id=interrupted_job_id if stage != "new_cycle" else str(uuid4()),
@@ -628,16 +735,17 @@ async def run_trials(manifest, evidence_reader=None):
             result["resumed_partial"] = bool(
                 result.get("resumed_page_committed") and not result.get("full_scope_completed")
             )
+        mark_early_completion(gmail_resume, stage, code, result)
         results.append(result)
         print(json.dumps({"run": len(results), "stage": stage, **result}), flush=True)
         if stage == "interrupt":
             if code != 75 or not result.get("intentional_interruption"):
                 break
         elif (
-            wispr_resume
+            (wispr_resume or gmail_resume)
             and stage == "resume"
             and code == 76
-            and result.get("wispr_recovery_verified")
+            and (result.get("wispr_recovery_verified") or result.get("gmail_recovery_verified"))
         ):
             break
         elif code:
@@ -670,11 +778,22 @@ def wispr_request_limit(value: str) -> int:
     return limit
 
 
+def gmail_trial_options(name):
+    resume = os.environ.get("LIVE_GMAIL_RESUME") == "1"
+    unfiltered = os.environ.get("LIVE_GMAIL_UNFILTERED") == "1"
+    if (resume or unfiltered) and name != "gmail":
+        raise ValueError("Gmail trial options require Gmail provider")
+    if resume and not unfiltered:
+        raise ValueError("Gmail recovery proof requires explicit unfiltered scope")
+    return resume, unfiltered
+
+
 async def main():
     name = os.environ.get("LIVE_LIFECYCLE_PROVIDER", "gmail")
     if name not in {"gmail", "google_calendar", "google_drive", "slack", "wispr"}:
         raise ValueError("Unsupported lifecycle provider")
     wispr_resume = os.environ.get("LIVE_WISPR_RESUME") == "1"
+    gmail_resume, gmail_unfiltered = gmail_trial_options(name)
     if wispr_resume and name != "wispr":
         raise ValueError("Wispr resume requires Wispr provider")
     request_limit = (
@@ -755,6 +874,8 @@ async def main():
                 "sync_id": str(sync_id),
                 "query": f"after:{end - 7 * 86400} before:{end}",
             }
+            if name == "gmail":
+                manifest.update(gmail_resume=gmail_resume, gmail_unfiltered=gmail_unfiltered)
             if wispr_resume:
                 manifest.update(
                     wispr_resume=True, request_limit=request_limit, record_limit=600, timeout=180
@@ -780,7 +901,9 @@ async def main():
                     root / "resume-target.json",
                 )
 
-            results = await run_trials(manifest, resume_evidence if name == "slack" else None)
+            results = await run_trials(
+                manifest, resume_evidence if name == "slack" or gmail_resume else None
+            )
 
     finally:
         os.umask(old_umask)
@@ -798,6 +921,15 @@ async def main():
         and results[1].get("full_scope_completed")
         and results[2].get("full_scope_completed")
     )
+    gmail_verified = bool(
+        gmail_resume
+        and len(results) == 2
+        and results[0].get("intentional_interruption")
+        and results[1].get("resumed_page_committed")
+        and results[1].get("resumed_saved_page")
+        and results[1].get("capture_profile_requests") == 0
+        and not results[1].get("saved_cursor_expired")
+    )
     print(
         json.dumps(
             {
@@ -806,6 +938,7 @@ async def main():
                 "schema_removed": True,
                 "blob_directory_removed": True,
                 "resume_verified": bool(resume_verified),
+                "gmail_recovery_verified": gmail_verified,
                 "wispr_recovery_verified": bool(
                     wispr_resume
                     and len(results) == 2
@@ -816,7 +949,8 @@ async def main():
                 ),
                 "resumed_partial": any(item.get("resumed_partial", False) for item in results),
                 "saved_cursor_reused": bool(
-                    resume_verified and not results[1].get("saved_cursor_expired")
+                    (resume_verified or gmail_verified)
+                    and not results[1].get("saved_cursor_expired")
                 ),
                 **trial_counter_summary(results),
                 "identical_second_read": len(completed) == 2
@@ -829,7 +963,9 @@ async def main():
         wispr_resume and len(results) == 2 and results[1].get("wispr_recovery_verified", False)
     )
     success = (
-        wispr_verified
+        gmail_verified
+        if gmail_resume
+        else wispr_verified
         if wispr_resume
         else (resume_verified if name == "slack" else len(results) == 2)
     )
