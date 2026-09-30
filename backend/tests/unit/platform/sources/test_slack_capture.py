@@ -31,15 +31,17 @@ async def test_page_commits_history_before_threads_and_preserves_native_fields()
             {"messages": [{"ts": "2", "files": [{"id": "F1"}]}]},
         ]
     )
-    root = await connector.capture_page(CompletedScope(record_type="channel"), ScanContinuation())
+    root = await connector.capture_page(
+        CompletedScope(record_type="channel"), ScanContinuation(), files=MagicMock()
+    )
     assert root.final and root.records[0].payload["unknown_native_field"] == "kept"
     scope = CompletedScope(record_type="message", container_id="C1")
-    history = await connector.capture_page(scope, ScanContinuation())
+    history = await connector.capture_page(scope, ScanContinuation(), files=MagicMock())
     assert history.records[0].payload["blocks"] == [{"type": "rich_text"}]
     assert history.continuation.value["pending_threads"] == ["1"] and not history.final
-    replies = await connector.capture_page(scope, history.continuation)
+    replies = await connector.capture_page(scope, history.continuation, files=MagicMock())
     assert replies.records[0].payload["thread_ts"] == "1" and not replies.final
-    last = await connector.capture_page(scope, replies.continuation)
+    last = await connector.capture_page(scope, replies.continuation, files=MagicMock())
     assert last.final and last.records[0].completeness == "partial"
     calls = connector._get.call_args_list
     assert calls[0].args[1]["types"] == "public_channel,private_channel,im,mpim"
@@ -62,7 +64,9 @@ async def test_incomplete_pagination_fails(pages):
     with pytest.raises(ValueError):
         for _ in pages:
             result = await connector.capture_page(
-                CompletedScope(record_type="message", container_id="C1"), progress
+                CompletedScope(record_type="message", container_id="C1"),
+                progress,
+                files=MagicMock(),
             )
             progress = result.continuation
 

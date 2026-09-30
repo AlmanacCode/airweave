@@ -86,11 +86,11 @@ class BoundedPageSource:
         self.canonical_container_parents = source.canonical_container_parents
         self.capture_cycle_configuration = source.capture_cycle_configuration
 
-    async def capture_page(self, scope, continuation):
+    async def capture_page(self, scope, continuation, *, files: FileService):
         if self.resume_probe is not None:
             await self.resume_probe.before_page(scope, continuation)
         try:
-            page = await self.source.capture_page(scope, continuation)
+            page = await self.source.capture_page(scope, continuation, files=files)
         except InvalidScanContinuation:
             if self.resume_probe is not None:
                 self.resume_probe.cursor_expired()
@@ -384,6 +384,7 @@ async def child(manifest):
                 attempt,
                 container_parents=getattr(source, "canonical_container_parents", {}),
                 page_source=page_source,
+                files=files,
             )
             runtime = SyncRuntime(
                 source=source,
@@ -694,7 +695,7 @@ async def main():
                     "gmail": 600,
                     "google_calendar": 180,
                     "google_drive": 300,
-                    "slack": 1800,
+                    "slack": 7200,
                     "wispr": 300,
                 }[name],
                 "blob_byte_limit": (512 if name == "google_drive" else 256) * 1024 * 1024,

@@ -39,6 +39,7 @@ def runner(database, source, responses, attempt=1, service=None):
         CaptureAttempt(id=fence.attempt_id if attempt == 1 else uuid4(), number=attempt),
         connector.canonical_container_parents,
         page_source=connector,
+        files=MagicMock(),
     )
     runtime.source = connector
     runtime.canonical_capture = pipeline
@@ -439,12 +440,12 @@ async def test_scope_withdrawal_keeps_uncertain_reason_without_claiming_access_r
     instance, _, pipeline = runner(database, source, [ROOT, HISTORY])
     original_page = pipeline.page_source.capture_page
 
-    async def unavailable(scope, continuation):
+    async def unavailable(scope, continuation, *, files):
         if scope.record_type == "message" and continuation.value.get("pending_threads"):
             raise ScopeAccessLost(
                 "Selected scope is no longer available", removal_reason="scope_removed"
             )
-        return await original_page(scope, continuation)
+        return await original_page(scope, continuation, files=files)
 
     pipeline.page_source.capture_page = unavailable
     await run(instance)

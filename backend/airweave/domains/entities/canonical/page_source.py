@@ -11,6 +11,7 @@ from airweave.domains.entities.canonical.requests import (
     ScopeRemovalReason,
 )
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
+from airweave.domains.storage.file_service import FileService
 
 
 class CapturePage(BaseModel):
@@ -49,7 +50,7 @@ class CanonicalPageSource(Protocol):
     capture_cycle_configuration: CycleConfiguration
 
     async def capture_page(
-        self, scope: CompletedScope, continuation: ScanContinuation
+        self, scope: CompletedScope, continuation: ScanContinuation, *, files: FileService
     ) -> CapturePage:
         """Fetch one page without advancing durable state or performing writes."""
         ...

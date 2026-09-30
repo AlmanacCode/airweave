@@ -217,7 +217,7 @@ class SlackSource(BaseSource):
         )
 
     async def capture_page(
-        self, scope: CompletedScope, continuation: ScanContinuation
+        self, scope: CompletedScope, continuation: ScanContinuation, *, files: FileService
     ) -> CapturePage:
         """Fetch one page; record and nested reply progress are committed by the pipeline."""
         try:

@@ -54,6 +54,7 @@ async def test_first_completed_membership_hides_prior_partial_channel(
         CaptureAttempt(id=fence.attempt_id, number=fence.attempt_number),
         SlackSource.canonical_container_parents,
         page_source=connector,
+        files=MagicMock(),
     )
     await pipeline.start(ctx)
 

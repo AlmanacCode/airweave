@@ -31,6 +31,7 @@ from airweave.domains.entities.canonical.scan_models import (
     ScanState,
 )
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
+from airweave.domains.storage.file_service import FileService
 
 
 class CanonicalScanDriver:
@@ -45,9 +46,11 @@ class CanonicalScanDriver:
         progress: Callable[[CaptureResult, tuple[CaptureRecord, ...]], Awaitable[None]],
         with_parent: Callable[[CaptureRecord], CaptureRecord],
         check_limits: Callable[[], Awaitable[None]],
+        files: FileService,
     ):
         """Reuse the capture service and pipeline progress/guard callbacks."""
         self.service, self.sessions, self.fence, self.source = service, sessions, fence, source
+        self.files = files
         self.progress, self.with_parent, self.check_limits = progress, with_parent, check_limits
 
     async def run(self) -> CaptureCycle:
@@ -127,7 +130,7 @@ class CanonicalScanDriver:
         while state.phase == "collecting":
             await self.check_limits()
             try:
-                page = await self.source.capture_page(scope, state.continuation)
+                page = await self.source.capture_page(scope, state.continuation, files=self.files)
             except InvalidScanContinuation:
                 if restarts >= 1:
                     raise

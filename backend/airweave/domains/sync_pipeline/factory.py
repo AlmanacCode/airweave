@@ -248,6 +248,7 @@ class SyncFactory(SyncFactoryProtocol):
                 event_bus=self._event_bus,
                 record_types=canonical_source.canonical_record_types,
                 attempt=resolve_capture_attempt(capture_attempt),
+                files=source_result.files,
                 page_source=(
                     canonical_source if isinstance(canonical_source, CanonicalPageSource) else None
                 ),

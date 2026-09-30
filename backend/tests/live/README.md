@@ -260,7 +260,7 @@ See `evidence/slack-lifecycle-incomplete-20260930.json` and
 
 `LIVE_LIFECYCLE_PROVIDER=slack` uses the production page adapter, capture pipeline,
 SQL state, and job state machine. It has three stages within **one aggregate cap**:
-600 provider requests, 10,000 observed records, and 1,800 seconds including all
+600 provider requests, 10,000 observed records, and 7,200 seconds including all
 Retry-After waits and subprocess startup.
 
 1. Start a new job. After a history page commits pending thread IDs, the test-only

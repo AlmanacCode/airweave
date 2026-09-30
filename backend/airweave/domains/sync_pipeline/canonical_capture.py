@@ -23,6 +23,7 @@ from airweave.domains.entities.canonical.requests import (
 )
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
 from airweave.domains.entities.canonical.source import SourceObservation
+from airweave.domains.storage.file_service import FileService
 from airweave.domains.sync_pipeline.canonical_scan import CanonicalScanDriver
 from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
 from airweave.domains.sync_pipeline.contexts import SyncContext
@@ -43,6 +44,7 @@ class CanonicalCapturePipeline:
         attempt: CaptureAttempt,
         container_parents: dict[str, str] | None = None,
         page_source: CanonicalPageSource | None = None,
+        files: FileService | None = None,
     ):
         """Inject transactional persistence and existing progress-event infrastructure."""
         if not record_types:
@@ -60,6 +62,7 @@ class CanonicalCapturePipeline:
             if parent in self._container_parents:
                 raise ValueError("Only root-container visibility relationships are supported")
         self.page_source = page_source
+        self.files = files
         self._cycle: CaptureCycle | None = None
         if page_source is not None:
             config = page_source.capture_cycle_configuration
@@ -93,6 +96,8 @@ class CanonicalCapturePipeline:
         check_limits: Callable[[], Awaitable[None]],
     ) -> None:
         """Run opted-in pages with a commit barrier before every next provider call."""
+        if self.files is None:
+            raise SyncFailureError("Page capture requires the source file service")
         if self.page_source is None:
             raise SyncFailureError("Source has no durable page capability")
         if sync_context.execution_config.cursor.skip_updates:
@@ -113,6 +118,7 @@ class CanonicalCapturePipeline:
             progress,
             self._with_parent,
             check_limits,
+            self.files,
         ).run()
 
     def _writer(self) -> WriterFence:
