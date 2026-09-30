@@ -35,11 +35,11 @@ async def test_prefilter_excludes_over_two_hundred_wrong_dates_before_top_matche
         urls = []
         expected = None
         try:
-            for number in range(203):
+            for number in range(204):
                 identity = f"canonical-prefilter-{uuid4()}"
                 url = f"http://localhost:8081/document/v1/airweave/base_entity/docid/{identity}"
                 urls.append(url)
-                correct = number == 202
+                correct = number == 203
                 known = number != 201
                 fields = {
                     "entity_id": identity,
@@ -49,7 +49,11 @@ async def test_prefilter_excludes_over_two_hundred_wrong_dates_before_top_matche
                     "airweave_system_metadata_collection_id": collection,
                     "airweave_system_metadata_sync_id": str(sync),
                     "airweave_system_metadata_original_entity_id": identity,
-                    "airweave_system_metadata_canonical_record_type": "event",
+                    "airweave_system_metadata_source_name": "google_calendar",
+                    "airweave_system_metadata_entity_type": "GoogleCalendarEventEntity",
+                    "airweave_system_metadata_canonical_record_type": "message"
+                    if number == 202
+                    else "event",
                     "airweave_system_metadata_source_created_known": int(known),
                     "airweave_system_metadata_source_created_us": epoch_microseconds(instant)
                     if correct
