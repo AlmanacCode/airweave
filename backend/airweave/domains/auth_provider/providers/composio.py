@@ -118,6 +118,7 @@ class ComposioAuthProvider(BaseAuthProvider):
             "slack": frozenset({"slack.com"}),
             "linear": frozenset({"api.linear.app", "uploads.linear.app"}),
             "github": frozenset({"api.github.com"}),
+            "notion": frozenset({"api.notion.com"}),
         }
         if source_short_name not in hosts and source_short_name != "wispr":
             raise AuthProviderConfigError(
