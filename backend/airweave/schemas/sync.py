@@ -126,6 +126,8 @@ class ScheduleResponse(BaseModel):
 class SyncInDBBase(SyncBase):
     """Base schema for Sync stored in DB."""
 
+    provisioning_generation: int = Field(default=0, ge=0)
+    provisioning_ready_generation: int = Field(default=0, ge=0)
     id: UUID
     organization_id: UUID
     created_at: datetime

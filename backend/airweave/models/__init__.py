@@ -18,6 +18,7 @@ from .integration_credential import IntegrationCredential
 from .node_selection import NodeSelection
 from .organization import Organization
 from .organization_billing import OrganizationBilling
+from .owned_provisioning import OwnedProvisioning
 from .processed_webhook_event import ProcessedWebhookEvent
 from .redirect_session import RedirectSession
 from .search_query import SearchQuery
@@ -33,6 +34,7 @@ from .user_organization import UserOrganization
 from .vector_db_deployment_metadata import VectorDbDeploymentMetadata
 
 __all__ = [
+    "OwnedProvisioning",
     "AccessControlMembership",
     "APIKey",
     "AuthProvider",

@@ -41,6 +41,11 @@ class Sync(OrganizationBase, UserMixin):
     sync_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     sync_config: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
+    provisioning_generation: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    provisioning_ready_generation: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0"
+    )
+
     observed_change_sequence: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     writer_epoch: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     writer_job_id: Mapped[Optional[UUID]] = mapped_column(nullable=True)

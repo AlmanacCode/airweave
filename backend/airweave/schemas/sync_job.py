@@ -68,6 +68,7 @@ class SyncJobUpdate(BaseModel):
 class SyncJobInDBBase(SyncJobBase):
     """Base schema for SyncJob stored in DB."""
 
+    provisioning_generation: int = Field(default=0, ge=0)
     id: UUID
     organization_id: UUID
     created_by_email: Optional[EmailStr] = None
