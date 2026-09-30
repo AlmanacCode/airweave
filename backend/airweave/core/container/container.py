@@ -74,6 +74,7 @@ from airweave.domains.organizations.protocols import (
     OrganizationServiceProtocol,
     UserOrganizationRepositoryProtocol,
 )
+from airweave.domains.owned_provisioning.service import OwnedProvisioningService
 from airweave.domains.search.owned import OwnedSearchService
 from airweave.domains.search.protocols import (
     AgenticSearchServiceProtocol,
@@ -253,6 +254,7 @@ class Container:
 
     # Search domain (v2 tiers)
     owned_search: OwnedSearchService
+    owned_provisioning: OwnedProvisioningService
     instant_search: InstantSearchServiceProtocol
     classic_search: ClassicSearchServiceProtocol
     agentic_search: AgenticSearchServiceProtocol

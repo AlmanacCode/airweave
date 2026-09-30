@@ -109,6 +109,7 @@ class SyncService(SyncServiceProtocol):
         run_immediately: bool,
         ctx: ApiContext,
         uow: UnitOfWork,
+        defer_execution: bool = False,
     ) -> SyncProvisionResult:
         """Create sync + optional job + Temporal schedule atomically.
 
@@ -143,7 +144,7 @@ class SyncService(SyncServiceProtocol):
             uow=uow,
         )
 
-        if cron:
+        if cron and not defer_execution:
             await self._temporal_schedule_service.create_or_update_schedule(
                 sync_id=sync_schema.id,
                 cron_schedule=cron,

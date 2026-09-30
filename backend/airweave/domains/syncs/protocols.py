@@ -123,6 +123,7 @@ class SyncServiceProtocol(Protocol):
         run_immediately: bool,
         ctx: ApiContext,
         uow: UnitOfWork,
+        defer_execution: bool = False,
     ) -> SyncProvisionResult:
         """Create sync + optional job + Temporal schedule atomically."""
         ...

@@ -103,6 +103,8 @@ from airweave.domains.ocr.protocols import OcrProvider
 from airweave.domains.organizations.protocols import UserOrganizationRepositoryProtocol
 from airweave.domains.organizations.repository import OrganizationRepository as OrgRepo
 from airweave.domains.organizations.repository import UserOrganizationRepository
+from airweave.domains.owned_provisioning.service import OwnedProvisioningService
+from airweave.domains.owned_provisioning.store import ProvisioningStore
 from airweave.domains.search.adapters.vector_db.filter_translator import FilterTranslator
 from airweave.domains.search.adapters.vector_db.vespa_client import VespaVectorDB
 from airweave.domains.search.agentic.service import AgenticSearchService
@@ -615,6 +617,14 @@ def create_container(settings: Settings) -> Container:
         user_service=user_service,
         email_service=email_service,
         owned_search=search_deps["owned_search"],
+        owned_provisioning=OwnedProvisioningService(
+            store=ProvisioningStore(create_service, source_validation),
+            lifecycle=source_deps["source_lifecycle_service"],
+            jobs=source_deps["sync_job_repo"],
+            syncs=source_deps["sync_repo"],
+            schedules=sync_deps["temporal_schedule_service"],
+            workflows=sync_deps["temporal_workflow_service"],
+        ),
         instant_search=search_deps["instant_search"],
         classic_search=search_deps["classic_search"],
         agentic_search=search_deps["agentic_search"],

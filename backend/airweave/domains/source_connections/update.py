@@ -15,6 +15,7 @@ from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.collections.protocols import CollectionRepositoryProtocol
 from airweave.domains.connections.protocols import ConnectionRepositoryProtocol
 from airweave.domains.credentials.protocols import IntegrationCredentialRepositoryProtocol
+from airweave.domains.owned_provisioning.guard import require_unmanaged_source
 from airweave.domains.source_connections.protocols import (
     ResponseBuilderProtocol,
     SourceConnectionRepositoryProtocol,
@@ -92,6 +93,8 @@ class SourceConnectionUpdateService(SourceConnectionUpdateServiceProtocol):
             source_conn = await self._sc_repo.get(uow.session, id=id, ctx=ctx)
             if not source_conn:
                 raise NotFoundException("Source connection not found")
+
+            await require_unmanaged_source(db, id, ctx.organization.id)
 
             # Update fields
             update_data = obj_in.model_dump(exclude_unset=True)

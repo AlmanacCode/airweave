@@ -8,6 +8,7 @@ from airweave import schemas
 from airweave.api.context import ApiContext
 from airweave.core.exceptions import NotFoundException
 from airweave.domains.collections.protocols import CollectionRepositoryProtocol
+from airweave.domains.owned_provisioning.guard import require_unmanaged_source
 from airweave.domains.source_connections.protocols import (
     ResponseBuilderProtocol,
     SourceConnectionDeletionServiceProtocol,
@@ -48,6 +49,8 @@ class SourceConnectionDeletionService(SourceConnectionDeletionServiceProtocol):
         source_conn = await self._sc_repo.get(db, id=id, ctx=ctx)
         if not source_conn:
             raise NotFoundException("Source connection not found")
+
+        await require_unmanaged_source(db, id, ctx.organization.id)
 
         sync_id = source_conn.sync_id
         collection_orm = await self._collection_repo.get_by_readable_id(

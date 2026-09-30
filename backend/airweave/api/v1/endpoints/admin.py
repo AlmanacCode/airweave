@@ -1212,7 +1212,11 @@ async def resync_with_execution_config(
         ctx.logger.info(f"Admin resync job will be tagged with: {tags}")
 
     async with UnitOfWork(db) as uow:
+        from airweave.crud.crud_sync_job import lock_sync_for_job
+
+        locked_sync = await lock_sync_for_job(uow.session, sync_obj.organization_id, sync_id)
         sync_job_obj = SyncJob(
+            provisioning_generation=locked_sync.provisioning_generation,
             sync_id=sync_id,
             organization_id=sync_obj.organization_id,
             status=SyncJobStatus.PENDING,

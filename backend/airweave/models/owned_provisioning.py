@@ -30,6 +30,7 @@ class OwnedProvisioning(OrganizationBase):
     initial_job_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("sync_job.id", ondelete="SET NULL"), nullable=True
     )
+    cancellation_job_ids: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (

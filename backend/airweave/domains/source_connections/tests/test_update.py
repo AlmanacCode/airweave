@@ -5,7 +5,7 @@ Table-driven tests. Zero patches -- all deps are fakes.
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -19,7 +19,6 @@ from airweave.api.context import ApiContext
 from airweave.core.exceptions import NotFoundException
 from airweave.core.logging import logger
 from airweave.core.shared_models import AuthMethod
-from airweave.domains.syncs.types import InvalidSyncTransitionError
 from airweave.domains.collections.fakes.repository import FakeCollectionRepository
 from airweave.domains.connections.fakes.repository import FakeConnectionRepository
 from airweave.domains.credentials.fakes.repository import (
@@ -34,8 +33,8 @@ from airweave.domains.sources.fakes.registry import FakeSourceRegistry
 from airweave.domains.sources.fakes.service import FakeSourceService
 from airweave.domains.sources.fakes.validation import FakeSourceValidationService
 from airweave.domains.sources.types import SourceRegistryEntry
-from airweave.domains.syncs.fakes.service import FakeSyncService
 from airweave.domains.syncs.fakes.repository import FakeSyncRepository
+from airweave.domains.syncs.fakes.service import FakeSyncService
 from airweave.domains.syncs.types import SyncProvisionResult
 from airweave.domains.temporal.fakes.schedule_service import FakeTemporalScheduleService
 from airweave.models.collection import Collection
@@ -52,6 +51,11 @@ ORG_ID = uuid4()
 
 class _AuthPayload(BaseModel):
     token: str
+
+
+def _unmanaged_db():
+    """Legacy scenarios have no owned account relationship."""
+    return AsyncMock(scalar=AsyncMock(return_value=None))
 
 
 def _make_ctx() -> ApiContext:
@@ -141,7 +145,7 @@ async def test_update_not_found():
     svc = _build_service()
     obj_in = SourceConnectionUpdate(name="New Name")
     with pytest.raises(NotFoundException, match="Source connection not found"):
-        await svc.update(AsyncMock(), id=uuid4(), obj_in=obj_in, ctx=_make_ctx())
+        await svc.update(_unmanaged_db(), id=uuid4(), obj_in=obj_in, ctx=_make_ctx())
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +163,9 @@ class FieldUpdateCase:
 FIELD_UPDATE_CASES = [
     FieldUpdateCase("name_only", SourceConnectionUpdate(name="Renamed")),
     FieldUpdateCase("description_only", SourceConnectionUpdate(description="New desc")),
-    FieldUpdateCase("name_and_description", SourceConnectionUpdate(name="Renamed", description="Desc")),
+    FieldUpdateCase(
+        "name_and_description", SourceConnectionUpdate(name="Renamed", description="Desc")
+    ),
 ]
 
 
@@ -170,7 +176,7 @@ async def test_field_update(case: FieldUpdateCase):
     sc_repo.seed(sc.id, sc)
 
     svc = _build_service(sc_repo=sc_repo)
-    result = await svc.update(AsyncMock(), id=sc.id, obj_in=case.obj_in, ctx=_make_ctx())
+    result = await svc.update(_unmanaged_db(), id=sc.id, obj_in=case.obj_in, ctx=_make_ctx())
     assert result.id == sc.id
 
 
@@ -190,7 +196,7 @@ async def test_update_config_valid():
     svc = _build_service(sc_repo=sc_repo, source_validation=validation)
     obj_in = SourceConnectionUpdate(config={"key": "value"})
 
-    result = await svc.update(AsyncMock(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
+    result = await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
     assert result.id == sc.id
     assert any(c[0] == "validate_config" for c in validation._calls)
 
@@ -212,10 +218,36 @@ class ScheduleCase:
 
 
 SCHEDULE_CASES = [
-    ScheduleCase("update_existing", has_sync=True, new_cron="0 * * * *", expect_temporal_create=True, expect_temporal_delete=False),
-    ScheduleCase("remove_schedule", has_sync=True, new_cron=None, expect_temporal_create=False, expect_temporal_delete=True),
-    ScheduleCase("add_no_sync", has_sync=False, new_cron="0 * * * *", expect_temporal_create=False, expect_temporal_delete=False, expect_sync_record_create=True),
-    ScheduleCase("no_connection_id_warning", has_sync=False, new_cron="0 * * * *", has_connection_id=False, expect_temporal_create=False, expect_temporal_delete=False),
+    ScheduleCase(
+        "update_existing",
+        has_sync=True,
+        new_cron="0 * * * *",
+        expect_temporal_create=True,
+        expect_temporal_delete=False,
+    ),
+    ScheduleCase(
+        "remove_schedule",
+        has_sync=True,
+        new_cron=None,
+        expect_temporal_create=False,
+        expect_temporal_delete=True,
+    ),
+    ScheduleCase(
+        "add_no_sync",
+        has_sync=False,
+        new_cron="0 * * * *",
+        expect_temporal_create=False,
+        expect_temporal_delete=False,
+        expect_sync_record_create=True,
+    ),
+    ScheduleCase(
+        "no_connection_id_warning",
+        has_sync=False,
+        new_cron="0 * * * *",
+        has_connection_id=False,
+        expect_temporal_create=False,
+        expect_temporal_delete=False,
+    ),
 ]
 
 
@@ -288,7 +320,7 @@ async def test_schedule_update(case: ScheduleCase):
         collection_repo=col_repo,
     )
 
-    result = await svc.update(AsyncMock(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
+    result = await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
     assert result.id == sc.id
 
     if case.expect_temporal_create:
@@ -311,7 +343,7 @@ async def test_schedule_add_collection_not_found():
     obj_in = SourceConnectionUpdate(schedule={"cron": "0 * * * *"})
 
     with pytest.raises(NotFoundException, match="Collection not found"):
-        await svc.update(AsyncMock(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
+        await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
 
 
 async def test_schedule_add_rejects_federated_source():
@@ -348,7 +380,7 @@ async def test_schedule_add_rejects_federated_source():
     obj_in = SourceConnectionUpdate(schedule={"cron": "0 * * * *"})
 
     with pytest.raises(HTTPException) as exc_info:
-        await svc.update(AsyncMock(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
+        await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
     assert exc_info.value.status_code == 400
     assert "federated search" in str(exc_info.value.detail)
 
@@ -415,13 +447,13 @@ async def test_credential_update(case: CredentialCase):
     obj_in = SourceConnectionUpdate(authentication={"credentials": {"token": "new_secret"}})
 
     if case.expect_success:
-        result = await svc.update(AsyncMock(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
+        result = await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
         assert result.id == sc.id
         assert len(encryptor._encrypt_calls) == 1
         assert any(c[0] == "update" for c in cred_repo._calls)
     else:
         with pytest.raises(HTTPException) as exc_info:
-            await svc.update(AsyncMock(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
+            await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
         assert exc_info.value.status_code == 400
         assert "direct authentication" in str(exc_info.value.detail)
 
@@ -441,7 +473,7 @@ async def test_credential_update_direct_auth_missing_connection_raises():
     obj_in = SourceConnectionUpdate(authentication={"credentials": {"token": "new_secret"}})
 
     with pytest.raises(NotFoundException, match="Connection not found"):
-        await svc.update(AsyncMock(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
+        await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
 
 
 async def test_credential_update_direct_auth_missing_integration_credential_raises():
@@ -469,7 +501,7 @@ async def test_credential_update_direct_auth_missing_integration_credential_rais
     obj_in = SourceConnectionUpdate(authentication={"credentials": {"token": "new_secret"}})
 
     with pytest.raises(NotFoundException, match="Integration credential not configured"):
-        await svc.update(AsyncMock(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
+        await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
 
 
 async def test_credential_update_direct_auth_missing_credential_record_raises():
@@ -498,7 +530,7 @@ async def test_credential_update_direct_auth_missing_credential_record_raises():
     obj_in = SourceConnectionUpdate(authentication={"credentials": {"token": "new_secret"}})
 
     with pytest.raises(NotFoundException, match="Integration credential not found"):
-        await svc.update(AsyncMock(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
+        await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
 
 
 # ---------------------------------------------------------------------------
@@ -579,7 +611,7 @@ async def test_credential_update_triggers_unpause():
     )
 
     obj_in = SourceConnectionUpdate(authentication={"credentials": {"token": "new_secret"}})
-    await svc.update(AsyncMock(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
+    await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
 
     assert any(c[0] == "resume" for c in sync_svc._calls)
 
@@ -622,5 +654,5 @@ async def test_credential_update_unpause_failure_is_nonfatal():
     )
 
     obj_in = SourceConnectionUpdate(authentication={"credentials": {"token": "new_secret"}})
-    result = await svc.update(AsyncMock(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
+    result = await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
     assert result.id == sc.id

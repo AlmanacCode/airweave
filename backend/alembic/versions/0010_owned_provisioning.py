@@ -44,6 +44,7 @@ def upgrade():
         ),
         sa.Column("sync_id", sa.UUID(), sa.ForeignKey("sync.id", ondelete="RESTRICT")),
         sa.Column("initial_job_id", sa.UUID(), sa.ForeignKey("sync_job.id", ondelete="SET NULL")),
+        sa.Column("cancellation_job_ids", postgresql.JSONB(), nullable=False, server_default="[]"),
         sa.Column("verified_at", sa.DateTime()),
         sa.UniqueConstraint(
             "organization_id",

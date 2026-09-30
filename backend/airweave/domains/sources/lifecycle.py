@@ -166,38 +166,42 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
             managed_auth=auth_config.managed_auth,
         )
 
-        # 5. Parse config_fields into typed config
-        entry = self._source_registry.get(source_connection_data.short_name)
-        config = self._build_typed_config(entry, source_connection_data.config_fields)
-
-        # 6. Create source instance with all deps injected
-        source = await source_connection_data.source_class.create(
-            auth=token_provider,
-            logger=logger,
-            http_client=http_client,
-            config=config,
-        )
-
-        # 7. Validate credentials early so failures surface as NEEDS_REAUTH.
-        #    Only catch auth-related exceptions — transient errors (server 5xx,
-        #    rate limits, network timeouts) must propagate so they don't
-        #    incorrectly pause schedules or set NEEDS_REAUTH status.
         try:
-            await source.validate()
-        except (
-            SourceAuthError,
-            AuthProviderAuthError,
-            AuthProviderAccountNotFoundError,
-            TokenCredentialsInvalidError,
-            TokenExpiredError,
-            TokenProviderAccountGoneError,
-        ) as exc:
-            raise SourceValidationError(
-                short_name=source_connection_data.short_name,
-                reason=f"credential validation failed: {exc}",
-            ) from exc
+            # 5. Parse config_fields into typed config
+            entry = self._source_registry.get(source_connection_data.short_name)
+            config = self._build_typed_config(entry, source_connection_data.config_fields)
 
-        return source
+            # 6. Create source instance with all deps injected
+            source = await source_connection_data.source_class.create(
+                auth=token_provider,
+                logger=logger,
+                http_client=http_client,
+                config=config,
+            )
+
+            # 7. Validate credentials early so failures surface as NEEDS_REAUTH.
+            #    Only catch auth-related exceptions — transient errors (server 5xx,
+            #    rate limits, network timeouts) must propagate so they don't
+            #    incorrectly pause schedules or set NEEDS_REAUTH status.
+            try:
+                await source.validate()
+            except (
+                SourceAuthError,
+                AuthProviderAuthError,
+                AuthProviderAccountNotFoundError,
+                TokenCredentialsInvalidError,
+                TokenExpiredError,
+                TokenProviderAccountGoneError,
+            ) as exc:
+                raise SourceValidationError(
+                    short_name=source_connection_data.short_name,
+                    reason=f"credential validation failed: {exc}",
+                ) from exc
+
+            return source
+        except BaseException:
+            await http_client.aclose()
+            raise
 
     async def validate(
         self,
