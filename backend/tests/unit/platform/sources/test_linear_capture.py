@@ -38,6 +38,9 @@ def node(identity=ISSUE):
 
 
 def response(data, *, errors=None, status=200, headers=None):
+    # Child and membership fixtures use the actual exact-ID outer connection.
+    if isinstance(data, dict) and "issue" in data:
+        data = {"issues": connection([] if data["issue"] is None else [data["issue"]])}
     return httpx.Response(
         status,
         json={"data": data, **({"errors": errors} if errors else {})},
@@ -177,14 +180,16 @@ async def test_moved_child_scope_reports_scope_removed():
 
 
 @pytest.mark.asyncio
-async def test_missing_issue_is_not_access_revoked_or_empty_success():
+async def test_exhausted_zero_issue_connection_withdraws_scope_without_deletion_claim():
     capture, _ = await source(response({"issue": None}))
-    with pytest.raises(ValidationError):
+    with pytest.raises(ScopeAccessLost) as error:
         await capture.capture_page(
             CompletedScope(record_type="comment", container_id=str(ISSUE)),
             ScanContinuation(),
             files=MagicMock(),
         )
+
+    assert error.value.removal_reason == "scope_removed"
 
 
 @pytest.mark.asyncio

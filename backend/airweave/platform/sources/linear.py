@@ -54,7 +54,7 @@ _URL = "https://api.linear.app/graphql"
 _QUERIES = Path(__file__).with_name("linear_queries")
 _QUERY_NAMES = ("identity", "teams", "issues", "comments", "attachments", "issue-membership")
 QUERIES = {name: (_QUERIES / f"{name}.graphql").read_text() for name in _QUERY_NAMES}
-FIELD_SET_VERSION = 2
+FIELD_SET_VERSION = 3
 
 
 class _Model(BaseModel):
@@ -262,8 +262,12 @@ class LinearSource(BaseSource):
             variables["issueId"] = scope.container_id
             name = "comments" if scope.record_type == "comment" else "attachments"
             data = await self._query(name, variables)
-            issue_payload = data.get("issue")
-            # Null without documented error evidence is not a deletion or access-loss proof.
+            issue_payload = self._single_issue(data, scope.container_id)
+            if issue_payload is None:
+                raise ScopeAccessLost(
+                    "Linear issue is unavailable in the current accessible scope",
+                    removal_reason="scope_removed",
+                )
             self._check_issue(issue_payload, scope.container_id)
             issue_data = _ChildConnection.model_validate(issue_payload)
             page = issue_data.comments if name == "comments" else issue_data.attachments
@@ -366,13 +370,27 @@ class LinearSource(BaseSource):
             observed_at=datetime.now(timezone.utc),
         )
 
+    @staticmethod
+    def _single_issue(data: dict[str, JsonValue], native_id: str) -> dict[str, JsonValue] | None:
+        """Interpret only a successful exhausted exact-ID connection, never failed lookups."""
+        page = _Connection.model_validate(data.get("issues"))
+        if page.pageInfo.hasNextPage or len(page.nodes) > 1:
+            raise ValueError("Linear exact-ID membership response is not complete and unique")
+        if not page.nodes:
+            return None
+        node = page.nodes[0]
+        if str(_Identity.model_validate(node).id) != native_id:
+            raise ValueError("Linear returned the wrong issue identity")
+        return node
+
     async def confirm_root_absent(self, native_id: str) -> None:
         """Fail closed on ambiguous absence; readable out-of-scope roots may be removed."""
         UUID(native_id)
         data = await self._query("issue-membership", {"issueId": native_id})
-        issue = _Issue.model_validate(data.get("issue"))
-        if str(issue.id) != native_id:
-            raise ValueError("Linear returned the wrong issue identity")
+        payload = self._single_issue(data, native_id)
+        if payload is None:
+            return
+        issue = _Issue.model_validate(payload)
         if str(issue.team.id) in self.team_ids:
             raise ValueError("Linear omitted an issue still readable in the selected scope")
 

@@ -1,9 +1,12 @@
-query OwnedLinearIssueAttachments($issueId: String!, $first: Int!, $after: String) {
-  issue(id: $issueId) {
+query OwnedLinearIssueAttachments($issueId: ID!, $first: Int!, $after: String) {
+  issues(filter: {id: {eq: $issueId}}, includeArchived: true, first: 2) {
+    nodes {
     id team { id }
     attachments(first: $first, after: $after, includeArchived: true, orderBy: createdAt) {
       nodes { id title url metadata createdAt updatedAt archivedAt issue { id identifier title url team { id name } project { id name } } }
       pageInfo { hasNextPage endCursor }
     }
+    }
+    pageInfo { hasNextPage endCursor }
   }
 }
