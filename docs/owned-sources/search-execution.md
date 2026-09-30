@@ -107,3 +107,40 @@ provides `querytime`, `summaryfetchtime` and `searchtime` in seconds when
 body and add only that presentation flag, retaining those three numeric values
 alongside worker-entry/exit times. No query trace, response body or result content
 needs to be logged. Pooling changes should wait for that decomposition.
+
+
+## Worker and native Vespa decomposition
+
+A second instrumented candidate ran immutable commit
+`e37d018de786d3b9446b31a100a8dcd1c4ae9009` on loopback port 18084.
+Authentication qualification returned 401 without a key and 200 for an authorized
+retained-record read. Almanac then switched its private origin to this candidate;
+all six product requests returned 200 with 25 records and identical result-identity
+digests. The original 18081 process was stopped only after this success. The candidate
+continues serving the same isolated corpus; no provider fetch, schema migration or
+operator identity remapping occurred.
+
+Product times were 2439, 922, 1333, 565, 660 and 1171 ms.
+[24 sanitized worker samples](search-worker-samples.json) record native Vespa timing
+and worker boundaries. The critical organization request per product request was:
+
+| Sample | Airweave total | Dense | Worker queue | SDK worker | Resume delay | Native Vespa search | All SQL |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1702 | 703 | 0.1 | 900 | 0.2 | 509 | 47 |
+| 2 | 818 | 161 | 3.3 | 358 | 0.2 | 96 | 226 |
+| 3 | 1252 | 78 | 1.2 | 196 | 0.4 | 69 | 946 |
+| 4 | 487 | 94 | 0.7 | 181 | 0.4 | 84 | 178 |
+| 5 | 535 | 128 | 0.7 | 359 | 0.9 | 172 | 20 |
+| 6 | 900 | 248 | 0.2 | 321 | 0.3 | 122 | 286 |
+
+Milliseconds; nested intervals again must not be summed. On these critical requests,
+thread queueing and event-loop resumption are small. Native Vespa processing explains
+part of SDK wall time; the remainder includes transport/session setup and JSON decode,
+which were not measured separately. Sample 3 again contains a SQL delay. This does not
+justify blaming thread starvation, choosing a database plan, or changing HTTP pooling
+without a targeted test. Six successful samples neither establish a latency percentile
+nor reconstruct the earlier unlogged 503 and 13-second response.
+
+Instrumentation lives only in the private launcher, preserving general log suppression.
+Its copied query body adds `presentation.timing` only; result selection, ranking,
+authorization and the 200-candidate bound remain unchanged.

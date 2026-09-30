@@ -1,0 +1,2454 @@
+{
+  "immutable_revision": "e37d018de786d3b9446b31a100a8dcd1c4ae9009",
+  "qualification": "Actual API on loopback18084 from immutable archive, 6serialproductqueries/24organizationrequests. Numeric stage/native timings only; no queries, source identifiers, SQLparameters or resultcontent. Intervals are nested walltime, not additiveCPU.",
+  "requests": [
+    {
+      "sequence": 4,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 14.39700007904321
+        },
+        "dense": {
+          "count": 1,
+          "ms": 697.7981670061126
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 6.554250023327768
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 704.3882500147447
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 652.7667089831084
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 92.36441599205136
+        },
+        "execute": {
+          "count": 1,
+          "ms": 748.8067910308018
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 42.51174989622086
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 27.212833054363728
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 14.53358307480812
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 13.119000010192394
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 3.1570419669151306
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 54.84887503553182
+        },
+        "06f6532ebc76de6e": {
+          "count": 1,
+          "ms": 14.02979192789644
+        },
+        "e88a191d2772b4c3": {
+          "count": 1,
+          "ms": 13.554790988564491
+        },
+        "7ff2c92fa74aac62": {
+          "count": 1,
+          "ms": 21.54762507416308
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 14.26812494173646
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 9.441999951377511
+        },
+        "5ba1d0d81b5d4a1a": {
+          "count": 1,
+          "ms": 6.412832997739315
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 714.5442909095436,
+        "thread_submit_ms": 714.5484999055043,
+        "worker_enter_ms": 719.8180829873309,
+        "worker_exit_ms": 1364.0451659448445,
+        "await_resume_ms": 1364.1532909823582,
+        "adapter_return_ms": 1367.3077079001814
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.244,
+        "summaryfetchtime": 0.082,
+        "searchtime": 0.333
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 1552.3313329322264
+    },
+    {
+      "sequence": 1,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 20.058708963915706
+        },
+        "dense": {
+          "count": 1,
+          "ms": 691.7723750229925
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 13.597415992990136
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 705.7115830248222
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 688.2408329984173
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 29.30437494069338
+        },
+        "execute": {
+          "count": 1,
+          "ms": 721.8387499451637
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 102.58941701613367
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 13.002125080674887
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 7.20037508290261
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 5.277417018078268
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 12.694583041593432
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 8.783917059190571
+        },
+        "227345276c4b5446": {
+          "count": 1,
+          "ms": 79.17404198087752
+        },
+        "f3f9cbf3fee22c9f": {
+          "count": 1,
+          "ms": 11.609292007051408
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 9.656250011175871
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 0.16062508802860975
+        },
+        "a0f7d10209698549": {
+          "count": 1,
+          "ms": 4.063541069626808
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 731.3685000408441,
+        "thread_submit_ms": 731.857500039041,
+        "worker_enter_ms": 732.0340829901397,
+        "worker_exit_ms": 1416.5454170433804,
+        "await_resume_ms": 1416.772291995585,
+        "adapter_return_ms": 1419.607250019908
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.23,
+        "summaryfetchtime": 0.10400000000000001,
+        "searchtime": 0.336
+      },
+      "vespa_status": 200,
+      "candidates": 196,
+      "total_ms": 1573.6422500340268
+    },
+    {
+      "sequence": 3,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 8.467874024063349
+        },
+        "dense": {
+          "count": 1,
+          "ms": 699.1888750344515
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 6.565375020727515
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 705.7651670183986
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 678.466665907763
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 61.461207922548056
+        },
+        "execute": {
+          "count": 1,
+          "ms": 743.8884590519592
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 35.72583303321153
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 114.05433295294642
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 21.25195797998458
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 6.0969998594373465
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 9.712875005789101
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 31.63708304055035
+        },
+        "4ee445d5d52cef6a": {
+          "count": 1,
+          "ms": 5.438291002064943
+        },
+        "d0899a4cbc066a50": {
+          "count": 1,
+          "ms": 12.6727499300614
+        },
+        "d5b9cf8005c6b2d3": {
+          "count": 1,
+          "ms": 12.342790956608951
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 18.270791973918676
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 2.7705830289050937
+        },
+        "4860037db3700175": {
+          "count": 1,
+          "ms": 40.20195791963488
+        },
+        "0e5689f21b6e2cb6": {
+          "count": 1,
+          "ms": 1.977749983780086
+        },
+        "c86dd043af29ddfe": {
+          "count": 1,
+          "ms": 2.1070840302854776
+        },
+        "4759652f7e45b471": {
+          "count": 2,
+          "ms": 4.079291946254671
+        },
+        "bc2564b15d26cfb8": {
+          "count": 1,
+          "ms": 15.472374972887337
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 715.1667090365663,
+        "thread_submit_ms": 715.1694999774918,
+        "worker_enter_ms": 720.6202920060605,
+        "worker_exit_ms": 1390.5022089602426,
+        "await_resume_ms": 1390.915249940008,
+        "adapter_return_ms": 1393.631541985087
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.23800000000000002,
+        "summaryfetchtime": 0.101,
+        "searchtime": 0.341
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 1629.7802090412006
+    },
+    {
+      "sequence": 2,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 7.911792024970055
+        },
+        "dense": {
+          "count": 1,
+          "ms": 702.8400419512764
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 12.906166957691312
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 715.8160830149427
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 905.7754579698667
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 24.27075000014156
+        },
+        "execute": {
+          "count": 1,
+          "ms": 930.7643749052659
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 25.458791060373187
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 12.371707940474153
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 8.654584060423076
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 6.06404198333621
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 4.465624922886491
+        },
+        "6948fc1e998d8c91": {
+          "count": 1,
+          "ms": 10.673750075511634
+        },
+        "2a3e378facdff592": {
+          "count": 1,
+          "ms": 17.301541985943913
+        },
+        "024351fdb57a17bd": {
+          "count": 1,
+          "ms": 1.156416954472661
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 4.220000002533197
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 1.218083081766963
+        },
+        "2499200562431a3a": {
+          "count": 1,
+          "ms": 2.209833008237183
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 722.4849170306697,
+        "thread_submit_ms": 722.493875073269,
+        "worker_enter_ms": 722.5975840119645,
+        "worker_exit_ms": 1623.0179590638727,
+        "await_resume_ms": 1623.1887920293957,
+        "adapter_return_ms": 1628.2583340071142
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.257,
+        "summaryfetchtime": 0.249,
+        "searchtime": 0.509
+      },
+      "vespa_status": 200,
+      "candidates": 198,
+      "total_ms": 1701.5393340261653
+    },
+    {
+      "sequence": 5,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 6.998000084422529
+        },
+        "dense": {
+          "count": 1,
+          "ms": 161.28495789598674
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 3.144333022646606
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 164.9724580347538
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 342.02920901589096
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 65.0430410169065
+        },
+        "execute": {
+          "count": 1,
+          "ms": 409.411457949318
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 89.88524996675551
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 13.895208016037941
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 26.216291007585824
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 4.420625977218151
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 7.723249960690737
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 27.281332993879914
+        },
+        "06f6532ebc76de6e": {
+          "count": 1,
+          "ms": 10.08245802950114
+        },
+        "e88a191d2772b4c3": {
+          "count": 1,
+          "ms": 65.84966601803899
+        },
+        "7ff2c92fa74aac62": {
+          "count": 1,
+          "ms": 14.081792091019452
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 5.074832937680185
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 1.9725000020116568
+        },
+        "5ba1d0d81b5d4a1a": {
+          "count": 1,
+          "ms": 13.51004105526954
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 172.04616591334343,
+        "thread_submit_ms": 172.42312501184642,
+        "worker_enter_ms": 173.29445795621723,
+        "worker_exit_ms": 509.4542499864474,
+        "await_resume_ms": 509.67304094228894,
+        "adapter_return_ms": 514.0712499851361
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.076,
+        "summaryfetchtime": 0.039,
+        "searchtime": 0.116
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 712.3994579305872
+    },
+    {
+      "sequence": 8,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 15.251790988259017
+        },
+        "dense": {
+          "count": 1,
+          "ms": 154.03837501071393
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 4.9700409872457385
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 159.11116695497185
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 448.9807500503957
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 35.94641690142453
+        },
+        "execute": {
+          "count": 1,
+          "ms": 488.1273750215769
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 70.2489159302786
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 39.53712503425777
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 14.14441701490432
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 12.769749970175326
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 0.978458090685308
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 5.436790990643203
+        },
+        "4ee445d5d52cef6a": {
+          "count": 1,
+          "ms": 16.408832976594567
+        },
+        "d0899a4cbc066a50": {
+          "count": 1,
+          "ms": 58.04041598457843
+        },
+        "d5b9cf8005c6b2d3": {
+          "count": 1,
+          "ms": 2.911832998506725
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 7.438958971761167
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 10.581750073470175
+        },
+        "4860037db3700175": {
+          "count": 1,
+          "ms": 0.4955410258844495
+        },
+        "0e5689f21b6e2cb6": {
+          "count": 1,
+          "ms": 0.39175001438707113
+        },
+        "c86dd043af29ddfe": {
+          "count": 1,
+          "ms": 0.6935000419616699
+        },
+        "4759652f7e45b471": {
+          "count": 2,
+          "ms": 2.578666084446013
+        },
+        "bc2564b15d26cfb8": {
+          "count": 1,
+          "ms": 7.482332992367446
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 169.43408292718232,
+        "thread_submit_ms": 169.43954199086875,
+        "worker_enter_ms": 172.78091702610254,
+        "worker_exit_ms": 608.765707933344,
+        "await_resume_ms": 612.2454999713227,
+        "adapter_return_ms": 618.4113329509273
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.07200000000000001,
+        "summaryfetchtime": 0.036000000000000004,
+        "searchtime": 0.11
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 787.4784169252962
+    },
+    {
+      "sequence": 6,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 4.894750076346099
+        },
+        "dense": {
+          "count": 1,
+          "ms": 161.17279091849923
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 6.957000005058944
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 168.1465000147
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 480.32024991698563
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 36.98929201345891
+        },
+        "execute": {
+          "count": 1,
+          "ms": 527.5187079096213
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 42.28266607969999
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 24.55241698771715
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 22.843292099423707
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 3.8234589155763388
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 11.09312498010695
+        },
+        "6948fc1e998d8c91": {
+          "count": 1,
+          "ms": 20.848499960266054
+        },
+        "2a3e378facdff592": {
+          "count": 1,
+          "ms": 31.272124964743853
+        },
+        "024351fdb57a17bd": {
+          "count": 1,
+          "ms": 1.2763330014422536
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 10.02533407881856
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 5.498540936969221
+        },
+        "2499200562431a3a": {
+          "count": 1,
+          "ms": 17.50499999616295
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 175.64520810265094,
+        "thread_submit_ms": 175.67504104226828,
+        "worker_enter_ms": 179.79354108683765,
+        "worker_exit_ms": 647.8493330068886,
+        "await_resume_ms": 650.1307500293478,
+        "adapter_return_ms": 655.9629580006003
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.075,
+        "summaryfetchtime": 0.098,
+        "searchtime": 0.17500000000000002
+      },
+      "vespa_status": 200,
+      "candidates": 198,
+      "total_ms": 791.4707080926746
+    },
+    {
+      "sequence": 7,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 3.7414170801639557
+        },
+        "dense": {
+          "count": 1,
+          "ms": 161.01354197598994
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 4.646750050596893
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 165.6768750399351
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 386.19487499818206
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 40.67708400543779
+        },
+        "execute": {
+          "count": 1,
+          "ms": 430.91362493578345
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 204.53729096334428
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 4.470500047318637
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 8.46066593658179
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 1.8975419225171208
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 6.736875046044588
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 23.642083979211748
+        },
+        "227345276c4b5446": {
+          "count": 1,
+          "ms": 188.68970894254744
+        },
+        "f3f9cbf3fee22c9f": {
+          "count": 1,
+          "ms": 0.9001250145956874
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 0.9309579618275166
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 0.2186669735237956
+        },
+        "a0f7d10209698549": {
+          "count": 1,
+          "ms": 2.6028340216726065
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 170.5259169684723,
+        "thread_submit_ms": 170.5344170331955,
+        "worker_enter_ms": 173.81800001021475,
+        "worker_exit_ms": 532.1142920292914,
+        "await_resume_ms": 532.2840840090066,
+        "adapter_return_ms": 556.7168339621276
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.067,
+        "summaryfetchtime": 0.026000000000000002,
+        "searchtime": 0.096
+      },
+      "vespa_status": 200,
+      "candidates": 196,
+      "total_ms": 818.2105419691652
+    },
+    {
+      "sequence": 12,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 8.565208176150918
+        },
+        "dense": {
+          "count": 1,
+          "ms": 76.52866700664163
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 0.7226669695228338
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 77.32437504455447
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 174.11716596689075
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 34.63616594672203
+        },
+        "execute": {
+          "count": 1,
+          "ms": 212.0330409379676
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 710.2265419671312
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 20.33891691826284
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 33.103249967098236
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 4.8387921415269375
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 0.34675002098083496
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 5.06216601934284
+        },
+        "06f6532ebc76de6e": {
+          "count": 1,
+          "ms": 20.76575008686632
+        },
+        "e88a191d2772b4c3": {
+          "count": 1,
+          "ms": 687.4182500177994
+        },
+        "7ff2c92fa74aac62": {
+          "count": 1,
+          "ms": 14.593999949283898
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 10.954124969430268
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 4.585916991345584
+        },
+        "5ba1d0d81b5d4a1a": {
+          "count": 1,
+          "ms": 23.892374942079186
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 85.20262502133846,
+        "thread_submit_ms": 85.29004093725234,
+        "worker_enter_ms": 89.04145797714591,
+        "worker_exit_ms": 255.55124995298684,
+        "await_resume_ms": 255.90416602790356,
+        "adapter_return_ms": 259.317290969193
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.041,
+        "summaryfetchtime": 0.019,
+        "searchtime": 0.061
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 1062.9791660467163
+    },
+    {
+      "sequence": 10,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 21.33975096512586
+        },
+        "dense": {
+          "count": 1,
+          "ms": 75.94337500631809
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 1.6167500289157033
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 77.60191604029387
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 194.8804589919746
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 34.99312500935048
+        },
+        "execute": {
+          "count": 1,
+          "ms": 231.5204170299694
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 685.0154160056263
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 67.61808297596872
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 71.81354099884629
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 17.993916990235448
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 6.8410830572247505
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 10.948791052214801
+        },
+        "4ee445d5d52cef6a": {
+          "count": 1,
+          "ms": 8.314082981087267
+        },
+        "d0899a4cbc066a50": {
+          "count": 1,
+          "ms": 668.7928329920396
+        },
+        "d5b9cf8005c6b2d3": {
+          "count": 1,
+          "ms": 8.747541927732527
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 9.087041020393372
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 8.88729200232774
+        },
+        "4860037db3700175": {
+          "count": 1,
+          "ms": 3.888124949298799
+        },
+        "0e5689f21b6e2cb6": {
+          "count": 1,
+          "ms": 2.902667038142681
+        },
+        "c86dd043af29ddfe": {
+          "count": 1,
+          "ms": 10.116999968886375
+        },
+        "4759652f7e45b471": {
+          "count": 2,
+          "ms": 5.833208095282316
+        },
+        "bc2564b15d26cfb8": {
+          "count": 1,
+          "ms": 16.19304099585861
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 85.22920799441636,
+        "thread_submit_ms": 85.25708294473588,
+        "worker_enter_ms": 85.50212497357279,
+        "worker_exit_ms": 273.845124989748,
+        "await_resume_ms": 277.19900000374764,
+        "adapter_return_ms": 280.1077499752864
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.026000000000000002,
+        "summaryfetchtime": 0.035,
+        "searchtime": 0.063
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 1157.5952499406412
+    },
+    {
+      "sequence": 9,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 8.465541061013937
+        },
+        "dense": {
+          "count": 1,
+          "ms": 104.20608299318701
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 0.9832920040935278
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 105.32324993982911
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 881.9307920057327
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 29.598708963021636
+        },
+        "execute": {
+          "count": 1,
+          "ms": 912.5305000925437
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 181.9128750357777
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 16.407124930992723
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 10.464500053785741
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 5.84354205057025
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 3.6404170095920563
+        },
+        "6948fc1e998d8c91": {
+          "count": 1,
+          "ms": 17.10862503387034
+        },
+        "2a3e378facdff592": {
+          "count": 1,
+          "ms": 165.6676250277087
+        },
+        "024351fdb57a17bd": {
+          "count": 1,
+          "ms": 4.445333033800125
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 10.916332947090268
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 0.9451670339331031
+        },
+        "2499200562431a3a": {
+          "count": 1,
+          "ms": 3.2458750065416098
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 107.84874996170402,
+        "thread_submit_ms": 107.86354192532599,
+        "worker_enter_ms": 107.92920901440084,
+        "worker_exit_ms": 987.0548750041053,
+        "await_resume_ms": 987.5456669833511,
+        "adapter_return_ms": 989.7763750050217
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.022,
+        "summaryfetchtime": 0.078,
+        "searchtime": 0.101
+      },
+      "vespa_status": 200,
+      "candidates": 198,
+      "total_ms": 1236.1256669973955
+    },
+    {
+      "sequence": 11,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 5.712416023015976
+        },
+        "dense": {
+          "count": 1,
+          "ms": 78.43829190824181
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 0.6155420560389757
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 79.08908405806869
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 199.77108296006918
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 24.06924997922033
+        },
+        "execute": {
+          "count": 1,
+          "ms": 224.90783303510398
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 929.6094160526991
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 4.354374948889017
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 7.863500039093196
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 3.8265829207375646
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 4.591165925376117
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 10.602999944239855
+        },
+        "227345276c4b5446": {
+          "count": 1,
+          "ms": 922.780166962184
+        },
+        "f3f9cbf3fee22c9f": {
+          "count": 1,
+          "ms": 0.7919160416349769
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 1.0205419966951013
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 0.21600001491606236
+        },
+        "a0f7d10209698549": {
+          "count": 1,
+          "ms": 1.944832969456911
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 84.82829201966524,
+        "thread_submit_ms": 84.83520802110434,
+        "worker_enter_ms": 86.03083295747638,
+        "worker_exit_ms": 282.12995803914964,
+        "await_resume_ms": 282.57870802190155,
+        "adapter_return_ms": 284.59716704674065
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.034,
+        "summaryfetchtime": 0.034,
+        "searchtime": 0.069
+      },
+      "vespa_status": 200,
+      "candidates": 196,
+      "total_ms": 1252.1563329501078
+    },
+    {
+      "sequence": 14,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 8.505958947353065
+        },
+        "dense": {
+          "count": 1,
+          "ms": 77.20608299132437
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 1.3491669669747353
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 78.60499992966652
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 185.96895900554955
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 78.58295796904713
+        },
+        "execute": {
+          "count": 1,
+          "ms": 266.189958085306
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 36.97695804294199
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 7.01791699975729
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 19.737666007131338
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 7.61345901992172
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 0.6217500194907188
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 11.499374988488853
+        },
+        "06f6532ebc76de6e": {
+          "count": 1,
+          "ms": 43.80200000014156
+        },
+        "e88a191d2772b4c3": {
+          "count": 1,
+          "ms": 23.803792078979313
+        },
+        "7ff2c92fa74aac62": {
+          "count": 1,
+          "ms": 1.8334579654037952
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 3.497124998830259
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 0.4103750688955188
+        },
+        "5ba1d0d81b5d4a1a": {
+          "count": 1,
+          "ms": 13.730291975662112
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 81.73179102595896,
+        "thread_submit_ms": 81.75112504977733,
+        "worker_enter_ms": 81.90645801369101,
+        "worker_exit_ms": 264.2532910685986,
+        "await_resume_ms": 264.5625410368666,
+        "adapter_return_ms": 267.6987500162795
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.044,
+        "summaryfetchtime": 0.027,
+        "searchtime": 0.076
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 417.4483750248328
+    },
+    {
+      "sequence": 16,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 3.9521249709650874
+        },
+        "dense": {
+          "count": 1,
+          "ms": 79.67091700993478
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 3.3190420363098383
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 83.04604096338153
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 213.26254203449935
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 49.71575003582984
+        },
+        "execute": {
+          "count": 1,
+          "ms": 278.72954204212874
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 28.903541970066726
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 56.68974993750453
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 19.680165918543935
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 2.7149999514222145
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 1.9695420050993562
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 16.130291973240674
+        },
+        "4ee445d5d52cef6a": {
+          "count": 1,
+          "ms": 4.977707983925939
+        },
+        "d0899a4cbc066a50": {
+          "count": 1,
+          "ms": 18.96450005006045
+        },
+        "d5b9cf8005c6b2d3": {
+          "count": 1,
+          "ms": 2.739582909271121
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 6.958708050660789
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 1.9093750743195415
+        },
+        "4860037db3700175": {
+          "count": 1,
+          "ms": 32.64320897869766
+        },
+        "0e5689f21b6e2cb6": {
+          "count": 1,
+          "ms": 1.2667080154642463
+        },
+        "c86dd043af29ddfe": {
+          "count": 1,
+          "ms": 0.49120804760605097
+        },
+        "4759652f7e45b471": {
+          "count": 2,
+          "ms": 2.533750026486814
+        },
+        "bc2564b15d26cfb8": {
+          "count": 1,
+          "ms": 16.540458076633513
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 93.54887495283037,
+        "thread_submit_ms": 93.56145793572068,
+        "worker_enter_ms": 94.34149996377528,
+        "worker_exit_ms": 297.8986669331789,
+        "await_resume_ms": 300.5399169633165,
+        "adapter_return_ms": 306.80899997241795
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.043000000000000003,
+        "summaryfetchtime": 0.051000000000000004,
+        "searchtime": 0.095
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 471.67395800352097
+    },
+    {
+      "sequence": 13,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 5.820124875754118
+        },
+        "dense": {
+          "count": 1,
+          "ms": 93.94433302804828
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 1.1335000162944198
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 95.12208309024572
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 319.22808301169425
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 18.21220899000764
+        },
+        "execute": {
+          "count": 1,
+          "ms": 339.0349169494584
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 22.3297500051558
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 14.834166970103979
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 9.104582946747541
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 4.30383300408721
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 1.797541044652462
+        },
+        "6948fc1e998d8c91": {
+          "count": 1,
+          "ms": 2.975999959744513
+        },
+        "2a3e378facdff592": {
+          "count": 1,
+          "ms": 12.258249917067587
+        },
+        "024351fdb57a17bd": {
+          "count": 1,
+          "ms": 3.5086669959127903
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 10.332042002119124
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 1.1515000369399786
+        },
+        "2499200562431a3a": {
+          "count": 1,
+          "ms": 6.353541975840926
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 98.91566692385823,
+        "thread_submit_ms": 98.921624943614,
+        "worker_enter_ms": 99.02224992401898,
+        "worker_exit_ms": 414.5970839308575,
+        "await_resume_ms": 414.8382089333609,
+        "adapter_return_ms": 418.14120893832296
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.045,
+        "summaryfetchtime": 0.116,
+        "searchtime": 0.162
+      },
+      "vespa_status": 200,
+      "candidates": 198,
+      "total_ms": 486.68208392336965
+    },
+    {
+      "sequence": 15,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 2.754500019364059
+        },
+        "dense": {
+          "count": 1,
+          "ms": 93.76249997876585
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 1.439583022147417
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 95.2114169485867
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 186.33945798501372
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 55.72645796928555
+        },
+        "execute": {
+          "count": 1,
+          "ms": 243.3704580180347
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 127.53029202576727
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 10.312499944120646
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 7.153499987907708
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 1.6069590346887708
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 22.428249940276146
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 25.53637500386685
+        },
+        "227345276c4b5446": {
+          "count": 1,
+          "ms": 117.5829169806093
+        },
+        "f3f9cbf3fee22c9f": {
+          "count": 1,
+          "ms": 0.810332945547998
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 2.4559160228818655
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 4.415082978084683
+        },
+        "a0f7d10209698549": {
+          "count": 1,
+          "ms": 2.6487080613151193
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 97.31341700535268,
+        "thread_submit_ms": 97.31720900163054,
+        "worker_enter_ms": 98.00841705873609,
+        "worker_exit_ms": 279.1433749953285,
+        "await_resume_ms": 279.5155419735238,
+        "adapter_return_ms": 283.6489169858396
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.039,
+        "summaryfetchtime": 0.043000000000000003,
+        "searchtime": 0.084
+      },
+      "vespa_status": 200,
+      "candidates": 196,
+      "total_ms": 486.83012498077005
+    },
+    {
+      "sequence": 20,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 3.2466669799759984
+        },
+        "dense": {
+          "count": 1,
+          "ms": 125.17383298836648
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 3.4318750258535147
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 128.62733309157193
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 146.52225002646446
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 21.02175005711615
+        },
+        "execute": {
+          "count": 1,
+          "ms": 168.73904201202095
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 126.72604201361537
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 12.922166963107884
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 9.215540951117873
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 2.2911669220775366
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 0.4805000498890877
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 3.204040927812457
+        },
+        "06f6532ebc76de6e": {
+          "count": 1,
+          "ms": 5.898417090065777
+        },
+        "e88a191d2772b4c3": {
+          "count": 1,
+          "ms": 115.89466710574925
+        },
+        "7ff2c92fa74aac62": {
+          "count": 1,
+          "ms": 2.005874994210899
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 2.3886249400675297
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 7.568750064820051
+        },
+        "5ba1d0d81b5d4a1a": {
+          "count": 1,
+          "ms": 6.003041984513402
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 131.62004202604294,
+        "thread_submit_ms": 131.6234590485692,
+        "worker_enter_ms": 131.65604206733406,
+        "worker_exit_ms": 274.65837507043034,
+        "await_resume_ms": 274.9237919924781,
+        "adapter_return_ms": 278.13983405940235
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.034,
+        "summaryfetchtime": 0.023,
+        "searchtime": 0.058
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 449.8126250691712
+    },
+    {
+      "sequence": 18,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 4.7867088578641415
+        },
+        "dense": {
+          "count": 1,
+          "ms": 120.1005419716239
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 4.211790976114571
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 124.37412491999567
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 257.70354201085865
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 28.95637508481741
+        },
+        "execute": {
+          "count": 1,
+          "ms": 288.38570800144225
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 22.36049994826317
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 16.854791902005672
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 7.475791964679956
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 3.691541962325573
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 1.6582499956712127
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 12.282041017897427
+        },
+        "4ee445d5d52cef6a": {
+          "count": 1,
+          "ms": 2.7418748941272497
+        },
+        "d0899a4cbc066a50": {
+          "count": 1,
+          "ms": 12.086707982234657
+        },
+        "d5b9cf8005c6b2d3": {
+          "count": 1,
+          "ms": 0.8839999791234732
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 5.212290911003947
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 0.2736670430749655
+        },
+        "4860037db3700175": {
+          "count": 1,
+          "ms": 0.16220798715949059
+        },
+        "0e5689f21b6e2cb6": {
+          "count": 1,
+          "ms": 0.21908397320657969
+        },
+        "c86dd043af29ddfe": {
+          "count": 1,
+          "ms": 0.11995900422334671
+        },
+        "4759652f7e45b471": {
+          "count": 2,
+          "ms": 2.5255829095840454
+        },
+        "bc2564b15d26cfb8": {
+          "count": 1,
+          "ms": 3.300667041912675
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 128.8688329514116,
+        "thread_submit_ms": 128.89004196040332,
+        "worker_enter_ms": 128.95845796447247,
+        "worker_exit_ms": 363.96941693965346,
+        "await_resume_ms": 374.1924579953775,
+        "adapter_return_ms": 386.5694999694824
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.04,
+        "summaryfetchtime": 0.06,
+        "searchtime": 0.10200000000000001
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 464.9904170073569
+    },
+    {
+      "sequence": 19,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 3.1694999197497964
+        },
+        "dense": {
+          "count": 1,
+          "ms": 112.03283397480845
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 7.914333022199571
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 120.17295800615102
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 219.4754589581862
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 53.484917036257684
+        },
+        "execute": {
+          "count": 1,
+          "ms": 275.14170797076076
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 78.62829195801169
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 5.563125014305115
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 9.205333073623478
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 2.083083032630384
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 9.56091599073261
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 23.958457983098924
+        },
+        "227345276c4b5446": {
+          "count": 1,
+          "ms": 67.18949996866286
+        },
+        "f3f9cbf3fee22c9f": {
+          "count": 1,
+          "ms": 0.3800831036642194
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 0.8849999867379665
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 0.18833298236131668
+        },
+        "a0f7d10209698549": {
+          "count": 1,
+          "ms": 5.697582964785397
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 123.94775007851422,
+        "thread_submit_ms": 123.97029204294086,
+        "worker_enter_ms": 124.3567920755595,
+        "worker_exit_ms": 318.38562502525747,
+        "await_resume_ms": 319.638334098272,
+        "adapter_return_ms": 343.42062508221716
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.037,
+        "summaryfetchtime": 0.06,
+        "searchtime": 0.098
+      },
+      "vespa_status": 200,
+      "candidates": 196,
+      "total_ms": 492.43737501092255
+    },
+    {
+      "sequence": 17,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 2.748124999925494
+        },
+        "dense": {
+          "count": 1,
+          "ms": 128.40916693676263
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 3.2955839997157454
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 131.7740420345217
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 362.80562495812774
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 13.968167011626065
+        },
+        "execute": {
+          "count": 1,
+          "ms": 377.57695792242885
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 12.1610420756042
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 5.292040994390845
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 4.601667053066194
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 1.487292000092566
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 1.5190830454230309
+        },
+        "6948fc1e998d8c91": {
+          "count": 1,
+          "ms": 7.20541609916836
+        },
+        "2a3e378facdff592": {
+          "count": 1,
+          "ms": 4.393625073134899
+        },
+        "024351fdb57a17bd": {
+          "count": 1,
+          "ms": 0.8197919232770801
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 2.3606669856235385
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 0.1662500435486436
+        },
+        "2499200562431a3a": {
+          "count": 1,
+          "ms": 1.6536659095436335
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 134.5634589670226,
+        "thread_submit_ms": 134.57520899828523,
+        "worker_enter_ms": 135.32129197847098,
+        "worker_exit_ms": 494.1168340155855,
+        "await_resume_ms": 495.0119169661775,
+        "adapter_return_ms": 497.36733397003263
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.044,
+        "summaryfetchtime": 0.126,
+        "searchtime": 0.17200000000000001
+      },
+      "vespa_status": 200,
+      "candidates": 198,
+      "total_ms": 534.515458974056
+    },
+    {
+      "sequence": 23,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 6.207042024470866
+        },
+        "dense": {
+          "count": 1,
+          "ms": 251.6138330101967
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 5.3990420419722795
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 257.07570801023394
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 282.42316702380776
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 67.78208294417709
+        },
+        "execute": {
+          "count": 1,
+          "ms": 351.3190840603784
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 29.396165977232158
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 61.066332971677184
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 88.22549995966256
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 2.3950840113684535
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 13.396708061918616
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 21.271208999678493
+        },
+        "06f6532ebc76de6e": {
+          "count": 1,
+          "ms": 14.94274998549372
+        },
+        "e88a191d2772b4c3": {
+          "count": 1,
+          "ms": 17.872833996079862
+        },
+        "7ff2c92fa74aac62": {
+          "count": 1,
+          "ms": 2.6501669781282544
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 46.39487492386252
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 1.1212920071557164
+        },
+        "5ba1d0d81b5d4a1a": {
+          "count": 1,
+          "ms": 74.2000830359757
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 259.72420803736895,
+        "thread_submit_ms": 259.73125000018626,
+        "worker_enter_ms": 259.93562501389533,
+        "worker_exit_ms": 533.6556250695139,
+        "await_resume_ms": 533.8690420612693,
+        "adapter_return_ms": 542.1450000721961
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.055,
+        "summaryfetchtime": 0.044,
+        "searchtime": 0.101
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 794.0028749871999
+    },
+    {
+      "sequence": 24,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 10.192250949330628
+        },
+        "dense": {
+          "count": 1,
+          "ms": 243.9227090217173
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 5.815709009766579
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 249.76879195310175
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 348.05883292574435
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 49.388541956432164
+        },
+        "execute": {
+          "count": 1,
+          "ms": 399.75908293854445
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 165.58324999641627
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 31.614792067557573
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 12.574583990499377
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 9.072582935914397
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 11.464042006991804
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 18.014999921433628
+        },
+        "4ee445d5d52cef6a": {
+          "count": 1,
+          "ms": 3.193582990206778
+        },
+        "d0899a4cbc066a50": {
+          "count": 1,
+          "ms": 128.07166704442352
+        },
+        "d5b9cf8005c6b2d3": {
+          "count": 1,
+          "ms": 1.9443329656496644
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 7.557749981060624
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 0.7783749606460333
+        },
+        "4860037db3700175": {
+          "count": 1,
+          "ms": 2.628499991260469
+        },
+        "0e5689f21b6e2cb6": {
+          "count": 1,
+          "ms": 0.7797080324962735
+        },
+        "c86dd043af29ddfe": {
+          "count": 1,
+          "ms": 0.3227499546483159
+        },
+        "4759652f7e45b471": {
+          "count": 2,
+          "ms": 2.2662499686703086
+        },
+        "bc2564b15d26cfb8": {
+          "count": 1,
+          "ms": 9.172708028927445
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 260.2858330355957,
+        "thread_submit_ms": 260.3041250258684,
+        "worker_enter_ms": 260.57608297560364,
+        "worker_exit_ms": 603.818624978885,
+        "await_resume_ms": 604.1352079482749,
+        "adapter_return_ms": 608.341958024539
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.064,
+        "summaryfetchtime": 0.075,
+        "searchtime": 0.14100000000000001
+      },
+      "vespa_status": 200,
+      "candidates": 200,
+      "total_ms": 870.1690000016242
+    },
+    {
+      "sequence": 22,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 4.9316249787807465
+        },
+        "dense": {
+          "count": 1,
+          "ms": 252.40749993827194
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 5.0570000894367695
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 257.47762504033744
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 533.1936249276623
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 33.718875027261674
+        },
+        "execute": {
+          "count": 1,
+          "ms": 569.8454580269754
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 38.22412504814565
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 12.29758292902261
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 9.380374918691814
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 3.5796259762719274
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 4.136416013352573
+        },
+        "6948fc1e998d8c91": {
+          "count": 1,
+          "ms": 23.413957911543548
+        },
+        "2a3e378facdff592": {
+          "count": 1,
+          "ms": 28.427459066733718
+        },
+        "024351fdb57a17bd": {
+          "count": 1,
+          "ms": 1.3487499672919512
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 8.956332923844457
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 0.35566696897149086
+        },
+        "2499200562431a3a": {
+          "count": 1,
+          "ms": 5.193708930164576
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 260.61008300166577,
+        "thread_submit_ms": 260.61320793814957,
+        "worker_enter_ms": 261.1957909539342,
+        "worker_exit_ms": 781.5220409538597,
+        "await_resume_ms": 789.4895409699529,
+        "adapter_return_ms": 793.8009579665959
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.067,
+        "summaryfetchtime": 0.14100000000000001,
+        "searchtime": 0.21
+      },
+      "vespa_status": 200,
+      "candidates": 198,
+      "total_ms": 892.7794579649344
+    },
+    {
+      "sequence": 21,
+      "stages": {
+        "_resolve_scopes": {
+          "count": 2,
+          "ms": 10.100001120008528
+        },
+        "dense": {
+          "count": 1,
+          "ms": 248.2455000281334
+        },
+        "sparse": {
+          "count": 1,
+          "ms": 4.537333967164159
+        },
+        "prepare_query": {
+          "count": 1,
+          "ms": 253.28354199882597
+        },
+        "vespa": {
+          "count": 1,
+          "ms": 332.133625051938
+        },
+        "visibility": {
+          "count": 1,
+          "ms": 27.713124989531934
+        },
+        "execute": {
+          "count": 1,
+          "ms": 362.4508329667151
+        },
+        "_enrich": {
+          "count": 1,
+          "ms": 257.4409160297364
+        },
+        "_coverage": {
+          "count": 1,
+          "ms": 6.178250070661306
+        },
+        "_final_publications": {
+          "count": 1,
+          "ms": 9.463750058785081
+        }
+      },
+      "sql": {
+        "3748346667f87dba": {
+          "count": 2,
+          "ms": 7.278832956217229
+        },
+        "8b73a5bccd0cd7ff": {
+          "count": 1,
+          "ms": 5.297499941661954
+        },
+        "456d4afd8fa45e37": {
+          "count": 1,
+          "ms": 14.771750080399215
+        },
+        "227345276c4b5446": {
+          "count": 1,
+          "ms": 243.41858306434005
+        },
+        "f3f9cbf3fee22c9f": {
+          "count": 1,
+          "ms": 7.21791700925678
+        },
+        "8afce4da4e764b48": {
+          "count": 1,
+          "ms": 1.972291967831552
+        },
+        "bea4ae99e32371a1": {
+          "count": 1,
+          "ms": 1.4450419694185257
+        },
+        "a0f7d10209698549": {
+          "count": 1,
+          "ms": 4.8278330359607935
+        }
+      },
+      "errors": [],
+      "vespa_timeline": {
+        "adapter_enter_ms": 260.712374933064,
+        "thread_submit_ms": 260.8172500040382,
+        "worker_enter_ms": 261.0166249796748,
+        "worker_exit_ms": 582.3783749947324,
+        "await_resume_ms": 582.7239169739187,
+        "adapter_return_ms": 592.8405419690534
+      },
+      "vespa_native_seconds": {
+        "querytime": 0.062,
+        "summaryfetchtime": 0.059000000000000004,
+        "searchtime": 0.122
+      },
+      "vespa_status": 200,
+      "candidates": 196,
+      "total_ms": 899.8248749412596
+    }
+  ]
+}
