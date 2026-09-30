@@ -86,7 +86,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Build the deployable image without publishing
-        run: docker build --tag almanac-source-store:ci backend
+        run: make build IMAGE=almanac-source-store:ci
       - name: Verify packaged Python and entrypoint syntax
         run: |
           docker run --rm --entrypoint python almanac-source-store:ci -m compileall -q airweave

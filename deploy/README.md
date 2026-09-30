@@ -50,6 +50,13 @@ Semantic quality and resource use still need measurement. Do not claim generativ
 search is operational without separately configured model credentials and a live
 search test.
 
+## Local image build
+
+`make build` builds the same backend Dockerfile used by CI, without publishing or
+starting services. Use `make build IMAGE=almanac-source-store:COMMIT` to choose a
+tag. CI separately checks packaged Python and entrypoint syntax; a successful
+build does not establish dependency startup or a deployment.
+
 ## Database setup and deployment
 
 Validate locally from the repository root:

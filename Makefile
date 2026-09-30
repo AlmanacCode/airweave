@@ -2,11 +2,13 @@
 BACKEND := backend
 PYTHON := .venv/bin/python
 PYTEST := .venv/bin/pytest
+IMAGE ?= almanac-source-store:local
 
-.PHONY: help setup check test-store test-capture test-search test-auth test-index validate-deploy
+.PHONY: help setup check test-store test-capture test-search test-auth test-index validate-deploy build
 
 help:
 	@echo 'setup         Install the locked backend and development dependencies'
+	@echo 'build         Build the backend image locally; set IMAGE to choose its tag'
 	@echo 'test-store    Verify record transactions and publication on disposable PostgreSQL'
 	@echo 'test-capture  Verify source capture, transport and blob handling'
 	@echo 'test-search   Verify search services and visibility behavior'
@@ -17,6 +19,9 @@ help:
 	@echo ''
 	@echo 'test-store requires CANONICAL_TEST_DATABASE_URL; it creates and removes test schemas.'
 	@echo 'See deploy/README.md for staging prerequisites and explicit deployment steps.'
+
+build:
+	docker build --tag "$(IMAGE)" $(BACKEND)
 
 validate-deploy:
 	porter apply validate -f porter.yaml
