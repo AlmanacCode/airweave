@@ -8,6 +8,7 @@ native owners. Properties, comments and file bytes are not complete in this slic
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import AsyncGenerator, Sequence
 from datetime import datetime, timezone
 from functools import partial
@@ -40,6 +41,7 @@ from airweave.domains.sources.token_providers.protocol import (
     authorization_headers,
 )
 from airweave.domains.storage.file_service import FileService
+from airweave.domains.storage.limits import MAX_FILE_SIZE_BYTES
 from airweave.domains.syncs.cursors.cursor import SyncCursor
 from airweave.platform.configs.config import NotionConfig
 from airweave.platform.decorators import source
@@ -54,7 +56,7 @@ from airweave.platform.sources.http_helpers import raise_for_status
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 
 API_VERSION = "2026-03-11"
-FIELD_SET_VERSION = 1
+FIELD_SET_VERSION = 2
 _ROOTS = ("page", "database", "data_source")
 _ENDPOINTS = {
     "page": "pages",
@@ -116,6 +118,58 @@ class _List(_Native):
     request_status: _Status | None = None
 
 
+class _Property(_Native):
+    # Native IDs already contain percent encoding. Accept one URL path segment,
+    # including valid escapes, and never quote it a second time.
+    id: str = Field(pattern=r"^(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+$")
+    type: str
+
+
+class _PageProperties(_Object):
+    properties: dict[str, dict[str, JsonValue]]
+
+
+class _Calculation(_Native):
+    type: str
+
+
+class _PropertyMetadata(_Property):
+    rollup: _Calculation | None = None
+    formula: _Calculation | None = None
+
+
+class _PropertyItem(_PropertyMetadata):
+    object: Literal["property_item"]
+
+
+class _PropertyList(_List):
+    type: Literal["property_item"]
+    property_item: _PropertyMetadata
+
+
+class _PropertyArchiveHeader(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    format_version: Literal[1] = 1
+    page_id: UUID
+    property_id: str
+    notion_version: Literal["2026-03-11"] = API_VERSION
+    page_last_edited_time: AwareDatetime
+
+
+class _PropertyManifest(_PropertyArchiveHeader):
+    name: str
+    property: dict[str, JsonValue]
+    response_count: int = Field(ge=1)
+    value_status: Literal["available", "unsupported"]
+
+
+class _PropertyProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: Literal[1] = 1
+    index: int = Field(default=0, ge=0)
+    inventory: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
 class _Error(_Native):
     code: str
 
@@ -151,7 +205,7 @@ class _Progress(BaseModel):
 class NotionSource(BaseSource):
     """One source registration, native acquisition, and existing SQL-owned page progress."""
 
-    canonical_record_types = (*_ROOTS, "block")
+    canonical_record_types = (*_ROOTS, "block", "page_property")
     # Root alternatives remain independent access authorities. Child alternatives
     # represent native enumeration operations; they emit discovered roots, not edges.
     canonical_container_parents = {
@@ -159,6 +213,7 @@ class NotionSource(BaseSource):
         "database": (None, "data_source"),
         "data_source": (None, "database"),
         "block": ("page", "block"),
+        "page_property": "page",
     }
 
     @property
@@ -177,7 +232,9 @@ class NotionSource(BaseSource):
     ) -> NotionSource:
         """Build a native managed/direct-auth source without acquiring additional grants."""
         instance = cls(auth=auth, logger=logger, http_client=http_client)
-        fingerprint = f"notion:{API_VERSION}:{FIELD_SET_VERSION}:partial-native-roots-blocks"
+        fingerprint = (
+            f"notion:{API_VERSION}:{FIELD_SET_VERSION}:partial-native-roots-blocks-properties"
+        )
         instance._cycle_configuration = CycleConfiguration.from_source(
             fingerprint=hashlib.sha256(fingerprint.encode()).hexdigest(),
             record_types=cls.canonical_record_types,
@@ -306,7 +363,11 @@ class NotionSource(BaseSource):
             parent.identity.record_type
         ):
             raise ValueError("Unsupported Notion enumeration scope")
-        return CompletedScope(record_type=record_type, parent=parent.identity)
+        return CompletedScope(
+            record_type=record_type,
+            parent=parent.identity,
+            container_id=parent.identity.native_id if record_type == "page_property" else None,
+        )
 
     async def capture_page(
         self,
@@ -317,6 +378,16 @@ class NotionSource(BaseSource):
         parent: SourceRecord | None = None,
     ) -> CapturePage:
         """Return bounded observations; SQL commits them together with this continuation."""
+        if scope.record_type == "page_property":
+            if (
+                parent is None
+                or parent.identity != scope.parent
+                or scope != self.child_scope(parent, "page_property")
+            ):
+                raise ValueError("Notion property scope has a different native page owner")
+            return await self._property_page(
+                parent, _PropertyProgress.model_validate(continuation.value), files
+            )
         progress = _Progress.model_validate(continuation.value)
         if scope.container_id is not None:
             raise ValueError("Notion native identities do not have a synthetic container")
@@ -341,7 +412,7 @@ class NotionSource(BaseSource):
     @staticmethod
     def _page(
         records: Sequence[CaptureRecord],
-        progress: _Progress,
+        progress: _Progress | _PropertyProgress,
         final: bool,
         discovered: Sequence[CaptureRecord] = (),
     ) -> CapturePage:
@@ -529,6 +600,163 @@ class NotionSource(BaseSource):
             cursor is None,
             roots,
         )
+
+    async def _property_inventory(
+        self,
+        page_id: str,
+    ) -> tuple[str, list[tuple[str, dict[str, JsonValue]]], datetime]:
+        payload = await self._retrieve("page", page_id)
+        if payload is None or _Object.model_validate(payload).in_trash:
+            raise ScopeAccessLost(
+                "Notion property page is unavailable", removal_reason="scope_removed"
+            )
+        page = _PageProperties.model_validate(payload)
+        rows = sorted(
+            page.properties.items(), key=lambda item: _Property.model_validate(item[1]).id
+        )
+        identities = [
+            (_Property.model_validate(value).id, name, _Property.model_validate(value).type)
+            for name, value in rows
+        ]
+        if len({item[0] for item in identities}) != len(identities):
+            raise ValueError("Notion page contains duplicate property IDs")
+        material = json.dumps(
+            [page.last_edited_time.isoformat(), identities], ensure_ascii=False
+        ).encode()
+        return hashlib.sha256(material).hexdigest(), rows, page.last_edited_time
+
+    @staticmethod
+    def _property_response(
+        payload: dict[str, JsonValue], prop: _Property, progress: _Progress
+    ) -> tuple[_Progress, bool, Literal["available", "unsupported"]]:
+        if payload.get("object") == "property_item":
+            if progress.cursor is not None:
+                raise InvalidScanContinuation(
+                    "Notion property changed response shape while reading"
+                )
+            item = _PropertyItem.model_validate(payload)
+            metadata = item
+            final = True
+            following = progress
+        else:
+            page = _PropertyList.model_validate(payload)
+            if page.request_status and page.request_status.type == "incomplete":
+                raise SourceError(
+                    "Notion property response is incomplete", source_short_name="notion"
+                )
+            metadata = page.property_item
+            for value in page.results:
+                item = _PropertyItem.model_validate(value)
+                # Rollup show_original may return the target property's items.
+                if prop.type != "rollup" and (item.id != prop.id or item.type != prop.type):
+                    raise ValueError("Notion property list contains another property's values")
+            cursor, hashes = NotionSource._following(page, progress)
+            following = progress.model_copy(update={"cursor": cursor, "cursor_hashes": hashes})
+            final = cursor is None
+        if metadata.id != prop.id or metadata.type != prop.type:
+            raise ValueError("Notion returned a different property identity or type")
+        calculation = metadata.rollup if prop.type == "rollup" else metadata.formula
+        if prop.type in {"rollup", "formula"} and calculation is None:
+            raise ValueError("Notion calculation has no native result metadata")
+        if final and calculation and calculation.type == "incomplete":
+            raise SourceError(
+                "Notion property calculation did not complete", source_short_name="notion"
+            )
+        status = "unsupported" if calculation and calculation.type == "unsupported" else "available"
+        return following, final, status
+
+    async def _collect_property(
+        self, page_id: str, prop: _Property, fingerprint: str, page_last_edited_time: datetime
+    ) -> tuple[bytes, int, Literal["available", "unsupported"]]:
+        """Retain native pages once each; retry starts this property without partial publication."""
+        header = (
+            _PropertyArchiveHeader(
+                page_id=UUID(page_id),
+                property_id=prop.id,
+                page_last_edited_time=page_last_edited_time,
+            )
+            .model_dump_json()
+            .encode()
+        )
+        prefix = header[:-1] + b',"responses":['
+        responses: list[bytes] = []
+        total = len(prefix) + len(b"]}")
+        following = _Progress()
+        while True:
+            params: dict[str, str | int] = {"page_size": _PAGE_SIZE}
+            if following.cursor:
+                params["start_cursor"] = following.cursor
+            payload = await self._request(f"pages/{page_id}/properties/{prop.id}", params=params)
+            if payload is None:
+                # The page may have been removed, or its schema changed. Do not
+                # withdraw the whole page based solely on a property endpoint404.
+                current, _, _ = await self._property_inventory(page_id)
+                if current != fingerprint:
+                    raise InvalidScanContinuation(
+                        "Notion property inventory changed during retrieval"
+                    )
+                raise SourceError(
+                    "Notion property is unavailable while its page remains readable",
+                    source_short_name="notion",
+                )
+            following, final, status = self._property_response(payload, prop, following)
+            encoded = json.dumps(
+                payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True
+            ).encode()
+            total += len(encoded) + bool(responses)
+            if total > MAX_FILE_SIZE_BYTES:
+                raise SourceError(
+                    "Notion property exceeds the retained-file size limit; capture is incomplete",
+                    source_short_name="notion",
+                )
+            responses.append(encoded)
+            if final:
+                break
+        return prefix + b",".join(responses) + b"]}", len(responses), status
+
+    async def _property_page(
+        self, parent: SourceRecord, progress: _PropertyProgress, files: FileService
+    ) -> CapturePage:
+        page_id = parent.identity.native_id
+        fingerprint, properties, page_last_edited_time = await self._property_inventory(page_id)
+        if progress.inventory is not None and progress.inventory != fingerprint:
+            raise InvalidScanContinuation(
+                "Notion page properties changed; restart their enumeration"
+            )
+        if progress.index > len(properties):
+            raise ValueError("Notion property continuation is outside its inventory")
+        if progress.index == len(properties):
+            return self._page((), progress.model_copy(update={"inventory": fingerprint}), True)
+        name, native_property = properties[progress.index]
+        prop = _Property.model_validate(native_property)
+        archive, count, status = await self._collect_property(
+            page_id, prop, fingerprint, page_last_edited_time
+        )
+        current, _, _ = await self._property_inventory(page_id)
+        if current != fingerprint:
+            raise InvalidScanContinuation("Notion page changed before property capture completed")
+        blob = await files.store_canonical_blob(archive, media_type="application/json")
+        record = CaptureRecord(
+            identity=RecordIdentity(
+                record_type="page_property", native_id=prop.id, container_id=page_id
+            ),
+            parent=parent.identity,
+            payload=_PropertyManifest(
+                page_id=UUID(page_id),
+                property_id=prop.id,
+                name=name,
+                property=native_property,
+                response_count=count,
+                value_status=status,
+                page_last_edited_time=page_last_edited_time,
+            ).model_dump(mode="json"),
+            payload_schema_version=FIELD_SET_VERSION,
+            completeness="partial",
+            blobs=(blob,),
+            observed_at=datetime.now(timezone.utc),
+        )
+        next_progress = _PropertyProgress(index=progress.index + 1, inventory=fingerprint)
+        return self._page((record,), next_progress, next_progress.index == len(properties))
 
     async def generate_entities(
         self,

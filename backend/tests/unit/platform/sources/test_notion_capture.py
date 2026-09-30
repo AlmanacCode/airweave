@@ -374,3 +374,179 @@ async def test_query_window_resets_recent_cursor_history():
         scope, window.continuation, files=MagicMock(), parent=owner
     )
     assert following.continuation.value["cursor"] == "reusable"
+
+
+@pytest.fixture
+def property_files(tmp_path, monkeypatch):
+    from uuid import uuid4
+
+    from airweave.adapters.storage.filesystem import FilesystemBackend
+    from airweave.domains.storage.file_service import FileService
+
+    monkeypatch.setattr(
+        "airweave.domains.storage.file_service.paths.temp_sync_dir",
+        lambda _: str(tmp_path / "temp"),
+    )
+    return FileService(uuid4(), FilesystemBackend(tmp_path / "blobs"), sync_id=uuid4())
+
+
+def property_list(identity, kind, values, *, cursor=None, calculation=None):
+    metadata = {"id": identity, "type": kind, "next_url": None}
+    if calculation is not None:
+        metadata[kind] = calculation
+    return {**listing(values, cursor), "type": "property_item", "property_item": metadata}
+
+
+@pytest.mark.asyncio
+async def test_property_archive_preserves_all_native_pages_and_final_rollup(property_files):
+    import json
+
+    prop = {"id": "roll%2Fup", "type": "rollup", "rollup": {"type": "incomplete"}}
+    page = native(properties={"Sum": prop})
+    first = property_list(
+        prop["id"],
+        "rollup",
+        [],
+        cursor="next",
+        calculation={"type": "incomplete", "function": "sum", "incomplete": {}},
+    )
+    last = property_list(
+        prop["id"], "rollup", [], calculation={"type": "number", "function": "sum", "number": 13}
+    )
+    connector, client = await source(gets=[page, first, last, page])
+    owner = parent()
+    result = await connector.capture_page(
+        connector.child_scope(owner, "page_property"),
+        ScanContinuation(),
+        files=property_files,
+        parent=owner,
+    )
+    record = result.records[0]
+    assert result.final and record.identity.native_id == prop["id"]
+    assert record.identity.container_id == PAGE and record.parent == owner.identity
+    assert record.payload["value_status"] == "available" and record.completeness == "partial"
+    assert record.source_updated_at is None
+    archive = json.loads(await property_files.storage.read_file(record.blobs[0].key))
+    assert archive == {
+        "format_version": 1,
+        "page_id": PAGE,
+        "property_id": prop["id"],
+        "responses": [first, last],
+        "notion_version": "2026-03-11",
+        "page_last_edited_time": STAMP,
+    }
+    assert client.get.call_args_list[1].args[0].endswith("properties/roll%2Fup")
+    assert client.get.call_args_list[2].kwargs["params"]["start_cursor"] == "next"
+    assert record.payload["response_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_unsupported_formula_is_explicit_retained_native_result(property_files):
+    prop = {"id": "calc", "type": "formula"}
+    page = native(properties={"Formula": prop})
+    value = {
+        **prop,
+        "object": "property_item",
+        "formula": {"type": "unsupported", "unsupported": {}},
+    }
+    connector, _ = await source(gets=[page, value, page])
+    owner = parent()
+    result = await connector.capture_page(
+        connector.child_scope(owner, "page_property"),
+        ScanContinuation(),
+        files=property_files,
+        parent=owner,
+    )
+    assert result.records[0].payload["value_status"] == "unsupported"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    ["wrong_id", "unfinished_rollup", "shape_changed", "provider_error", "edited_page", "overflow"],
+)
+async def test_property_failure_never_publishes_partial_archive(case, property_files, monkeypatch):
+    from airweave.domains.entities.canonical.page_source import InvalidScanContinuation
+
+    prop = {"id": "roll", "type": "rollup"}
+    page = native(properties={"Rollup": prop})
+    value = property_list(
+        "wrong" if case == "wrong_id" else "roll",
+        "rollup",
+        [],
+        calculation={
+            "type": "incomplete" if case == "unfinished_rollup" else "number",
+            "number": 3,
+        },
+    )
+    gets = [page, value, page]
+    expected = (ValueError, SourceError)
+    if case == "shape_changed":
+        gets = [
+            page,
+            property_list("roll", "rollup", [], cursor="next", calculation={"type": "incomplete"}),
+            {
+                "object": "property_item",
+                "id": "roll",
+                "type": "rollup",
+                "rollup": {"type": "number", "number": 3},
+            },
+        ]
+        expected = InvalidScanContinuation
+    elif case == "provider_error":
+        gets = [page, response({"code": "restricted_resource"}, 403)]
+        expected = SourceEntityForbiddenError
+    elif case == "edited_page":
+        gets[-1] = {**page, "last_edited_time": "2026-09-30T01:00:00Z"}
+        expected = InvalidScanContinuation
+    elif case == "overflow":
+        monkeypatch.setattr("airweave.platform.sources.notion.MAX_FILE_SIZE_BYTES", 32)
+        expected = SourceError
+    connector, _ = await source(gets=gets)
+    owner = parent()
+    with pytest.raises(expected):
+        await connector.capture_page(
+            connector.child_scope(owner, "page_property"),
+            ScanContinuation(),
+            files=property_files,
+            parent=owner,
+        )
+    assert await property_files.storage.list_files() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity", ["raw/slash", "bad%escape", "id?query=oops", "id#fragment"])
+async def test_unencoded_property_ids_never_enter_native_path(identity, property_files):
+    page = native(properties={"Field": {"id": identity, "type": "number"}})
+    connector, client = await source(gets=[page])
+    owner = parent()
+    with pytest.raises(ValidationError):
+        await connector.capture_page(
+            connector.child_scope(owner, "page_property"),
+            ScanContinuation(),
+            files=property_files,
+            parent=owner,
+        )
+    assert client.get.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_property_archive_roundtrips_unicode_and_empty_value(property_files):
+    import json
+
+    prop = {"id": "p%25", "type": "rich_text", "rich_text": []}
+    page = native(properties={'Notes "日本語"': prop})
+    value = {**property_list(prop["id"], "rich_text", []), "unknown": '日本語\n"escaped"'}
+    connector, _ = await source(gets=[page, value, page])
+    owner = parent()
+    result = await connector.capture_page(
+        connector.child_scope(owner, "page_property"),
+        ScanContinuation(),
+        files=property_files,
+        parent=owner,
+    )
+    record = result.records[0]
+    archive = json.loads(await property_files.storage.read_file(record.blobs[0].key))
+    assert archive["responses"] == [value]
+    assert record.payload["name"] == 'Notes "日本語"'
+    assert archive["property_id"] == "p%25"

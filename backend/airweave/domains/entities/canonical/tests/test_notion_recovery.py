@@ -48,7 +48,7 @@ class NativeFixture:
     def __init__(self):
         self.interrupt = True
         self.calls = []
-        self.page = native("page", PAGE, properties={"unknown": {"kept": True}})
+        self.page = native("page", PAGE, properties={})
         self.data = native(
             "data_source", DATA, parent={"type": "database_id", "database_id": DATABASE}
         )
@@ -91,7 +91,7 @@ class NativeFixture:
         return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
 
 
-async def runner(database, source, fixture, attempt=1):
+async def runner(database, source, fixture, attempt=1, files=None):
     service, fence = source
     client = AsyncMock()
     client.get.side_effect = fixture.request
@@ -111,7 +111,7 @@ async def runner(database, source, fixture, attempt=1):
         CaptureAttempt(id=fence.attempt_id if attempt == 1 else uuid4(), number=attempt),
         connector.canonical_container_parents,
         page_source=connector,
-        files=MagicMock(),
+        files=files or MagicMock(),
     )
     runtime.source, runtime.canonical_capture = connector, pipeline
     instance = orchestrator(ctx, pipeline, runtime, None, bus)
@@ -248,4 +248,150 @@ async def test_prior_block_deleted_between_sweeps_reconciles_after_exact_confirm
     missing = next(row for row in rows if row.native_id == BLOCK1)
     assert missing.deleted_at is not None
     assert f"blocks/{BLOCK1}" in calls
+    assert checkpoint["canonical_cycle"]["phase"] == "complete"
+
+
+class PropertyFixture(NativeFixture):
+    def __init__(self):
+        super().__init__()
+        self.page["properties"] = {
+            name: {"id": name, "type": "title", "title": []} for name in ("a", "b")
+        }
+        self.property_calls = []
+        self.interrupt_property = True
+
+    async def request(self, url, *, headers, json=None, params=None):
+        path = url.removeprefix("https://api.notion.com/v1/")
+        if path == f"blocks/{PAGE}/children":
+            return httpx.Response(200, json=listing(), request=httpx.Request("GET", url))
+        if "/properties/" in path:
+            prop = path.rsplit("/", 1)[-1]
+            cursor = (params or {}).get("start_cursor")
+            self.property_calls.append((prop, cursor))
+            if prop == "b" and cursor and self.interrupt_property:
+                raise ConnectionError("synthetic interruption within one property")
+            more = prop == "b" and cursor is None
+            payload = {
+                **listing(
+                    [
+                        {
+                            "object": "property_item",
+                            "id": prop,
+                            "type": "title",
+                            "title": {"plain_text": "retained"},
+                        }
+                    ],
+                    "following" if more else None,
+                ),
+                "type": "property_item",
+                "property_item": {"id": prop, "type": "title", "next_url": None},
+            }
+            return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
+        return await super().request(url, headers=headers, json=json, params=params)
+
+
+async def test_property_retry_keeps_committed_sibling_and_restarts_only_interrupted_property(
+    database, source, tmp_path, monkeypatch
+):
+    import json
+
+    from airweave.adapters.storage.filesystem import FilesystemBackend
+    from airweave.domains.storage.file_service import FileService
+
+    service, fence = source
+    monkeypatch.setattr(
+        "airweave.domains.storage.file_service.paths.temp_sync_dir",
+        lambda _: str(tmp_path / "temp"),
+    )
+    files = FileService(
+        fence.job_id, FilesystemBackend(tmp_path / "storage"), sync_id=fence.sync_id
+    )
+    fixture = PropertyFixture()
+    first, _ = await runner(database, source, fixture, files=files)
+    with pytest.raises(ConnectionError, match="within one property"):
+        await run(first)
+    rows, checkpoint, scans = await saved(database)
+    properties = [row for row in rows if row.entity_definition_short_name == "page_property"]
+    assert [row.native_id for row in properties] == ["a"]
+    assert "canonical_checkpoint" not in checkpoint
+    scan = next(row for row in scans if row.record_type == "page_property")
+    assert scan.continuation["index"] == 1
+    assert len(await files.storage.list_files()) == 1
+    before = len(fixture.property_calls)
+    fixture.interrupt_property = False
+    second, _ = await runner(database, source, fixture, attempt=2, files=files)
+    await run(second)
+    assert fixture.property_calls[before:] == [("b", None), ("b", "following")]
+    rows, checkpoint, _ = await saved(database)
+    properties = [row for row in rows if row.entity_definition_short_name == "page_property"]
+    assert {row.native_id for row in properties} == {"a", "b"}
+    assert all(row.parent_record_type == "page" and row.container_id == PAGE for row in properties)
+    assert next(row for row in properties if row.native_id == "a").record_revision == 1
+    second_property = next(row for row in properties if row.native_id == "b")
+    archive = json.loads(await files.storage.read_file(second_property.blob_references[0]["key"]))
+    assert len(archive["responses"]) == 2
+    assert checkpoint["canonical_cycle"]["phase"] == "complete"
+
+    # A genuinely later job gets a new cycle and reconciles a removed property.
+    from airweave.models.sync_job import SyncJob
+
+    previous_cycle = checkpoint["canonical_cycle"]["version"]["cycle_id"]
+    next_job, next_attempt = uuid4(), uuid4()
+    async with database() as db:
+        old_job = await db.get(SyncJob, fence.job_id)
+        old_job.status = "completed"
+        db.add(
+            SyncJob(
+                id=next_job,
+                organization_id=fence.organization_id,
+                sync_id=fence.sync_id,
+                status="running",
+            )
+        )
+        await db.commit()
+    fixture.page["properties"].pop("a")
+    fixture.page["last_edited_time"] = "2026-09-30T02:00:00Z"
+    next_source = (
+        service,
+        fence.model_copy(update={"job_id": next_job, "attempt_id": next_attempt}),
+    )
+    third, _ = await runner(database, next_source, fixture, files=files)
+    await run(third)
+    rows, checkpoint, _ = await saved(database)
+    removed = next(
+        row
+        for row in rows
+        if row.entity_definition_short_name == "page_property" and row.native_id == "a"
+    )
+    assert removed.deleted_at is not None and removed.removal_reason == "absent"
+    assert checkpoint["canonical_cycle"]["version"]["cycle_id"] != previous_cycle
+    assert checkpoint["canonical_cycle"]["phase"] == "complete"
+
+
+async def test_removed_native_property_reconciles_only_after_current_inventory(database, source):
+    from datetime import datetime, timezone
+
+    from airweave.domains.entities.canonical.requests import CaptureRecord, RecordIdentity
+
+    fixture = NativeFixture()
+    fixture.interrupt = False
+    instance, connector = await runner(database, source, fixture)
+    service, fence = source
+    root = connector._record("page", fixture.page)
+    old_property = CaptureRecord(
+        identity=RecordIdentity(
+            record_type="page_property", native_id="removed", container_id=PAGE
+        ),
+        parent=root.identity,
+        payload={"native": "previously captured value"},
+        observed_at=datetime.now(timezone.utc),
+        completeness="partial",
+    )
+    async with database() as db:
+        await service.capture(db, CaptureBatch(fence=fence, records=(root, old_property)))
+    await run(instance)
+    rows, checkpoint, _ = await saved(database)
+    removed = next(row for row in rows if row.native_id == "removed")
+    assert removed.deleted_at is not None and removed.removal_reason == "absent"
+    assert next(row for row in rows if row.native_id == PAGE).deleted_at is None
     assert checkpoint["canonical_cycle"]["phase"] == "complete"
