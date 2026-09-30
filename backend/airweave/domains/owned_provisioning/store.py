@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from airweave.api.context import ApiContext
 from airweave.core.datetime_utils import utc_now_naive
 from airweave.db.unit_of_work import UnitOfWork
-from airweave.domains.owned_provisioning.models import EnsureSource
+from airweave.domains.owned_provisioning.models import EnsureSource, native_identity
 from airweave.domains.source_connections.protocols import SourceConnectionCreateServiceProtocol
 from airweave.domains.sources.protocols import SourceValidationServiceProtocol
 from airweave.models.connection import Connection
@@ -92,19 +92,27 @@ class ProvisioningStore:
                     status_code=409, detail="Generation already names another request"
                 )
             if request.generation == row.generation and (
-                row.sync_id is not None or row.desired_state == "disconnected"
+                row.sync_id is not None or row.desired_state != "active"
             ):
                 return
-            previous = EnsureSource.model_validate(row.request_payload)
+            if row.desired_state == "disconnected" and request.state != "disconnected":
+                raise HTTPException(
+                    status_code=409, detail="Connect a new account after disconnect"
+                )
             if request.state == "active" and row.source_connection_id is not None:
-                if previous.state == "disconnected":
-                    raise HTTPException(
-                        status_code=409, detail="Connect a new account after disconnect"
+                source = await db.scalar(
+                    select(SourceConnection)
+                    .where(
+                        SourceConnection.id == row.source_connection_id,
+                        SourceConnection.organization_id == ctx.organization.id,
                     )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
                 if (
-                    previous.source.provider,
-                    previous.source.expected_identity,
-                    previous.source.collection,
+                    source.short_name,
+                    native_identity(source.short_name, source.config_fields),
+                    source.readable_collection_id,
                 ) != (
                     request.source.provider,
                     request.source.expected_identity,

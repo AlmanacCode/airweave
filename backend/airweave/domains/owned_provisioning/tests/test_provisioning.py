@@ -350,3 +350,65 @@ async def test_creation_failure_rolls_back_relationship_source_and_sync(database
     async with database() as db:
         ready = await service.ensure(db, ctx, account, request)
         assert ready.state == "ready"
+
+
+async def test_pause_resume_preserves_identity_source_and_cleanup(database, setup):
+    ctx, service, request, account, lifecycle, schedules, workflows = setup
+    async with database() as db:
+        first = await service.ensure(db, ctx, account, request)
+    async with database() as db:
+        paused = await service.ensure(db, ctx, account, EnsureSource(generation=2, state="paused"))
+        assert paused.state == "paused"
+        assert paused.expected_identity == request.source.expected_identity
+        assert (paused.source_connection_id, paused.sync_id) == (
+            first.source_connection_id,
+            first.sync_id,
+        )
+        sync = await db.get(Sync, first.sync_id)
+        assert sync.status == "paused" and sync.provisioning_generation == 2
+        with pytest.raises(HTTPException):
+            await service.jobs.create(db, schemas.SyncJobCreate(sync_id=first.sync_id), ctx)
+    workflows.cancel_sync_job_workflow.assert_awaited_once()
+    async with database() as db:
+        wrong_source = request.source.model_copy(update={"expected_identity": "other@example.test"})
+        wrong = request.model_copy(update={"generation": 3, "source": wrong_source})
+        with pytest.raises(HTTPException, match="Reconnect changes original account identity"):
+            await service.ensure(db, ctx, account, wrong)
+    async with database() as db:
+        resumed = await service.ensure(
+            db, ctx, account, request.model_copy(update={"generation": 3})
+        )
+        assert resumed.state == "ready"
+        assert (resumed.source_connection_id, resumed.sync_id) == (
+            first.source_connection_id,
+            first.sync_id,
+        )
+        assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 1
+    assert lifecycle.create.await_count == 2
+    async with database() as db:
+        stopped = await service.ensure(
+            db, ctx, account, EnsureSource(generation=4, state="disconnected")
+        )
+        assert stopped.expected_identity == request.source.expected_identity
+    async with database() as db:
+        with pytest.raises(HTTPException, match="Connect a new account after disconnect"):
+            await service.ensure(db, ctx, account, request.model_copy(update={"generation": 5}))
+
+
+async def test_initial_pause_can_activate_but_initial_disconnect_is_terminal(database, setup):
+    ctx, service, request, account, lifecycle, schedules, workflows = setup
+    async with database() as db:
+        paused = await service.ensure(db, ctx, account, EnsureSource(generation=1, state="paused"))
+        assert paused.state == "paused" and paused.expected_identity is None
+        assert paused.source_connection_id is None and paused.sync_id is None
+    async with database() as db:
+        active = await service.ensure(
+            db, ctx, account, request.model_copy(update={"generation": 2})
+        )
+        assert active.state == "ready"
+    other = uuid4()
+    async with database() as db:
+        await service.ensure(db, ctx, other, EnsureSource(generation=1, state="disconnected"))
+    async with database() as db:
+        with pytest.raises(HTTPException, match="Connect a new account after disconnect"):
+            await service.ensure(db, ctx, other, request.model_copy(update={"generation": 2}))

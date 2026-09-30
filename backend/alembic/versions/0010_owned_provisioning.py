@@ -59,7 +59,8 @@ def upgrade():
         ),
         sa.CheckConstraint("client_namespace = 'almanac'", name="ck_owned_provisioning_namespace"),
         sa.CheckConstraint(
-            "desired_state IN ('active', 'disconnected')", name="ck_owned_provisioning_state"
+            "desired_state IN ('active', 'paused', 'disconnected')",
+            name="ck_owned_provisioning_state",
         ),
     )
 

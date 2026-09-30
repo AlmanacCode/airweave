@@ -52,16 +52,16 @@ class EnsureSource(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     generation: int = Field(ge=1, strict=True)
-    state: Literal["active", "disconnected"]
+    state: Literal["active", "paused", "disconnected"]
     source: ManagedSource | None = None
 
     @model_validator(mode="after")
     def active_source(self) -> "EnsureSource":
-        """Disconnect never accepts a replacement identity or credential."""
+        """Inactive requests never replace identity or credentials."""
         if self.state == "active" and self.source is None:
             raise ValueError("An active account requires its verified source specification")
-        if self.state == "disconnected" and self.source is not None:
-            raise ValueError("Disconnect does not accept new credentials or identity")
+        if self.state != "active" and self.source is not None:
+            raise ValueError("Inactive state does not accept new credentials or identity")
         return self
 
 
@@ -73,7 +73,29 @@ class ProvisionedSource(BaseModel):
     organization_id: UUID
     generation: int
     observed_generation: int
-    state: Literal["pending", "ready", "disconnected"]
+    state: Literal["pending", "ready", "paused", "disconnected"]
     source_connection_id: UUID | None
     sync_id: UUID | None
     expected_identity: str | None
+
+
+def native_identity(provider: str, config: dict) -> str:
+    """Read the original attested principal from the protected source config."""
+    from airweave.platform.configs.config import (
+        GmailConfig,
+        GoogleCalendarConfig,
+        GoogleDriveConfig,
+    )
+
+    match provider:
+        case "gmail":
+            identity = GmailConfig.model_validate(config).expected_mailbox
+        case "google_calendar":
+            identity = GoogleCalendarConfig.model_validate(config).expected_primary_calendar_id
+        case "google_drive":
+            identity = GoogleDriveConfig.model_validate(config).expected_permission_id
+        case _:
+            raise ValueError("Unsupported owned source provider")
+    if identity is None:
+        raise ValueError("Owned source has no trusted native identity")
+    return identity

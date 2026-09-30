@@ -2,7 +2,7 @@
 
 This backend-only API is implemented; it has not been deployed or qualified against live Temporal/provider services. Almanac still needs durable delivery from its account authority before Connect automatically provisions capture.
 
-`PUT /api/v1/owned-sources/{account_uuid}` commits a desired account generation and reconciles it. `GET` reads the committed delivery state. Both require an organization API key, whose existing broad source-management authority remains unchanged. Never expose this key or endpoint directly to browsers. The server fixes the namespace to `almanac`.
+`PUT /owned-sources/{account_uuid}` commits a desired account generation and reconciles it. `GET` reads the committed delivery state. Both require an organization API key, whose existing broad source-management authority remains unchanged. Never expose this key or endpoint directly to browsers. The server fixes the namespace to `almanac`.
 
 An active request contains `generation`, `state: "active"`, and `source` with `provider`, `expected_identity`, `collection`, `auth_provider`, `connected_account_id`, `auth_config_id`, `user_id`, `config`, and five-field `cron`. Composio selectors contain no provider tokens. The configured auth-provider connection must belong to the request organization. Native validation checks the expected identity before admitting capture. Supported providers are Gmail (mailbox), Google Calendar (primary calendar ID), and Google Drive (permission ID). Slack and Wispr identity contracts remain future work.
 
@@ -23,3 +23,22 @@ After an uncertain response, Almanac must retry the identical PUT until acknowle
 ## Local verification
 
 The provisioning tests use migrated PostgreSQL and actual source/sync creation, with synthetic identities and mocked provider/Temporal I/O. They cover lost replies, transaction rollback, rotation cleanup timeout, disconnect racing native verification, organization/API-key boundaries, and legacy mutation rejection. A separate actual TemporalScheduleService test uses fake remote handles to prove orphan schedule replacement and relinking. These tests are not live deployment qualification.
+
+## Reversible pause
+
+`state: paused` accepts no source specification, fences existing jobs and removes
+schedules using the same durable cleanup as disconnect. It retains the source/sync
+IDs and original protected SourceConnection config. A higher-generation active
+request revalidates that exact provider/native identity/collection before rotating
+credentials and resuming. The stop request does not replace that authority.
+Inactive responses return the preserved expected identity when a source exists.
+An initially paused account may create its first source later; disconnected is
+terminal even if no source was ever created. Pause is for configuration disable;
+disconnect is for account removal.
+
+Pause qualification: seven real PostgreSQL provisioning tests passed (including
+active → paused → same-ID active, mismatched native identity rejected, terminal
+existing/initial disconnect, and initially paused → first active). Provider native
+validation and Temporal calls are simulated; no live account operations occurred.
+Log: `/tmp/provisioning-pause-tests.log`. Migration 0010's state constraint was
+extended before deployment; deployed schemas would require a new migration.

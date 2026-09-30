@@ -12,7 +12,11 @@ from airweave import schemas
 from airweave.api.context import ApiContext
 from airweave.core.datetime_utils import utc_now_naive
 from airweave.db.unit_of_work import UnitOfWork
-from airweave.domains.owned_provisioning.models import EnsureSource, ProvisionedSource
+from airweave.domains.owned_provisioning.models import (
+    EnsureSource,
+    ProvisionedSource,
+    native_identity,
+)
 from airweave.domains.owned_provisioning.store import ProvisioningStore, locked_intent
 from airweave.domains.sources.protocols import SourceLifecycleServiceProtocol
 from airweave.domains.syncs.jobs.protocols import SyncJobRepositoryProtocol
@@ -69,7 +73,11 @@ class OwnedProvisioningService:
         )
         if row is None:
             raise HTTPException(status_code=404, detail="Owned account source not found")
-        spec = EnsureSource.model_validate(row.request_payload)
+        source = (
+            await db.get(SourceConnection, row.source_connection_id)
+            if row.source_connection_id
+            else None
+        )
         return ProvisionedSource(
             account_id=row.account_id,
             organization_id=row.organization_id,
@@ -80,11 +88,13 @@ class OwnedProvisioningService:
                 if row.observed_generation != row.generation
                 else "ready"
                 if row.desired_state == "active"
-                else "disconnected"
+                else row.desired_state
             ),
             source_connection_id=row.source_connection_id,
             sync_id=row.sync_id,
-            expected_identity=spec.source.expected_identity if spec.source else None,
+            expected_identity=native_identity(source.short_name, source.config_fields)
+            if source
+            else None,
         )
 
     async def reconcile(
@@ -155,7 +165,7 @@ class OwnedProvisioningService:
                         status_code=503, detail="Owned capture cancellation is pending"
                     )
             row.cancellation_job_ids = []
-            if row.desired_state == "disconnected":
+            if row.desired_state != "active":
                 if row.sync_id is not None:
                     await self.schedules.delete_all_schedules_for_sync(
                         row.sync_id, db, ctx, uow=uow, strict=True
