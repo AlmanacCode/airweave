@@ -155,3 +155,25 @@ payload/revision digest was identical. Zero partial records or blobs. Private
 schema/files were removed. No all-day or DST case was observed; those semantics
 remain covered separately by synthetic tests. Calendar limits are 100 provider
 requests, 10,000 observations and 180 seconds per process.
+
+### Calendar consumer over real HTTP
+
+Set `LIVE_VERIFY_CALENDAR_CONSUMER=1` with the explicit `LIVE_ALMANAC_ROOT` and
+`LIVE_ALMANAC_PYTHON` paths when running the selected Calendar lifecycle. The
+second process uses the shared `almanac_handoff.run_consumer` loopback server and
+the real `/sync` routers. A fresh Almanac process receives a private0600 manifest
+and an ephemeral service key; provider credentials are excluded from its environment.
+The temporary source connection exists only in the disposable PostgreSQL schema.
+This does not verify hosted authentication, production bindings or Temporal workers.
+
+Verified September30:21 actual stored expanded events crossed this boundary in5
+pages (limit5), retaining real occurrence/calendar/account identities, title,
+description, scheduling times, status, recurring master and coverage metadata.
+Wrong-source reads were denied and an uncaptured2001 range returned the explicit
+product error. Both capture jobs completed with4 provider requests each,190 initial
+observations and22 second-run observations,183 active records, unchanged journal
+sequence190 and unchanged native payload/revision digest. The second fresh process
+loaded its durable checkpoint and made one actual master `syncToken` request.
+No all-day events occurred in this sample; DST/all-day correctness remains fixture
+coverage. The private schema and files were removed; an independent PostgreSQL
+check found zero remaining `canonical_live_*` schemas. No provider writes occurred.

@@ -97,6 +97,24 @@ async def verify_almanac_reader(
     thread_id = candidates[0].payload["threadId"]
     selected = [r for r in records if r.payload.get("threadId") == thread_id]
     expected = [await expectation(record, storage) for record in selected]
+    return await run_consumer(
+        sessions=sessions,
+        organization_id=organization_id,
+        sync_id=sync_id,
+        root=root,
+        storage=storage,
+        query=query,
+        consumer=consumer,
+        repository=repository,
+        python=python,
+        extra={"thread_id": thread_id, "expected": expected},
+    )
+
+
+async def run_consumer(
+    *, sessions, organization_id, sync_id, root, storage, query, consumer, repository, python, extra
+):
+    """Shared private loopback API/process boundary for provider-specific assertions."""
     probe_key = secrets.token_urlsafe(32)
     app = FastAPI()
     app.include_router(api_router)
@@ -139,8 +157,7 @@ async def verify_almanac_reader(
                     "sync_id": str(sync_id),
                     "account_id": str(uuid4()),
                     "source_connection_id": str(uuid4()),
-                    "thread_id": thread_id,
-                    "expected": expected,
+                    **extra,
                 }
             )
         )
@@ -203,3 +220,62 @@ def consumer_result(output, returncode):
             print(json.dumps({"consumer_failed_stage": safe_stage}), flush=True)
         raise RuntimeError("Almanac consumer proof failed; private diagnostics suppressed")
     return result
+
+
+async def verify_calendar_reader(
+    *, sessions, organization_id, sync_id, root, storage, window, calendar_id
+):
+    """Hand actual committed occurrences to the Almanac reader through the same HTTP server."""
+    from airweave.domains.entities.canonical.calendar_query import (
+        CalendarRange,
+        CalendarRangeService,
+    )
+    from airweave.domains.entities.canonical.query import CanonicalQueryService
+    from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
+    from airweave.domains.entities.canonical.store import CanonicalRecordStore
+    from airweave.models.source_connection import SourceConnection
+
+    query = CanonicalQueryService(CanonicalRecordStore(), CanonicalQueryStore(), "private-test")
+    request = CalendarRange(start=window["start"], end=window["end"], timezone="UTC", limit=250)
+    async with sessions() as db:
+        page = await CalendarRangeService("private-test").read(
+            db, organization_id, sync_id, calendar_id, request
+        )
+    if page.has_more:
+        raise ValueError("Consumer proof exceeds bounded expected-page limit")
+    connection_id = uuid4()
+    async with sessions() as db:
+        db.add(
+            SourceConnection(
+                id=connection_id,
+                organization_id=organization_id,
+                sync_id=sync_id,
+                name="Private calendar consumer",
+                short_name="google_calendar",
+                is_authenticated=True,
+            )
+        )
+        await db.commit()
+    repository = Path(os.environ["LIVE_ALMANAC_ROOT"]).resolve()
+    python = Path(os.environ["LIVE_ALMANAC_PYTHON"]).absolute()
+    consumer = repository / "backend/tests/live/read_owned_calendar.py"
+    if not python.is_file() or not consumer.is_file():
+        raise ValueError("Explicit Almanac consumer checkout and Python required")
+    return await run_consumer(
+        sessions=sessions,
+        organization_id=organization_id,
+        sync_id=sync_id,
+        root=root,
+        storage=storage,
+        query=query,
+        consumer=consumer,
+        repository=repository,
+        python=python,
+        extra={
+            "source_connection_id": str(connection_id),
+            "calendar_id": calendar_id,
+            "window": window,
+            "expected": [record.payload for record in page.records],
+            "coverage": page.coverage.model_dump(mode="json"),
+        },
+    )

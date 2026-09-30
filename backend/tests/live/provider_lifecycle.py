@@ -249,8 +249,22 @@ async def child(manifest):
                 default=str,
             ).encode()
         ).hexdigest()
+        consumer_result = None
+        if is_calendar and loaded and os.environ.get("LIVE_VERIFY_CALENDAR_CONSUMER") == "1":
+            from almanac_handoff import verify_calendar_reader
+
+            consumer_result = await verify_calendar_reader(
+                sessions=sessions,
+                organization_id=organization_id,
+                sync_id=sync_id,
+                root=Path(manifest["root"]),
+                storage=storage,
+                window=manifest["calendar_config"]["occurrence_window"],
+                calendar_id=manifest["calendar_config"]["calendar_ids"][0],
+            )
         result = {
             "failed": False,
+            "almanac_consumer": consumer_result,
             **counters,
             "stored_records": len(visible),
             "partial_records": sum(r.completeness != "complete" for r in visible),
