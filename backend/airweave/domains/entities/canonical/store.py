@@ -236,7 +236,7 @@ class CanonicalRecordStore:
         return await self._capture_locked(db, sync, batch)
 
     async def _capture_locked(
-        self, db: AsyncSession, sync: Sync, batch: CaptureBatch
+        self, db: AsyncSession, sync: Sync, batch: CaptureBatch, *, seen_id: UUID | None = None
     ) -> CaptureResult:
         changes = []
         unchanged = 0
@@ -256,7 +256,7 @@ class CanonicalRecordStore:
             ).scalar_one_or_none()
             fingerprint = capture_fingerprint(observation)
             if entity is not None and entity.capture_hash == fingerprint:
-                entity.last_seen_run_id = batch.fence.attempt_id
+                entity.last_seen_run_id = seen_id or batch.fence.attempt_id
                 entity.observed_at = observation.observed_at
                 unchanged += 1
                 continue
@@ -293,7 +293,7 @@ class CanonicalRecordStore:
             entity.removal_reason = observation.removal_reason
             entity.completeness = observation.completeness
             entity.blob_references = [blob.model_dump(mode="json") for blob in observation.blobs]
-            entity.last_seen_run_id = batch.fence.attempt_id
+            entity.last_seen_run_id = seen_id or batch.fence.attempt_id
             entity.projection_error = None
             # Flush before reading default/index state and before another observation of this ID.
             await db.flush()
@@ -322,6 +322,12 @@ class CanonicalRecordStore:
     async def reconcile_scope(self, db: AsyncSession, request: ReconcileScope) -> ReconcileResult:
         """Tombstone a bounded batch absent from one successfully enumerated scope."""
         sync = await self._fenced_sync(db, request.fence)
+        return await self._reconcile_scope_locked(db, sync, request)
+
+    async def _reconcile_scope_locked(
+        self, db: AsyncSession, sync: Sync, request: ReconcileScope, *, seen_id: UUID | None = None
+    ) -> ReconcileResult:
+        """Share exact-scope reconciliation with durable whole-scope scans."""
         statement = (
             select(Entity)
             .where(
@@ -331,7 +337,7 @@ class CanonicalRecordStore:
                 Entity.container_id.is_not_distinct_from(request.scope.container_id),
                 Entity.record_revision > 0,
                 Entity.deleted_at.is_(None),
-                Entity.last_seen_run_id.is_distinct_from(request.fence.attempt_id),
+                Entity.last_seen_run_id.is_distinct_from(seen_id or request.fence.attempt_id),
             )
             .order_by(Entity.id)
             .limit(request.limit + 1)
@@ -355,7 +361,7 @@ class CanonicalRecordStore:
             for entity in entities[: request.limit]
         )
         result = await self._capture_locked(
-            db, sync, CaptureBatch(fence=request.fence, records=observations)
+            db, sync, CaptureBatch(fence=request.fence, records=observations), seen_id=seen_id
         )
         return ReconcileResult(capture=result, has_more=len(entities) > request.limit)
 

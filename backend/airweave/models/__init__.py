@@ -4,6 +4,7 @@ from .access_control_membership import AccessControlMembership
 from .api_key import APIKey
 from .auth_provider import AuthProvider
 from .billing_period import BillingPeriod
+from .capture_scan import CaptureScan
 from .collection import Collection
 from .connection import Connection
 from .connection_init_session import ConnectionInitSession
@@ -39,6 +40,7 @@ __all__ = [
     "Collection",
     "Entity",
     "EntityChange",
+    "CaptureScan",
     "ProjectionGeneration",
     "EntityCount",
     "Connection",

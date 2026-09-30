@@ -9,11 +9,20 @@ from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.models import CaptureResult, ReconcileResult
 from airweave.domains.entities.canonical.requests import (
     CaptureBatch,
+    CompletedScope,
     ReconcileScope,
     RemovedScope,
     StartedScope,
     WriterFence,
 )
+from airweave.domains.entities.canonical.scan_models import (
+    BeginScan,
+    CommitScanPage,
+    ReconcileScan,
+    ScanResult,
+    ScanState,
+)
+from airweave.domains.entities.canonical.scan_store import CanonicalScanStore
 from airweave.domains.entities.canonical.store import CanonicalRecordStore
 
 
@@ -23,6 +32,7 @@ class CanonicalCaptureService:
     def __init__(self, store: CanonicalRecordStore):
         """Inject the persistence owner without hidden global sessions."""
         self.store = store
+        self.scans = CanonicalScanStore(store)
 
     async def activate_writer(
         self,
@@ -89,3 +99,25 @@ class CanonicalCaptureService:
         """Advance only after the caller's full capture/reconciliation completion barrier."""
         async with UnitOfWork(db):
             await self.store.save_checkpoint(db, fence, cursor_data)
+
+    async def read_scan(
+        self, db: AsyncSession, fence: WriterFence, scope: CompletedScope
+    ) -> ScanState | None:
+        """Reload an exact scope after restart or uncertain acknowledgement."""
+        async with UnitOfWork(db):
+            return await self.scans.read(db, fence, scope)
+
+    async def begin_scan(self, db: AsyncSession, request: BeginScan) -> ScanState:
+        """Begin/resume under the same fence as captured records."""
+        async with UnitOfWork(db):
+            return await self.scans.begin(db, request)
+
+    async def commit_scan_page(self, db: AsyncSession, request: CommitScanPage) -> ScanResult:
+        """Commit original records and their continuation atomically."""
+        async with UnitOfWork(db):
+            return await self.scans.page(db, request)
+
+    async def reconcile_scan(self, db: AsyncSession, request: ReconcileScan) -> ScanResult:
+        """Commit one bounded whole-scope absence reconciliation step."""
+        async with UnitOfWork(db):
+            return await self.scans.reconcile(db, request)
