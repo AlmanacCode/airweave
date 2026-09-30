@@ -59,3 +59,22 @@ including wrong-user/same-workspace rejection and pause/resume preservation. Alm
 adapter's 18 tests passed, including rejection of a wrong native-user acknowledgement.
 Wispr remains outside automatic provisioning pending native-principal qualification:
 the saved catalogue exposes GET_ACCOUNT_INFO but its output schema is unspecified.
+
+### Wispr identity probe (2026-09-30)
+
+A bounded live read used the existing saved pilot, verified its exact Composio
+connected-account ID, ACTIVE state, toolkit and auth-config, then executed only
+`WISPR_FLOW_MCP_GET_ACCOUNT_INFO` in an account-pinned session with connection
+management disabled. The successful native response contained exactly `name: str`
+and `aliases: list[str]`. No values, tokens, names or aliases were logged or stored.
+The first session request returned 201 and was incorrectly treated as incomplete
+by the disposable diagnostic; a second accepted session completed the single
+account-info execution. No inventory read, account grant or provider mutation ran.
+
+This response supplies display identity, not a stable native principal. It cannot
+prove a reconnect preserves the same Wispr account. The automatic native-attested
+path remains unsupported for Wispr; the existing explicitly broker-bound pilot
+is not upgraded by this probe. A future alternative requires either documented
+stable native identity or an explicit product policy for broker-only authority
+without silently permitting cross-credential continuity. Discovery/deletion and
+raw editor/dictation limits remain unchanged.
