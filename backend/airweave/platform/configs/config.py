@@ -35,9 +35,9 @@ class ApolloConfig(SourceConfig):
 
 
 class AttioConfig(SourceConfig):
-    """Attio configuration schema."""
+    """Attested workspace boundary for native CRM capture."""
 
-    pass
+    workspace_id: UUID = Field(description="Native Attio workspace UUID; verified using /v2/self")
 
 
 class BitbucketConfig(SourceConfig):
