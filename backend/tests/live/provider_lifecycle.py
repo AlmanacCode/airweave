@@ -246,6 +246,7 @@ async def child(manifest):
             collection_id=uuid4(),
             source_connection_id=uuid4(),
             source_short_name=name,
+            connection=SimpleNamespace(id=uuid4(), short_name=name),
             execution_config=config,
             batch_size=10,
             max_batch_latency_ms=20,

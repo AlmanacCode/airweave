@@ -230,7 +230,15 @@ The subsequent approved budget is 600 requests, 10,000 observations and 1,800
 seconds per process. Slack uses its five-attempt retry policy and honors the
 full Retry-After wait; the test does not shorten waits to fit its total budget.
 Only status, numeric retry delay and request count are retained as diagnostics.
-The longer attempt's result is pending; do not infer full capture from the budget.
+The longer attempt reached its 1,800-second deadline after 74 requests and 328
+observations. Thirty rate limits each supplied a 60-second Retry-After. The job
+became cancelled; two scopes started, none completed, and the checkpoint stayed
+unchanged. Cancellation telemetry then accessed missing fixture connection
+metadata, masking the timeout with AttributeError. The fixture is corrected;
+this was not rerun. No second process started, and private schema/files were
+removed. Full Slack coverage remains unverified. A durable per-scope sweep and
+continuation design is needed before repeatedly rescanning this history.
+See `evidence/slack-lifecycle-backoff-incomplete-20260930.json`.
 
 Wispr enumeration and one diagnostic retry each failed after 18 requests and nine
 partial observations. `GET_MEETING` returned an opaque tool error string; the
