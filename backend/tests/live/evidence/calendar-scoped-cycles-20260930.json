@@ -1,0 +1,54 @@
+{
+  "commit": "826a2c1db50966509251206ff8a9e19eafdf18ab",
+  "almanac_commit": "c31ac0d9b0f7d9c25e052f8c5446db055d9da654",
+  "provider": "google_calendar",
+  "verification": "Real read-only Google provider; production capture pipeline; disposable local PostgreSQL; two fresh worker processes and real loopback HTTP consumer",
+  "first": {
+    "job_status": "completed",
+    "provider_requests": 4,
+    "records_observed": 188,
+    "stored_records": 181,
+    "partial_records": 0,
+    "observed_change_sequence": 188,
+    "loaded_durable_checkpoint": false
+  },
+  "second": {
+    "job_status": "completed",
+    "provider_requests": 4,
+    "records_observed": 20,
+    "stored_records": 181,
+    "partial_records": 0,
+    "observed_change_sequence": 188,
+    "loaded_durable_checkpoint": true,
+    "sync_token_requests": 1,
+    "identical_payload_revision_digest": true,
+    "scope_summary": {
+      "eligible": 3,
+      "completed_full": 2,
+      "completed_changes": 1,
+      "unfinished": 0
+    }
+  },
+  "almanac_consumer": {
+    "verified": true,
+    "events": 19,
+    "pages": 4,
+    "native_identities_verified": true,
+    "coverage_verified": true,
+    "wrong_source_denied": true,
+    "uncaptured_range_denied": true
+  },
+  "harness_exit_code": 0,
+  "independently_verified_cleanup": {
+    "remaining_private_schemas": 0,
+    "remaining_private_directories": 0,
+    "archives_removed": true
+  },
+  "limitations": [
+    "Selected primary calendar and fixed seven-day occurrence window only",
+    "No live induced edits, deletion, revocation or all-day/DST example",
+    "Loopback fixture authentication; no hosted WorkOS owner proof",
+    "No staging deployment"
+  ],
+  "harness_summary_note": "Generic identical_second_read and saved_cursor_reused summarize full-scope/recovery trials and are false for mixed Calendar; per-cycle native token assertions and matching revision digests establish this delta proof."
+}
