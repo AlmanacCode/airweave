@@ -34,7 +34,7 @@ schema base_entity {
         }
 
         field name type string {
-            indexing: attribute | summary
+            indexing: index | attribute | summary
             attribute: fast-search
         }
 
@@ -216,7 +216,7 @@ schema base_entity {
 
     # Default fieldset used by userInput() / unspecified text search
     fieldset default {
-        fields: textual_representation, payload
+        fields: name, textual_representation, payload
     }
 
     # Note: We use Vespa's default summary (no explicit document-summary)
