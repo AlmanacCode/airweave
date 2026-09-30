@@ -15,7 +15,10 @@ from airweave.domains.entities.canonical.cycle_models import (
     TerminalCheckpoint,
 )
 from airweave.domains.entities.canonical.models import CaptureResult
-from airweave.domains.entities.canonical.page_source import CanonicalPageSource
+from airweave.domains.entities.canonical.page_source import (
+    CanonicalPageSource,
+    CheckpointedPageSource,
+)
 from airweave.domains.entities.canonical.requests import (
     CaptureBatch,
     CaptureRecord,
@@ -132,6 +135,11 @@ class CanonicalCapturePipeline:
             progress,
             check_limits,
             self.files,
+            force_full=(
+                sync_context.force_full_sync or sync_context.execution_config.cursor.skip_load
+            )
+            if isinstance(self.page_source, CheckpointedPageSource)
+            else False,
         ).run()
 
     def _writer(self) -> WriterFence:

@@ -45,6 +45,7 @@ def components(database, source):
         source_connection_id=uuid4(),
         source_short_name="test",
         execution_config=config,
+        force_full_sync=False,
         logger=logger,
         batch_size=1,
         max_batch_latency_ms=0,

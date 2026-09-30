@@ -1,16 +1,14 @@
-"""Gmail source implementation for syncing email threads, messages, and attachments.
+"""Gmail originals through the canonical page engine and native history checkpoints.
 
-Uses concurrent/batching processing for optimal performance:
-  * Thread detail fetch + per-thread processing
-  * Per-thread message processing
-  * Per-message attachment fetch & processing
-  * Incremental history message-detail fetch
+The upstream entity extractor remains available for legacy consumers; owned capture
+uses one fenced message/blob authority and independent derived projection.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 from contextlib import aclosing
 from datetime import datetime
@@ -22,8 +20,21 @@ from tenacity import retry, stop_after_attempt
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
 from airweave.domains.browse_tree.types import NodeSelectionData
-from airweave.domains.entities.canonical.source import SourceObservation
-from airweave.domains.sources.exceptions import SourceAuthError
+from airweave.domains.entities.canonical.cycle_models import CaptureCycle, CycleConfiguration
+from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.page_source import (
+    CapturePage,
+    CapturePlan,
+    InvalidScanContinuation,
+)
+from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope
+from airweave.domains.entities.canonical.scan_models import ScanContinuation
+from airweave.domains.sources.exceptions import (
+    SourceAuthError,
+    SourceError,
+    SourceRateLimitError,
+    SourceServerError,
+)
 from airweave.domains.sources.token_providers.protocol import (
     SourceAuthProvider,
     authorization_headers,
@@ -47,6 +58,7 @@ from airweave.platform.http_client.retry_helpers import (
 )
 from airweave.platform.sources._base import BaseSource
 from airweave.platform.sources.gmail_capture import GmailCapture
+from airweave.platform.sources.gmail_pages import GmailPages, invalid_page_token
 from airweave.platform.sources.http_helpers import raise_for_status
 from airweave.platform.utils.filename_utils import safe_filename
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
@@ -60,7 +72,10 @@ def _should_retry_gmail_request(exception: Exception) -> bool:
         if exception.response.status_code == 429:
             return True
         return True
-    if isinstance(exception, (httpx.ConnectTimeout, httpx.ReadTimeout)):
+    if isinstance(
+        exception,
+        (httpx.ConnectTimeout, httpx.ReadTimeout, SourceRateLimitError, SourceServerError),
+    ):
         return True
     return False
 
@@ -92,21 +107,77 @@ class GmailSource(BaseSource):
 
     canonical_record_types = ("message",)
 
-    async def generate_observations(
-        self,
-        *,
-        cursor: SyncCursor | None = None,
-        files: FileService | None = None,
-        node_selections: list[NodeSelectionData] | None = None,
-    ) -> AsyncGenerator[SourceObservation, None]:
-        """Capture native messages once; thread/search projections are downstream."""
-        if node_selections:
-            raise ValueError("Gmail capture does not support selected node scopes")
-        capture = GmailCapture(
-            self._get, self._build_gmail_query(), files=files, attachment_get=self._get_mime_json
+    canonical_container_parents = {}
+    capture_config: GmailConfig
+
+    @property
+    def capture_cycle_configuration(self) -> CycleConfiguration:
+        """Bind the actual query and typed filters; preserve every existing filtered scope."""
+        query = self._build_gmail_query()
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "capture_version": 1,
+                    "query": query,
+                    "filters": self.capture_config.model_dump(mode="json"),
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        return CycleConfiguration(
+            fingerprint=fingerprint,
+            parents={"message": (None,)},
+            known_object_validation=() if query else ("message",),
         )
-        async for observation in capture.generate(cursor):
-            yield observation
+
+    def _canonical_capture(self, files: FileService | None = None) -> GmailCapture:
+        return GmailCapture(
+            self._get_capture_json,
+            self._build_gmail_query(),
+            files=files,
+            attachment_get=self._get_mime_json,
+        )
+
+    async def prepare_cycle(self, previous: CaptureCycle | None) -> CapturePlan:
+        """Plan full mailbox capture or changes from verified canonical progress."""
+        return await GmailPages(self._canonical_capture()).prepare(
+            previous, self.capture_cycle_configuration
+        )
+
+    def initial_continuation(self, cycle: CaptureCycle) -> ScanContinuation:
+        """Resume the cycle's original mailbox boundary, never a fresh profile value."""
+        return GmailPages.initial(cycle)
+
+    async def capture_page(
+        self,
+        scope: CompletedScope,
+        continuation: ScanContinuation,
+        *,
+        files: FileService,
+        parent: SourceRecord | None = None,
+    ) -> CapturePage:
+        """Native messages enter the same page transaction as their continuation."""
+        if scope != CompletedScope(record_type="message") or parent is not None:
+            raise ValueError("Gmail requires its independent message scope")
+        return await GmailPages(self._canonical_capture(files)).page(continuation)
+
+    async def refresh_known(self, record: SourceRecord, *, files: FileService) -> CaptureRecord:
+        """Exact current GET proves unfiltered mailbox membership, including known omissions."""
+        if (
+            self._build_gmail_query()
+            or record.identity.record_type != "message"
+            or record.parent is not None
+        ):
+            raise ValueError("Exact Gmail omission refresh requires unfiltered mailbox messages")
+        return await self._canonical_capture(files).message(record.identity.native_id)
+
+    def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
+        """Mail messages have no canonical child scopes."""
+        raise ValueError("Gmail has no child capture scopes")
+
+    async def confirm_absent(self, record: SourceRecord) -> None:
+        """Unfiltered omissions require exact hydration; filtered absence describes only scope."""
+        raise ValueError("Gmail omission must use declared exact known-object validation")
 
     # -----------------------
     # Construction / Config
@@ -123,6 +194,7 @@ class GmailSource(BaseSource):
         """Create a new Gmail source instance."""
         instance = cls(auth=auth, logger=logger, http_client=http_client)
 
+        instance.capture_config = config
         config_dict = config.model_dump() if config else {}
         instance.batch_size = int(config_dict.get("batch_size", 30))
         instance.max_queue_size = int(config_dict.get("max_queue_size", 200))
@@ -282,9 +354,7 @@ class GmailSource(BaseSource):
             response = await self.http_client.get(url, headers=headers, params=params)
 
         if response.status_code == 429:
-            self.logger.warning(
-                "Gmail rate limit reached"
-            )
+            self.logger.warning("Gmail rate limit reached")
 
         raise_for_status(
             response,
@@ -296,26 +366,80 @@ class GmailSource(BaseSource):
         self.logger.debug(f"Response data keys: {list(data.keys())}")
         return data
 
-    async def _get_mime_json(self, url: str, *, max_bytes: int) -> dict:
+    @retry(
+        stop=stop_after_attempt(5),
+        retry=_should_retry_gmail_request,
+        wait=wait_rate_limit_with_backoff,
+        reraise=True,
+    )
+    async def _get_capture_json(self, url: str, params: Optional[dict] = None) -> dict:
+        """Bound canonical JSON responses while streaming; native failures remain visible."""
+        return await self._get_mime_json(url, max_bytes=32 * 1024 * 1024, params=params)
+
+    async def _get_mime_json(
+        self, url: str, *, max_bytes: int, params: Optional[dict] = None
+    ) -> dict:
         """Read bounded attachment JSON through the managed source HTTP transport."""
-        headers = await self._authed_headers()
-        async with self.http_client.stream("GET", url, headers=headers) as response:
-            raise_for_status(
-                response, source_short_name=self.short_name,
-                token_provider_kind=self.auth.provider_kind,
-            )
-            body = bytearray()
-            async with aclosing(response.aiter_bytes()) as chunks:
-                async for chunk in chunks:
-                    if len(body) + len(chunk) > max_bytes:
-                        raise FileSkippedException(
-                            "Encoded MIME body exceeds size limit", "MIME body"
-                        )
-                    body.extend(chunk)
-        value = json.loads(body)
-        if not isinstance(value, dict):
-            raise ValueError("Gmail MIME response must be an object")
-        return value
+        headers = {**await self._authed_headers(), "Accept-Encoding": "identity"}
+        for attempt in range(2):
+            async with self.http_client.stream(
+                "GET", url, headers=headers, params=params
+            ) as response:
+                if response.status_code == 401 and attempt == 0 and self.auth.supports_refresh:
+                    headers = {
+                        **await self._refresh_and_get_headers(),
+                        "Accept-Encoding": "identity",
+                    }
+                    continue
+                if response.headers.get("content-encoding", "identity").lower() != "identity":
+                    raise SourceError(
+                        "Gmail did not honor uncompressed bounded response request",
+                        source_short_name="gmail",
+                    )
+                maximum = max_bytes if response.is_success else min(max_bytes, 65536)
+                body = await self._bounded_response_bytes(response, maximum)
+                buffered = httpx.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    request=response.request,
+                    content=bytes(body),
+                )
+                if response.status_code == 400 and params and params.get("pageToken"):
+                    try:
+                        native_error = json.loads(body)
+                    except (ValueError, UnicodeError):
+                        native_error = None
+                    if isinstance(native_error, dict) and invalid_page_token(native_error):
+                        raise InvalidScanContinuation("Gmail rejected its saved page token")
+                raise_for_status(
+                    buffered,
+                    source_short_name=self.short_name,
+                    token_provider_kind=self.auth.provider_kind,
+                )
+                value = json.loads(body)
+                if not isinstance(value, dict):
+                    raise ValueError("Gmail response must be an object")
+                return value
+        raise AssertionError("Unreachable Gmail refresh state")
+
+    @staticmethod
+    async def _bounded_response_bytes(response: httpx.Response, maximum: int) -> bytes:
+        """Own the raw iterator; identity encoding makes this a decoded-content bound too."""
+        if response.is_stream_consumed:
+            if len(response.content) > maximum:
+                raise FileSkippedException(
+                    "Gmail JSON response exceeds size limit", "Gmail response"
+                )
+            return response.content
+        body = bytearray()
+        async with aclosing(response.stream.__aiter__()) as chunks:
+            async for chunk in chunks:
+                if len(body) + len(chunk) > maximum:
+                    raise FileSkippedException(
+                        "Gmail JSON response exceeds size limit", "Gmail response"
+                    )
+                body.extend(chunk)
+        return bytes(body)
 
     # -----------------------
     # Cursor helper

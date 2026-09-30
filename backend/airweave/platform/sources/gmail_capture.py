@@ -3,7 +3,7 @@
 import base64
 import hashlib
 import json
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from datetime import datetime, timezone
 
 import httpx
@@ -13,15 +13,11 @@ from airweave.domains.entities.canonical.page_source import InvalidScanContinuat
 from airweave.domains.entities.canonical.requests import (
     BlobReference,
     CaptureRecord,
-    CompletedScope,
     RecordIdentity,
-    StartedScope,
 )
-from airweave.domains.entities.canonical.source import SourceObservation
-from airweave.domains.sources.exceptions import SourceEntityNotFoundError
+from airweave.domains.sources.exceptions import SourceEntityNotFoundError, SourceError
 from airweave.domains.storage.exceptions import FileSkippedException
 from airweave.domains.storage.file_service import FileService
-from airweave.domains.syncs.cursors.cursor import SyncCursor
 
 BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 Get = Callable[..., Awaitable[dict]]
@@ -63,7 +59,7 @@ class HistoryPage(BaseModel):
     fingerprint: str
 
 
-class HistoryBatch(BaseModel):
+class HydratedMessages(BaseModel):
     """Bounded current observations; callers atomically commit records and offset."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -231,7 +227,7 @@ class GmailCapture:
         offset: int = 0,
         limit: int = 500,
         expected_fingerprint: str | None = None,
-    ) -> HistoryBatch:
+    ) -> HydratedMessages:
         """Reuse exact current reads, never apply stale history deletion/label payloads."""
         if expected_fingerprint is not None and page.fingerprint != expected_fingerprint:
             raise InvalidScanContinuation("Gmail history page changed before offset replay")
@@ -239,90 +235,28 @@ class GmailCapture:
             raise ValueError("Resuming Gmail history hydration requires its page fingerprint")
         if not 0 <= offset <= len(page.message_ids) or not 1 <= limit <= 500:
             raise ValueError("Invalid Gmail history hydration offset or batch size")
-        end = min(offset + limit, len(page.message_ids))
-        records = tuple([await self.message(mid) for mid in page.message_ids[offset:end]])
-        return HistoryBatch(records=records, next_offset=end, complete=end == len(page.message_ids))
+        return await self.hydrate_messages(page.message_ids, offset=offset, limit=limit)
 
-    async def history(self, boundary: str) -> tuple[list[str], str]:
-        """Legacy generator bridge, removed when the durable page adapter is wired."""
-        affected: dict[str, None] = {}
-        tokens: set[str] = set()
-        token = None
-        while True:
-            page = await self.history_page(boundary, token)
-            affected.update(dict.fromkeys(page.message_ids))
-            token = page.next_page_token
-            if token is None:
-                return list(affected), page.history_id
-            if token in tokens:
-                raise ValueError("Gmail history pagination repeated a token")
-            tokens.add(token)
-
-    async def enumerate(self) -> AsyncGenerator[CaptureRecord, None]:
-        """List every page in the provider's exact configured query scope."""
-        params = {"maxResults": 500, "includeSpamTrash": "true"}
-        if self.query:
-            params["q"] = self.query
-        tokens: set[str] = set()
-        while True:
-            page = await self.get(f"{BASE}/messages", params=dict(params))
-            for item in page.get("messages", []):
-                yield await self.message(item["id"])
-            token = page.get("nextPageToken")
-            if not token:
-                return
-            if token in tokens:
-                raise ValueError("Gmail messages pagination repeated a token")
-            tokens.add(token)
-            params["pageToken"] = token
-
-    async def saved_history(self, cursor: SyncCursor | None) -> tuple[list[str], str] | None:
-        """Only canonical unfiltered checkpoints can resume this record collection."""
-        saved = cursor.data if cursor else {}
-        boundary = saved.get("history_id") if saved.get("canonical_query") == "" else None
-        if not boundary:
-            return None
-        try:
-            return await self.history(boundary)
-        except (httpx.HTTPStatusError, SourceEntityNotFoundError) as exc:
-            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code != 404:
-                raise
-            return None
-
-    async def generate(self, cursor: SyncCursor | None) -> AsyncGenerator[SourceObservation, None]:
-        """Filtered queries reconcile each run; unfiltered mailboxes use Gmail history.
-
-        Gmail queries cannot be faithfully evaluated against history JSON. Full query
-        enumeration is a best-effort changing mailbox view, not a snapshot. Never
-        advance an incremental cursor for such a view. External MIME bytes require
-        successful immutable storage; missing storage or oversize bodies remain partial.
-        """
-        if self.query:
-            yield StartedScope(record_type="message")
-            async for record in self.enumerate():
-                yield record
-            yield CompletedScope(record_type="message")
-            if cursor:
-                cursor.update(history_id="", canonical_query=self.query)
-            return
-
-        history = await self.saved_history(cursor)
-        if history is None:
-            profile = await self.get(f"{BASE}/profile")
-            boundary = str(profile["historyId"])
-            yield StartedScope(record_type="message")
-            async for record in self.enumerate():
-                yield record
-            # If this boundary expires mid-crawl, fail the run. Starting another full
-            # crawl in this attempt would incorrectly retain earlier seen records.
-            history = await self.history(boundary)
-            full = True
-        else:
-            full = False
-        message_ids, latest = history
-        for message_id in message_ids:
-            yield await self.message(message_id)
-        if full:
-            yield CompletedScope(record_type="message")
-        if cursor:
-            cursor.update(history_id=latest, canonical_query="")
+    async def hydrate_messages(
+        self, message_ids: tuple[str, ...], *, offset: int = 0, limit: int = 50
+    ) -> HydratedMessages:
+        """Stop at complete originals; bounded byte targets never truncate native content."""
+        if not 0 <= offset <= len(message_ids) or not 1 <= limit <= 500:
+            raise ValueError("Invalid Gmail message hydration boundary")
+        records = []
+        total_bytes = 0
+        for mid in message_ids[offset : offset + limit]:
+            record = await self.message(mid)
+            size = len(record.model_dump_json().encode())
+            if size > 32 * 1024 * 1024:
+                raise SourceError(
+                    "Gmail original exceeds the 32 MiB record limit", source_short_name="gmail"
+                )
+            records.append(record)
+            total_bytes += size
+            if total_bytes >= 8 * 1024 * 1024:
+                break
+        end = offset + len(records)
+        return HydratedMessages(
+            records=tuple(records), next_offset=end, complete=end == len(message_ids)
+        )

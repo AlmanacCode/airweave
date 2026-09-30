@@ -49,10 +49,13 @@ class CanonicalScanDriver:
         progress: Callable[[CaptureResult, tuple[CaptureRecord, ...]], Awaitable[None]],
         check_limits: Callable[[], Awaitable[None]],
         files: FileService,
+        *,
+        force_full: bool = False,
     ):
         """Reuse the capture service and pipeline progress/guard callbacks."""
         self.service, self.sessions, self.fence, self.source = service, sessions, fence, source
         self.files = files
+        self.force_full = force_full
         self.progress, self.check_limits = progress, check_limits
 
     async def run(self) -> CaptureCycle:
@@ -66,26 +69,35 @@ class CanonicalScanDriver:
             expected = current.version
         else:
             expected = None
-        plan = (
-            CapturePlan(mode=current.mode, starting_checkpoint=current.starting_checkpoint)
-            if current is not None and current.phase == "active"
-            else (
-                await self.source.prepare_cycle(current)
-                if isinstance(self.source, CheckpointedPageSource)
-                else CapturePlan()
+        if (
+            self.force_full
+            and isinstance(self.source, CheckpointedPageSource)
+            and current is not None
+            and current.phase == "active"
+            and (current.mode == "changes" or current.configuration != configuration)
+        ):
+            cycle = await self.fresh_full(current)
+        else:
+            plan = (
+                CapturePlan(mode=current.mode, starting_checkpoint=current.starting_checkpoint)
+                if current is not None and current.phase == "active"
+                else (
+                    await self.source.prepare_cycle(None if self.force_full else current)
+                    if isinstance(self.source, CheckpointedPageSource)
+                    else CapturePlan()
+                )
             )
-        )
-        async with self.sessions() as db:
-            cycle = await self.service.begin_cycle(
-                db,
-                BeginCycle(
-                    fence=self.fence,
-                    configuration=configuration,
-                    expected=expected,
-                    mode=plan.mode,
-                    starting_checkpoint=plan.starting_checkpoint,
-                ),
-            )
+            async with self.sessions() as db:
+                cycle = await self.service.begin_cycle(
+                    db,
+                    BeginCycle(
+                        fence=self.fence,
+                        configuration=configuration,
+                        expected=expected,
+                        mode=plan.mode,
+                        starting_checkpoint=plan.starting_checkpoint,
+                    ),
+                )
         for restart in range(2):
             try:
                 return await self.run_cycle(cycle)
@@ -93,24 +105,30 @@ class CanonicalScanDriver:
                 if restart or not isinstance(self.source, CheckpointedPageSource):
                     raise
                 await self.check_limits()
-                plan = await self.source.prepare_cycle(None)
-                if plan.mode != "full":
-                    raise CycleConflict("An invalid checkpoint requires a fresh full capture")
-                async with self.sessions() as db:
-                    current = await self.service.read_cycle(db, self.fence)
-                    if current is None or current.version.cycle_id != cycle.version.cycle_id:
-                        raise CycleConflict("Cycle changed during checkpoint recovery")
-                    cycle = await self.service.restart_cycle(
-                        db,
-                        RestartCycle(
-                            fence=self.fence,
-                            expected=current.version,
-                            configuration=configuration,
-                            mode=plan.mode,
-                            starting_checkpoint=plan.starting_checkpoint,
-                        ),
-                    )
+                cycle = await self.fresh_full(cycle)
         raise AssertionError("Unreachable checkpoint recovery")
+
+    async def fresh_full(self, previous: CaptureCycle) -> CaptureCycle:
+        """Explicit full requests and native expiry share the same exact-cycle restart."""
+        if not isinstance(self.source, CheckpointedPageSource):
+            raise CycleConflict("Source has no checkpoint recovery contract")
+        plan = await self.source.prepare_cycle(None)
+        if plan.mode != "full":
+            raise CycleConflict("Checkpoint recovery requires a fresh full capture")
+        async with self.sessions() as db:
+            current = await self.service.read_cycle(db, self.fence)
+            if current is None or current.version.cycle_id != previous.version.cycle_id:
+                raise CycleConflict("Cycle changed during checkpoint recovery")
+            return await self.service.restart_cycle(
+                db,
+                RestartCycle(
+                    fence=self.fence,
+                    expected=current.version,
+                    configuration=self.source.capture_cycle_configuration,
+                    mode=plan.mode,
+                    starting_checkpoint=plan.starting_checkpoint,
+                ),
+            )
 
     async def run_cycle(self, cycle: CaptureCycle) -> CaptureCycle:
         """Process the current frontier; every acknowledgement remains in the existing SQL store."""

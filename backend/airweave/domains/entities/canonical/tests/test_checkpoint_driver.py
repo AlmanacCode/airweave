@@ -251,3 +251,46 @@ async def test_exhaustive_known_validation_is_enforced_by_sql(database, source):
             ),
         )
     assert result.state.phase == "complete" and result.capture.changes == ()
+
+
+@pytest.mark.parametrize("force_flag", ["force_full_sync", "skip_load"])
+async def test_explicit_full_sync_restarts_delta_but_completed_job_retry_is_idempotent(
+    database, source, force_flag
+):
+    from airweave.domains.entities.canonical.cycle_models import BeginCycle
+
+    connector = NativeFixture()
+    ctx, runtime, capture = pipeline(database, source, connector)
+    await capture.start(ctx)
+    await capture.run_scans(ctx, runtime, AsyncMock())
+    await capture.save_checkpoint(ctx, runtime)
+    service, fence = source
+    async with database() as db:
+        before = await service.read_cycle(db, fence)
+        delta = await service.begin_cycle(
+            db,
+            BeginCycle(
+                fence=fence,
+                configuration=connector.capture_cycle_configuration,
+                expected=before.version,
+                mode="changes",
+            ),
+        )
+    ctx, runtime, capture = pipeline(database, source, connector, attempt=2)
+    ctx.force_full_sync = force_flag == "force_full_sync"
+    ctx.execution_config.cursor.skip_load = force_flag == "skip_load"
+    await capture.start(ctx)
+    await capture.run_scans(ctx, runtime, AsyncMock())
+    await capture.save_checkpoint(ctx, runtime)
+    async with database() as db:
+        completed = await service.read_cycle(db, capture._writer())
+    assert completed.mode == "full" and completed.version.cycle_id != delta.version.cycle_id
+    assert completed.starting_checkpoint.value == {"start": "2"}
+    pages = len(connector.pages)
+    ctx, runtime, capture = pipeline(database, source, connector, attempt=3)
+    ctx.force_full_sync = force_flag == "force_full_sync"
+    ctx.execution_config.cursor.skip_load = force_flag == "skip_load"
+    await capture.start(ctx)
+    await capture.run_scans(ctx, runtime, AsyncMock())
+    await capture.save_checkpoint(ctx, runtime)
+    assert len(connector.pages) == pages and len(connector.plans) == 2

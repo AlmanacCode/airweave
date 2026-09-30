@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from airweave.domains.entities.canonical.page_source import InvalidScanContinuation
 from airweave.platform.sources.gmail_capture import BASE, GmailCapture, parse_history_page
 from airweave.platform.sources.http_helpers import raise_for_status
-from airweave.platform.sources.tests.test_gmail_capture import Provider, cursor, message
+from airweave.platform.sources.tests.test_gmail_capture import Provider, message
 
 
 def history(ids, **extra):
@@ -117,18 +117,7 @@ async def test_non_missing_errors_propagate_from_message_and_history(status):
     with pytest.raises(type(error)):
         await capture.hydrate_history_page(parse_history_page(history(["a"])))
     with pytest.raises(type(error)):
-        await capture.saved_history(cursor(history_id="opaque", canonical_query=""))
-
-
-@pytest.mark.asyncio
-async def test_legacy_stale_history_handles_actual_translated_404():
-    provider = Provider([("/history", translated_error(404))])
-    assert (
-        await GmailCapture(provider.get, None).saved_history(
-            cursor(history_id="opaque", canonical_query="")
-        )
-        is None
-    )
+        await capture.history_page("opaque")
 
 
 @pytest.mark.asyncio
