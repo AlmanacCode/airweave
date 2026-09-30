@@ -12,6 +12,7 @@ from pydantic import (
     Field,
     JsonValue,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -68,6 +69,23 @@ class BlobReference(BaseModel):
         default=None, description="RFC 6901 JSON Pointer into the unchanged native payload"
     )
 
+    role: Literal["representation_manifest"] | None = None
+
+    @model_validator(mode="after")
+    def manifest_is_not_native_location(self) -> "BlobReference":
+        """A representation manifest is provenance, not part of the provider payload."""
+        if self.role is not None and self.source_path is not None:
+            raise ValueError("Representation manifests cannot have a native source path")
+        return self
+
+    @model_serializer(mode="wrap")
+    def historical_descriptor(self, handler):
+        """Preserve historical hashes without dropping unrelated nullable fields."""
+        value = handler(self)
+        if self.role is None:
+            value.pop("role", None)
+        return value
+
 
 class CaptureRecord(BaseModel):
     """One current provider observation; sparse deletions are valid records."""
@@ -112,6 +130,8 @@ class CaptureRecord(BaseModel):
     @model_validator(mode="after")
     def validate_removal(self) -> "CaptureRecord":
         """Keep provider deletion distinct from inaccessible or deselected scope."""
+        if sum(blob.role == "representation_manifest" for blob in self.blobs) > 1:
+            raise ValueError("A record can retain at most one representation manifest")
         if self.kind == "delete" and self.removal_reason is None:
             raise ValueError("delete observations require removal_reason")
         if self.kind == "upsert" and self.removal_reason is not None:
