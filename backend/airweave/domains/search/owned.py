@@ -12,6 +12,10 @@ from airweave.api.context import ApiContext
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
 from airweave.domains.entities.canonical.projection_store import publication_matches
 from airweave.domains.entities.canonical.requests import RecordIdentity
+from airweave.domains.entities.canonical.search_metadata import (
+    SEARCH_METADATA_PIPELINE_VERSION,
+    epoch_microseconds,
+)
 from airweave.domains.entities.canonical.store import content_is_available
 from airweave.domains.search.owned_models import (
     OwnedSearchCoverage,
@@ -42,6 +46,22 @@ class OwnedSearchService:
     ) -> OwnedSearchResponse:
         """Resolve exact authorized scopes before any embedding/index request."""
         scopes, groups = await self._resolve_scopes(db, ctx, request)
+        if self._filtered(request):
+            versions = (
+                await db.scalars(
+                    select(Sync.index_pipeline_version).where(
+                        Sync.organization_id == ctx.organization.id, Sync.id.in_(request.sync_ids)
+                    )
+                )
+            ).all()
+            if any(version < SEARCH_METADATA_PIPELINE_VERSION for version in versions):
+                raise HTTPException(
+                    409,
+                    {
+                        "code": "reindex_required",
+                        "message": "Selected sources need canonical search metadata re-projection",
+                    },
+                )
         scope_snapshot = self._scope_identity(scopes)
         hits, scores, exclusions, postfiltered = {}, {}, 0, 0
         engine_partial, full = False, False
@@ -53,17 +73,7 @@ class OwnedSearchService:
                     offset=0,
                     retrieval_strategy=request.mode,
                 ),
-                user_filter=[
-                    FilterGroup(
-                        conditions=[
-                            FilterCondition(
-                                field="airweave_system_metadata.sync_id",
-                                operator="in",
-                                value=[str(item) for item in sync_ids],
-                            )
-                        ]
-                    )
-                ],
+                user_filter=[FilterGroup(conditions=self._prefilters(request, sync_ids))],
                 collection_id=str(collection_id),
                 db=db,
                 ctx=ctx,
@@ -101,6 +111,56 @@ class OwnedSearchService:
             or len(ranked) > request.limit
             or any(row.pending_records for row in sources),
         )
+
+    @staticmethod
+    def _filtered(request: OwnedSearchRequest) -> bool:
+        return bool(
+            request.record_types
+            or request.created_after
+            or request.created_before
+            or request.updated_after
+            or request.updated_before
+        )
+
+    @staticmethod
+    def _prefilters(request: OwnedSearchRequest, sync_ids: list[UUID]) -> list[FilterCondition]:
+        conditions = [
+            FilterCondition(
+                field="airweave_system_metadata.sync_id",
+                operator="in",
+                value=[str(item) for item in sync_ids],
+            )
+        ]
+        if request.record_types:
+            conditions.append(
+                FilterCondition(
+                    field="airweave_system_metadata.canonical_record_type",
+                    operator="in",
+                    value=list(request.record_types),
+                )
+            )
+        for name, after, before in (
+            ("created", request.created_after, request.created_before),
+            ("updated", request.updated_after, request.updated_before),
+        ):
+            if after is not None or before is not None:
+                conditions.append(
+                    FilterCondition(
+                        field=f"airweave_system_metadata.source_{name}_known",
+                        operator="equals",
+                        value=1,
+                    )
+                )
+            for boundary, operator in ((after, "greater_than_or_equal"), (before, "less_than")):
+                if boundary is not None:
+                    conditions.append(
+                        FilterCondition(
+                            field=f"airweave_system_metadata.source_{name}_us",
+                            operator=operator,
+                            value=epoch_microseconds(boundary),
+                        )
+                    )
+        return conditions
 
     async def _resolve_scopes(
         self, db: AsyncSession, ctx: ApiContext, request: OwnedSearchRequest

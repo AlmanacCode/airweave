@@ -48,6 +48,6 @@ test-health:
 
 test-index:
 	@test "$$OWNED_VESPA_TEST" = 1 || (echo 'Set OWNED_VESPA_TEST=1 only for a disposable Vespa at localhost:8081/19071; this deploys schemas.' >&2; exit 1)
-	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false tests/integration/test_owned_vespa.py airweave/domains/entities/canonical/tests/test_real_vespa_projection.py
+	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false tests/integration/test_owned_vespa.py tests/integration/test_canonical_search_prefilters.py airweave/domains/entities/canonical/tests/test_real_vespa_projection.py
 
 check: test-store test-capture test-search test-auth test-health

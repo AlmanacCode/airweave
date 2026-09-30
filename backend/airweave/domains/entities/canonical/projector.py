@@ -1,6 +1,6 @@
 """Bounded original-record projection using existing conversion/embed/feed primitives."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from uuid import UUID, uuid4
@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.core.logging import ContextualLogger
+from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionBatchResult,
     ProjectionDocument,
@@ -16,11 +17,12 @@ from airweave.domains.entities.canonical.projection_models import (
     scope_projection_document_id,
 )
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
+from airweave.domains.entities.canonical.search_metadata import stamp_search_metadata
 from airweave.domains.storage.protocols import StorageBackend
 from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
 from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
 from airweave.platform.destinations.vespa.destination import VespaDestination
-from airweave.platform.entities._base import AirweaveSystemMetadata
+from airweave.platform.entities._base import AirweaveSystemMetadata, BaseEntity
 
 
 @dataclass
@@ -45,6 +47,14 @@ class ProjectionRuntime:
     """Only processing diagnostics are required; source runtime is not recreated."""
 
     entity_tracker: StrictProjectionTracker
+
+
+def _stamp_chunks(chunks: Iterable[BaseEntity], record: SourceRecord) -> None:
+    """Conversion cannot replace the source-owned searchable metadata."""
+    for chunk in chunks:
+        if chunk.airweave_system_metadata is None:
+            raise ValueError("Projection chunk lost canonical metadata")
+        stamp_search_metadata(chunk.airweave_system_metadata, record)
 
 
 class CanonicalProjector:
@@ -103,12 +113,14 @@ class CanonicalProjector:
                     meta.sync_id = work.record.sync_id
                     meta.sync_job_id = None
                     meta.db_entity_id = work.record.id
+                    stamp_search_metadata(meta, work.record)
                 chunks = await self._processor.process(
                     list(mapped),
                     ProjectionContext(logger, source_name),
                     ProjectionRuntime(StrictProjectionTracker()),
                     strict=True,
                 )
+                _stamp_chunks(chunks, work.record)
                 prepared = destination.prepare_documents(chunks)
                 for group in prepared.values():
                     for document in group:

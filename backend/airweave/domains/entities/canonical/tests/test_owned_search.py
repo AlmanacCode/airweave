@@ -23,6 +23,7 @@ from airweave.domains.search.owned import OwnedSearchService
 from airweave.domains.search.types import SearchResults
 from airweave.models.collection import Collection
 from airweave.models.source_connection import SourceConnection
+from airweave.models.sync import Sync
 from airweave.models.vector_db_deployment_metadata import VectorDbDeploymentMetadata
 
 
@@ -54,6 +55,11 @@ async def indexed(database, source):
         )
         db.add(connection)
         await db.commit()
+    async with database() as db:
+        await db.execute(
+            update(Sync).where(Sync.id == fence.sync_id).values(index_pipeline_version=2)
+        )
+        await db.commit()
     store = CanonicalProjectionStore()
     async with database() as db:
         work = (await store.pending(db, fence.organization_id, fence.sync_id))[0]
@@ -63,7 +69,7 @@ async def indexed(database, source):
     locator = ProjectionLocator(
         record_id=work.record.id,
         revision=1,
-        pipeline_version=1,
+        pipeline_version=2,
         generation=generation,
         part_index=0,
     )
@@ -398,3 +404,43 @@ async def test_email_route_uses_visible_canonical_provider_payload(
     )
     assert response.status_code == 200, response.text
     assert response.json()["items"][0]["email_thread_id"] == expected
+
+
+async def test_filtered_search_requires_explicit_reprojection(database, indexed, http_search):
+    fence, _, _ = indexed
+    client, vector, _, _, _ = http_search
+    async with database() as db:
+        await db.execute(
+            update(Sync).where(Sync.id == fence.sync_id).values(index_pipeline_version=1)
+        )
+        await db.commit()
+    result = await client.post(
+        "/sync/search",
+        json={"query": "budget", "sync_ids": [str(fence.sync_id)], "record_types": ["event"]},
+    )
+    assert result.status_code == 409
+    assert result.json()["detail"]["code"] == "reindex_required"
+    assert vector._calls == []
+
+
+async def test_dates_and_types_prefilter_before_candidate_limit(indexed, http_search):
+    fence, _, _ = indexed
+    client, vector, _, _, _ = http_search
+    response = await client.post(
+        "/sync/search",
+        json={
+            "query": "budget",
+            "sync_ids": [str(fence.sync_id)],
+            "mode": "keyword",
+            "record_types": ["event"],
+            "created_after": "2026-01-01T00:00:00.000001Z",
+            "updated_before": "2026-02-01T00:00:00Z",
+        },
+    )
+    assert response.status_code == 200, response.text
+    conditions = vector._calls[0][1].filter_groups[0].conditions
+    by_field = {condition.field.value: condition.value for condition in conditions}
+    assert by_field["airweave_system_metadata.canonical_record_type"] == ["event"]
+    assert by_field["airweave_system_metadata.source_created_known"] == 1
+    assert by_field["airweave_system_metadata.source_created_us"] == 1767225600000001
+    assert by_field["airweave_system_metadata.source_updated_known"] == 1
