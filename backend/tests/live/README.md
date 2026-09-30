@@ -322,7 +322,7 @@ A source with fewer than five discoverable meetings, many body ranges, changed i
 rate failure or exhausted budget can leave the proof inconclusive. Without the opt-in
 flag, Wispr retains its ordinary first/second-cycle trial; that is not a recovery proof.
 Offline PostgreSQL/subprocess tests verify the actual process exits and fresh retry,
-failed-body stop, and aggregate budget. No live recovery result is claimed here.
+failed-body stop, and aggregate budget. The subsequent live result is recorded below.
 
 Live checkpoint, 2026-09-30 (`cf14b4e`): the pipeline constructor had discarded
 `completion_policies` while checking topology; the fix preserves the source policy
@@ -345,3 +345,22 @@ requests total; a body requiring4 calls needs21 and must stop under the current 
 Inventory and range sizes can change, and prior rate failures provide no reliable
 reset interval. Keep the current20 maximum and180-second deadline; do not automatically
 raise limits or rerun after a failure. No further live requests were made for this note.
+
+
+**Latest live result, 2026-09-30: recovery verified.** A separate fresh20-request,
+180-second trial59141 ran immutable `2318901`. First stage:10 HTTP requests,
+256 observations, three completed meeting bodies, intentional exit75. Fresh
+same-job process:8 HTTP requests,254 observations, one additional body committed,
+intentional exit76 with `wispr_recovery_verified=true`. Aggregate:18 requests and
+510 observations. These observations include repeated listing inventory, not510
+unique meetings. The prior three body scopes retained the same cycle/revisions;
+the probe rejected any attempt to fetch their identities again.
+
+This proves per-meeting recovery through the actual source/orchestrator/store,
+not a full-source traversal, new-cycle refresh, exhaustive discovery, deletion
+handling or Almanac owner attestation. A failed meeting may repeat its own ranges;
+all bodies remain partial because provider raw editor data is unavailable.
+Parent independently verified zero live schemas and private-live directories and
+removed the immutable code archive. The earlier20-request failed batch remains
+historical evidence; this successful trial had its own20-request cap. Safe results:
+[evidence](evidence/wispr-recovery-20260930.json), committed `78e7f37`.
