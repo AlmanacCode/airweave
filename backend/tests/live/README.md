@@ -410,7 +410,7 @@ the production projector/converters, real local MiniLM/BM25 embeddings, and Vesp
 The default `canonical_capture.py` still always removes its schema/files. This
 separate evaluation command requires the same private `sync_tests` Unix socket,
 provider environment, and additionally `LIVE_DRIVE_PERMISSION_ID`. Each provider
-trial is bounded to 180 requests, 250 records, 180 seconds and 50 MiB of blob writes;
+trial is bounded to 180 requests, 500 records, 180 seconds and 50 MiB of blob writes;
 one file is bounded to 10 MiB. Gmail uses `newer_than:1d smaller:100K`. Committed
 pages remain searchable if a later page hits a bound; interrupted capture is explicit
 in the printed lifecycle evidence and must not be represented as a complete sync.
@@ -467,3 +467,29 @@ records without provider access. It traverses all pending pages once; failures s
 pending and are reported, rather than being silently marked indexed. The service
 reads current SQL publication state, so reprojection becomes visible without an API
 restart.
+
+
+`evaluation.py extend --directory SAME_DIRECTORY --provider google_calendar|slack`
+adds one native-attested source while preserving existing keys and source identities.
+Extensions run sequentially because the private manifest has one owner. Calendar
+uses its verified primary ID and a seven-day occurrence materialization window;
+original masters are also retained by the production connector. Slack uses the
+verified workspace/user pair, with `external_user_id` retained for the Almanac binding.
+Source construction starts at the current canonical search metadata pipeline version;
+older retained trials upgrade using `plan_reprojection` followed by `project`.
+
+The Calendar trial retained 183 visible originals (190 observations including removals)
+and projected every record. The Slack trial stopped at its record budget after 56
+requests: 460 committed originals were all projected, with capture still explicitly
+active/incomplete. Wispr's separate private broker-attested trial stopped on an upstream
+tool error with a rate signal after 18 requests/284 observations; no native account
+identity or Almanac binding is claimed for it.
+
+Drive's second bounded trial resumed the same unfinished full-scan cursor with a
+200 MiB file/512 MiB total blob limit after checking at least 10 GiB free disk. It
+retained 14 PDFs among the captured originals. The source job completed and SQL showed
+a complete full cycle with a promoted checkpoint. The former live-helper assertion
+incorrectly assumed any loaded cursor implies a changes pass; it now distinguishes
+unfinished full-scan continuation from subsequent/resumed changes while still requiring
+checkpoint promotion. This was a harness assertion failure, separately recorded from
+the actual completed source job. PDF text/read verification remains a separate check.

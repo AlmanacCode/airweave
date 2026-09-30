@@ -88,3 +88,41 @@ async def test_drive_lifecycle_initial_then_fresh_process_changes(database, sour
     assert first["resumed_changes_requests"] == 0 and second["resumed_changes_requests"] == 1
     assert first["observed_change_sequence"] == second["observed_change_sequence"]
     assert first["payload_revision_digest"] == second["payload_revision_digest"]
+
+
+async def test_checkpoint_validation_distinguishes_full_resume_from_changes():
+    code, output, error = await subprocess_script(
+        r"""
+import sys
+from types import SimpleNamespace
+sys.path.insert(0, 'tests/live')
+import provider_lifecycle as lifecycle
+attempt = SimpleNamespace(id="attempt")
+for prior_phase, prior_mode, final_mode, changes_requests in (
+    ("active", "full", "full", 0),
+    ("complete", "full", "changes", 1),
+    ("active", "changes", "changes", 1),
+):
+    previous = {"canonical_cycle": {"phase": prior_phase, "mode": prior_mode}}
+    saved = {
+        "canonical_cycle": {"phase": "complete", "mode": final_mode,
+            "completed_job_id": "job", "last_full_capture": {"cycle_id": "full"},
+            "promoted_checkpoint": {"checkpoint": {"value": {"page_token": "next"}}}},
+        "canonical_checkpoint": {"writer_attempt_id": "attempt", "observed_change_sequence": 4},
+    }
+    counters = {"started": 0, "completed": 0, "resumed_changes_requests": changes_requests}
+    lifecycle.validate_checkpoint("google_drive", {}, counters, saved, previous, True, attempt, 4)
+# Loading a prior cursor must not excuse a missing promotion after completion.
+saved["canonical_cycle"]["promoted_checkpoint"] = None
+try:
+    lifecycle.validate_checkpoint("google_drive", {}, counters, saved, previous, True, attempt, 4)
+except AssertionError:
+    pass
+else:
+    raise AssertionError("Missing checkpoint promotion was accepted")
+print("checkpoint modes verified")
+""",
+        {},
+    )
+    assert code == 0, output + error
+    assert "checkpoint modes verified" in output

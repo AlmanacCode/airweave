@@ -247,9 +247,15 @@ def validate_checkpoint(name, manifest, counters, saved, previous, loaded, attem
         assert cycle["phase"] == "complete" and cycle["completed_job_id"]
         assert cycle["last_full_capture"] and cycle["promoted_checkpoint"]
         assert cycle["promoted_checkpoint"]["checkpoint"]["value"]["page_token"]
-        assert cycle["mode"] == ("changes" if loaded else "full")
+        previous_cycle = previous.get("canonical_cycle", {})
+        changes_expected = loaded and (
+            previous_cycle.get("phase") == "complete" or previous_cycle.get("mode") == "changes"
+        )
+        # A durable cursor can also be an unfinished full enumeration. Loading it
+        # resumes full capture; it is not evidence that a changes pass began.
+        assert cycle["mode"] == ("changes" if changes_expected else "full")
         assert counters["started"] == counters["completed"] == 0
-        assert bool(counters["resumed_changes_requests"]) == loaded
+        assert bool(counters["resumed_changes_requests"]) == changes_expected
     elif name in {"slack", "wispr"}:
         assert saved["canonical_cycle"]["phase"] == "complete"
         assert saved["canonical_cycle"]["completed_job_id"]
