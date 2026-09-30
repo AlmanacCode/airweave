@@ -3,13 +3,16 @@ BACKEND := backend
 PYTHON := .venv/bin/python
 PYTEST := .venv/bin/pytest
 
-.PHONY: help setup test-store test-capture test-search validate-deploy
+.PHONY: help setup check test-store test-capture test-search test-auth test-index validate-deploy
 
 help:
 	@echo 'setup         Install the locked backend and development dependencies'
 	@echo 'test-store    Verify record transactions and publication on disposable PostgreSQL'
 	@echo 'test-capture  Verify source capture, transport and blob handling'
 	@echo 'test-search   Verify search services and visibility behavior'
+	@echo 'test-auth     Verify service-key and source authorization boundaries'
+	@echo 'test-index    Deploy/test schemas on explicitly disposable local Vespa'
+	@echo 'check         Run store, capture, search and authentication checks'
 	@echo 'validate-deploy Validate the Porter application manifest locally (no deployment)'
 	@echo ''
 	@echo 'test-store requires CANONICAL_TEST_DATABASE_URL; it creates and removes test schemas.'
@@ -30,3 +33,12 @@ test-capture:
 
 test-search:
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/search
+
+test-auth:
+	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/api/tests/test_service_auth.py airweave/api/tests/test_sync_authorization.py airweave/api/tests/test_context_resolver_auth.py
+
+test-index:
+	@test "$$OWNED_VESPA_TEST" = 1 || (echo 'Set OWNED_VESPA_TEST=1 only for a disposable Vespa at localhost:8081/19071; this deploys schemas.' >&2; exit 1)
+	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false tests/integration/test_owned_vespa.py
+
+check: test-store test-capture test-search test-auth

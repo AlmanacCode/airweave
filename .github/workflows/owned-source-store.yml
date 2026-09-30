@@ -69,11 +69,12 @@ jobs:
         run: make test-capture
       - name: Verify indexed retrieval and visibility
         run: make test-search
+      - name: Verify service authentication
+        run: make test-auth
       - name: Record tested Vespa image
         run: docker image inspect vespaengine/vespa:8 --format '{{json .RepoDigests}}'
       - name: Verify real Vespa schema and retrieval
-        working-directory: backend
         env:
           OWNED_VESPA_TEST: '1'
           EMBEDDING_DIMENSIONS: '384'
-        run: .venv/bin/pytest -q -o log_cli=false tests/integration/test_owned_vespa.py
+        run: make test-index
