@@ -87,6 +87,50 @@ def seed_legacy(connection):
     )
 
 
+def seed_flat_visibility(connection):
+    """Canonical flat states from schema0005, including already withdrawn content."""
+    import json
+
+    from sqlalchemy import MetaData, Table
+
+    table = Table("entity", MetaData(), autoload_with=connection)
+    existing = connection.execute(
+        text("SELECT organization_id,sync_id,sync_job_id FROM entity LIMIT 1")
+    ).one()
+    now = datetime.now(timezone.utc)
+    for native, parent, reason in (
+        ("active-root", None, None),
+        ("withdrawn-root", None, "access_revoked"),
+        ("active-child", "active-root", None),
+        ("withdrawn-child", "active-root", "scope_removed"),
+        ("hidden-child", "withdrawn-root", None),
+        ("orphan", "missing", None),
+    ):
+        connection.execute(
+            table.insert().values(
+                id=uuid4(),
+                organization_id=existing.organization_id,
+                sync_id=existing.sync_id,
+                sync_job_id=existing.sync_job_id,
+                entity_id=json.dumps([None, native], separators=(",", ":")),
+                entity_definition_short_name="block",
+                native_id=native,
+                parent_record_type="block" if parent else None,
+                parent_native_id=parent,
+                source_payload={"native": native},
+                record_revision=1,
+                hash="unchanged",
+                capture_hash="unchanged",
+                completeness="complete",
+                observed_at=now,
+                deleted_at=now if reason else None,
+                removal_reason=reason,
+                created_at=now.replace(tzinfo=None),
+                modified_at=now.replace(tzinfo=None),
+            )
+        )
+
+
 @pytest.fixture
 async def database(request):
     """Every test gets its own schema; no global application DSN is consulted."""
@@ -101,13 +145,16 @@ async def database(request):
     try:
         async with engine.begin() as connection:
             await connection.run_sync(migrate, "0000_baseline.py")
-            if getattr(request, "param", None) == "legacy":
+            if getattr(request, "param", None) in ("legacy", "forest_upgrade"):
                 await connection.run_sync(seed_legacy)
             await connection.run_sync(migrate, "0001_canonical_records.py")
             await connection.run_sync(migrate, "0002_projection_publication.py")
             await connection.run_sync(migrate, "0003_mail_thread_index.py")
             await connection.run_sync(migrate, "0004_projection_generation.py")
             await connection.run_sync(migrate, "0005_capture_scan.py")
+            if getattr(request, "param", None) == "forest_upgrade":
+                await connection.run_sync(seed_flat_visibility)
+            await connection.run_sync(migrate, "0006_record_visibility.py")
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()

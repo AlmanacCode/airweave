@@ -5,7 +5,8 @@ import json
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, exists, or_, select, update
+from sqlalchemy import and_, any_, exists, func, literal, not_, or_, select, update
+from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -103,19 +104,79 @@ def source_record(entity: Entity) -> SourceRecord:
     )
 
 
+def ancestor_chain(subject=Entity):
+    """Finite scoped ancestor walk; repeated UUIDs stop corrupt record cycles."""
+    parent = aliased(Entity)
+    available = and_(
+        parent.record_revision > 0,
+        parent.deleted_at.is_(None),
+        or_(
+            parent.removal_reason.is_(None),
+            parent.removal_reason.not_in(("scope_removed", "access_revoked")),
+        ),
+    )
+    chain = (
+        select(
+            parent.id,
+            parent.organization_id,
+            parent.sync_id,
+            parent.parent_record_type,
+            parent.parent_native_id,
+            parent.parent_container_id,
+            parent.parent_visibility_epoch,
+            parent.removal_reason,
+            array([parent.id]).label("path"),
+            literal(False).label("cycle"),
+            and_(available, parent.visibility_epoch == subject.parent_visibility_epoch).label(
+                "valid"
+            ),
+        )
+        .where(
+            parent.organization_id == subject.organization_id,
+            parent.sync_id == subject.sync_id,
+            parent.entity_definition_short_name == subject.parent_record_type,
+            parent.native_id == subject.parent_native_id,
+            parent.container_id.is_not_distinct_from(subject.parent_container_id),
+        )
+        .correlate(subject)
+        .cte(recursive=True, nesting=True)
+    )
+    return chain.union_all(
+        select(
+            parent.id,
+            parent.organization_id,
+            parent.sync_id,
+            parent.parent_record_type,
+            parent.parent_native_id,
+            parent.parent_container_id,
+            parent.parent_visibility_epoch,
+            parent.removal_reason,
+            chain.c.path + array([parent.id]),
+            (parent.id == any_(chain.c.path)).label("cycle"),
+            and_(
+                chain.c.valid, available, parent.visibility_epoch == chain.c.parent_visibility_epoch
+            ),
+        )
+        .join(
+            chain,
+            and_(
+                parent.organization_id == chain.c.organization_id,
+                parent.sync_id == chain.c.sync_id,
+                parent.entity_definition_short_name == chain.c.parent_record_type,
+                parent.native_id == chain.c.parent_native_id,
+                parent.container_id.is_not_distinct_from(chain.c.parent_container_id),
+            ),
+        )
+        .where(not_(chain.c.cycle))
+    )
+
+
 def active_parent_exists():
-    """Root container visibility; caller still supplies tenant/sync authorization."""
-    parent = aliased(Entity, name="canonical_parent")
+    """All parent attestations must reach an available root without a record cycle."""
+    chain = ancestor_chain()
     return exists(
-        select(parent.id).where(
-            parent.organization_id == Entity.organization_id,
-            parent.sync_id == Entity.sync_id,
-            parent.entity_definition_short_name == Entity.parent_record_type,
-            parent.native_id == Entity.parent_native_id,
-            parent.container_id.is_not_distinct_from(Entity.parent_container_id),
-            parent.record_revision > 0,
-            parent.deleted_at.is_(None),
-            parent.parent_record_type.is_(None),
+        select(chain.c.id).where(
+            chain.c.parent_record_type.is_(None), chain.c.valid, not_(chain.c.cycle)
         )
     ).correlate(Entity)
 
@@ -236,6 +297,45 @@ class CanonicalRecordStore:
         sync = await self._fenced_sync(db, batch.fence)
         return await self._capture_locked(db, sync, batch)
 
+    async def _parent_attestation(
+        self, db: AsyncSession, sync: Sync, observation: CaptureRecord, entity: Entity | None
+    ) -> int | None:
+        """Resolve provider parent identity only inside the source writer transaction."""
+        if observation.parent is None:
+            return None
+        parent_identity = observation.parent
+        if observation.identity == parent_identity:
+            raise CanonicalStoreError("A record cannot parent itself")
+        parent = await db.scalar(
+            select(Entity).where(
+                Entity.organization_id == sync.organization_id,
+                Entity.sync_id == sync.id,
+                Entity.entity_definition_short_name == parent_identity.record_type,
+                Entity.entity_id == parent_identity.entity_key,
+                Entity.record_revision > 0,
+            )
+        )
+        if observation.kind == "delete" and parent is None:
+            return None
+        if parent is None:
+            raise CanonicalStoreError("Capture parent must exist before its child")
+        if entity is not None:
+            chain = ancestor_chain()
+            contains_child = exists(select(chain.c.id).where(chain.c.id == entity.id)).correlate(
+                Entity
+            )
+            cycles = await db.scalar(select(contains_child).where(Entity.id == parent.id))
+            if cycles:
+                raise CanonicalStoreError("Record parent would create a cycle")
+        if observation.kind == "delete" and entity is not None:
+            return entity.parent_visibility_epoch
+        available = await db.scalar(select(content_is_available()).where(Entity.id == parent.id))
+        if parent.deleted_at is not None or not available:
+            if observation.kind == "delete":
+                return None
+            raise CanonicalStoreError("Capture parent is unavailable")
+        return parent.visibility_epoch
+
     async def _capture_locked(
         self, db: AsyncSession, sync: Sync, batch: CaptureBatch, *, seen_id: UUID | None = None
     ) -> CaptureResult:
@@ -255,8 +355,35 @@ class CanonicalRecordStore:
                     .execution_options(populate_existing=True)
                 )
             ).scalar_one_or_none()
+            parent_epoch = await self._parent_attestation(db, sync, observation, entity)
             fingerprint = capture_fingerprint(observation)
-            if entity is not None and entity.capture_hash == fingerprint:
+            was_available = (
+                (await db.scalar(select(content_is_available()).where(Entity.id == entity.id)))
+                if entity is not None
+                else True
+            )
+            was_deleted = entity is not None and entity.deleted_at is not None
+            parent_changed = entity is not None and (
+                (entity.parent_record_type, entity.parent_native_id, entity.parent_container_id)
+                != (
+                    (
+                        observation.parent.record_type,
+                        observation.parent.native_id,
+                        observation.parent.container_id,
+                    )
+                    if observation.parent
+                    else (None, None, None)
+                )
+            )
+            attestation_changed = (
+                entity is not None and entity.parent_visibility_epoch != parent_epoch
+            )
+            if (
+                entity is not None
+                and entity.capture_hash == fingerprint
+                and not attestation_changed
+                and not (observation.kind == "upsert" and not was_available)
+            ):
                 entity.last_seen_run_id = seen_id or batch.fence.attempt_id
                 entity.observed_at = observation.observed_at
                 unchanged += 1
@@ -269,8 +396,14 @@ class CanonicalRecordStore:
                     entity_id=identity.entity_key,
                     entity_definition_short_name=identity.record_type,
                     record_revision=0,
+                    visibility_epoch=1,
                 )
                 db.add(entity)
+            if observation.kind == "upsert" and (
+                was_deleted or not was_available or parent_changed
+            ):
+                entity.visibility_epoch += 1
+            entity.parent_visibility_epoch = parent_epoch
             entity.sync_job_id = batch.fence.job_id
             entity.native_id = identity.native_id
             entity.container_id = identity.container_id
@@ -464,16 +597,15 @@ class CanonicalRecordStore:
         observations = []
         for entity in rows[:limit]:
             record = source_record(entity)
-            reason = await db.scalar(
-                select(Entity.removal_reason).where(
-                    Entity.organization_id == fence.organization_id,
-                    Entity.sync_id == fence.sync_id,
-                    Entity.entity_definition_short_name == record.parent.record_type,
-                    Entity.native_id == record.parent.native_id,
-                    Entity.container_id.is_not_distinct_from(record.parent.container_id),
-                    Entity.record_revision > 0,
-                )
+            chain = ancestor_chain()
+            nearest_reason = (
+                select(chain.c.removal_reason)
+                .where(chain.c.removal_reason.in_(("access_revoked", "scope_removed")))
+                .order_by(func.cardinality(chain.c.path))
+                .limit(1)
+                .scalar_subquery()
             )
+            reason = await db.scalar(select(nearest_reason).where(Entity.id == entity.id))
             observations.append(
                 CaptureRecord(
                     identity=record.identity,
