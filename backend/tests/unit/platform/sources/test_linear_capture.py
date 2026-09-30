@@ -460,3 +460,57 @@ async def test_file_storage_failure_prevents_page_success():
             ScanContinuation(),
             files=files,
         )
+
+
+class _UnreadErrorBody(httpx.AsyncByteStream):
+    def __init__(self):
+        self.read_count = 0
+        self.closed = False
+
+    async def __aiter__(self):
+        self.read_count += 1
+        raise AssertionError("Error response body must not be drained")
+        yield b"private error detail"  # pragma: no cover
+
+    async def aclose(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [302, 401, 429])
+async def test_unread_stream_error_keeps_status_closes_and_never_stores(status):
+    from airweave.domains.sources.exceptions import SourceAuthError
+    from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+
+    body = _UnreadErrorBody()
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(
+            status,
+            stream=body,
+            headers={"Retry-After": "61", "Location": "https://external.example/"},
+        )
+
+    capture, _ = await source()
+    logger = MagicMock()
+    files = AsyncMock()
+    original = {**node(UUID(int=5)), "url": "https://uploads.linear.app/a?signed=private-value"}
+    expected = {302: SourceError, 401: SourceAuthError, 429: SourceRateLimitError}[status]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        capture._http_client = AirweaveHttpClient(
+            client, org_id=UUID(int=1), source_short_name="linear", logger=logger
+        )
+        with pytest.raises(expected) as error:
+            await capture._retain(
+                CompletedScope(record_type="attachment", container_id=str(ISSUE)), original, files
+            )
+    if status == 429:
+        assert error.value.retry_after == 61
+    if status == 401:
+        assert error.value.status_code == 401
+    assert len(requests) == 1 and body.closed and body.read_count == 0
+    files.store_canonical_blob.assert_not_called()
+    assert "private-value" not in str(logger.debug.call_args_list)
+    assert "private error detail" not in str(logger.debug.call_args_list)
