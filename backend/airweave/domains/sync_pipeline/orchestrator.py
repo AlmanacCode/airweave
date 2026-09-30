@@ -664,6 +664,8 @@ class SyncOrchestrator:
                 f"Failed to save cursor data for sync {self.sync_context.sync.id}: {e}",
                 exc_info=True,
             )
+            # A run without its durable continuation boundary is not complete.
+            raise
 
     async def _handle_sync_failure(
         self, error: Exception

@@ -468,3 +468,31 @@ class TestRunWrapsClassifiedErrors:
         ):
             with pytest.raises(RuntimeError, match="redis down"):
                 await orc.run()
+
+
+async def test_checkpoint_failure_prevents_completed_transition():
+    """A successfully processed stream is incomplete if checkpoint persistence fails."""
+    service = MagicMock()
+    service.create_or_update_cursor = AsyncMock(side_effect=ConnectionError("database unavailable"))
+    state_machine = MagicMock()
+    state_machine.transition = AsyncMock()
+    ctx = _make_sync_context()
+    ctx.execution_config = None
+    runtime = MagicMock()
+    runtime.cursor = SimpleNamespace(cursor_data={"history_id": "42"}, cursor_field=None)
+    orch = _make_orchestrator(
+        sync_context=ctx,
+        runtime=runtime,
+        sync_cursor_service=service,
+        state_machine=state_machine,
+    )
+    db_context = MagicMock()
+    db_context.__aenter__ = AsyncMock(return_value=MagicMock())
+    db_context.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "airweave.domains.sync_pipeline.orchestrator.get_db_context", return_value=db_context
+    ):
+        with pytest.raises(ConnectionError, match="database unavailable"):
+            await orch._complete_sync()
+    service.create_or_update_cursor.assert_awaited_once()
+    state_machine.transition.assert_not_awaited()
