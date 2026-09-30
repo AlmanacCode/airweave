@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 import canonical_capture as harness  # settings must precede application imports
+from calendar_lifecycle import count_calendar_request, event_checkpoint, verify_calendar_scopes
 from provider_sample import rest_source, wispr_source
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -33,6 +34,7 @@ from airweave.domains.entities.canonical.page_source import (
     InvalidCaptureCheckpoint,
     InvalidScanContinuation,
     KnownObjectSource,
+    ScopedPageSource,
 )
 from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope, StartedScope
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
@@ -134,8 +136,32 @@ class BoundedCheckpointKnownSource(BoundedCheckpointSource, BoundedKnownSource):
     pass
 
 
+class BoundedScopedSource(BoundedPageSource):
+    async def prepare_cycle(self, previous):
+        return await self.source.prepare_cycle(previous)
+
+    async def prepare_scope(self, scope, cycle, previous, *, parent, force_full):
+        return await self.source.prepare_scope(
+            scope, cycle, previous, parent=parent, force_full=force_full
+        )
+
+    def initial_scope_continuation(self, scope, cycle, plan):
+        return self.source.initial_scope_continuation(scope, cycle, plan)
+
+
+class BoundedScopedKnownSource(BoundedScopedSource, BoundedKnownSource):
+    pass
+
+
 def bounded_page_source(source, counters, record_limit, probe=None):
     """Preserve only protocols the actual source implements."""
+    if isinstance(source, ScopedPageSource):
+        wrapper = (
+            BoundedScopedKnownSource
+            if isinstance(source, KnownObjectSource)
+            else BoundedScopedSource
+        )
+        return wrapper(source, counters, record_limit, probe)
     checkpoint = isinstance(source, CheckpointedPageSource)
     known = isinstance(source, KnownObjectSource)
     wrapper = (
@@ -210,12 +236,11 @@ def safe_failure_reason(error):
 def validate_checkpoint(name, manifest, counters, saved, previous, loaded, attempt, sequence):
     """Match production cursor/scope capabilities; never manufacture a resume claim."""
     if name == "google_calendar":
-        calendar_id = manifest["calendar_config"]["calendar_ids"][0]
-        assert set(saved["calendar_tokens"]) == {calendar_id}
-        assert saved["calendar_tokens"][calendar_id]
-        assert set(saved["occurrence_coverage"]) == {calendar_id}
-        expected_scopes = 2 if loaded else 3
-        assert counters["started"] == counters["completed"] == expected_scopes
+        cycle = saved["canonical_cycle"]
+        assert cycle["phase"] == "complete" and cycle["mode"] == "mixed"
+        assert cycle["completed_job_id"]
+        assert cycle["last_full_capture"] is None and cycle["promoted_checkpoint"] is None
+        assert counters["started"] == counters["completed"] == 0
         assert bool(counters["sync_token_requests"]) == loaded
     elif name == "google_drive":
         cycle = saved["canonical_cycle"]
@@ -313,8 +338,7 @@ def count_drive_request(name, request, previous, counters):
     promoted = previous.get("canonical_cycle", {}).get("promoted_checkpoint")
     if (
         promoted
-        and request.url.params.get("pageToken")
-        == promoted["checkpoint"]["value"]["page_token"]
+        and request.url.params.get("pageToken") == promoted["checkpoint"]["value"]["page_token"]
     ):
         counters["resumed_changes_requests"] += 1
 
@@ -331,6 +355,7 @@ async def child(manifest):
     counters = {"provider_requests": 0, "records_observed": 0, "started": 0, "completed": 0}
     result = {"failed": True}
     previous = {}
+    previous_calendar_checkpoint = None
     name = manifest["provider"]
     is_calendar = name == "google_calendar"
     counters["sync_token_requests"] = 0
@@ -376,8 +401,13 @@ async def child(manifest):
             raise BudgetExceeded("provider_requests")
         counters["provider_requests"] += 1
         count_gmail_request(name, request, previous, counters, identity_verified)
-        if request.url.params.get("syncToken"):
-            counters["sync_token_requests"] += 1
+        if is_calendar:
+            count_calendar_request(
+                request,
+                manifest["calendar_config"]["calendar_ids"][0],
+                previous_calendar_checkpoint,
+                counters,
+            )
         count_drive_request(name, request, previous, counters)
 
     @asynccontextmanager
@@ -417,6 +447,10 @@ async def child(manifest):
         cursor_service = SyncCursorService()
         async with sessions() as db:
             previous = await cursor_service.get_cursor_data(db, sync_id, ctx)
+            if is_calendar:
+                previous_calendar_checkpoint = await event_checkpoint(
+                    db, organization_id, sync_id, manifest["calendar_config"]["calendar_ids"][0]
+                )
         cursor_schema = {
             "gmail": GmailCursor,
             "google_calendar": GoogleCalendarCursor,
@@ -539,6 +573,7 @@ async def child(manifest):
             rows = list((await db.scalars(select(Entity).where(Entity.sync_id == sync_id))).all())
         assert status == "completed"
         validate_checkpoint(name, manifest, counters, saved, previous, loaded, attempt, sequence)
+        await verify_calendar_scopes(sessions, organization_id, sync_id, manifest, saved, loaded)
         visible = [r for r in rows if r.deleted_at is None and r.source_payload is not None]
         digest = hashlib.sha256(
             json.dumps(
@@ -572,7 +607,8 @@ async def child(manifest):
         result = {
             "failed": False,
             "full_scope_completed": name != "wispr"
-            and not (name == "gmail" and saved["canonical_cycle"]["mode"] == "changes"),
+            and not (name == "gmail" and saved["canonical_cycle"]["mode"] == "changes")
+            and not (is_calendar and loaded),
             "counters_complete": True,
             "resumed_saved_page": resume_probe.resumed_saved_page if resume_probe else False,
             "saved_cursor_expired": resume_probe.saved_cursor_expired if resume_probe else False,
