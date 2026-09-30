@@ -138,5 +138,7 @@ returned404, so model retrieval assertions did not run. Startup validation,
 Compose, staging readiness and the integration probe now use
 `/.well-known/ready`, matching the [upstream inference API](https://docs.weaviate.io/weaviate/modules/custom-modules).
 The integration test requires204 and still verifies actual384-dimensional vectors
-and retrieval afterward. This fixes the contract; a successful rerun is required
-before claiming the pinned deployment works.
+and retrieval afterward. Later CI36744440692 at2bb84cf passed the real-model
+retrieval lane and image build. That verifies the disposable CI topology; it
+does not establish Kubernetes admission, deployed readiness, capacity or restore
+for these staging templates.
