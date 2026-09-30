@@ -50,3 +50,60 @@ The current request-owned database session also holds its connection across
 embedding/index waits after the first SQL query. Separating read phases is a
 follow-up requiring explicit auth/session ownership and retained final fences;
 it is not included in embedding reuse and is not a proven cause of the 503.
+
+
+## Repeated actual API qualification after embedding reuse
+
+Six serial product requests each returned HTTP 200 and 25 results. Their wall times
+were 1976, 836, 1408, 1202, 1210 and 3013 ms. Each fanned out to four organizations;
+[24 sanitized stage samples](search-stage-samples.json) preserve measured evidence.
+The slowest organization request per product request was:
+
+| Sample | Airweave total | Dense | Vespa adapter | Visibility | Enrichment | All SQL |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1176 | 410 | 452 | 35 | 230 | 273 |
+| 2 | 703 | 163 | 274 | 54 | 176 | 212 |
+| 3 | 1334 | 74 | 189 | 883 | 170 | 1031 |
+| 4 | 1094 | 176 | 416 | 122 | 331 | 381 |
+| 5 | 1019 | 175 | 378 | 70 | 346 | 389 |
+| 6 | 2815 | 131 | 2609 | 23 | 19 | 36 |
+
+All durations are milliseconds, measured as nested wall intervals; SQL overlaps
+other stages and these columns must not be summed. No errors were recorded.
+The sixth sample's delay was in the Vespa adapter await, which includes thread
+queueing, HTTP, native engine work and event-loop scheduling. It is **not** evidence
+of a PostgreSQL plan switch. Sample 3 independently had an 831 ms SQL fingerprint
+interval. Neither measurement reconstructs the previous unlogged 503/13-second tail.
+
+## Proposed next diagnostics and session ownership (not implemented)
+
+The current Vespa adapter invokes the synchronous SDK through `asyncio.to_thread`.
+Measure worker start/end alongside the adapter await, and retain only numeric native
+response timing fields if available. This separates thread queue delay from SDK wall
+time without logging YQL, embeddings, results or identities. Do not change query
+ranking, candidate counts, retries or database plans before attributing the tail.
+
+Database phase separation needs an explicit owner. The search route and its auth
+dependency currently share FastAPI's cached `get_db` session. API context contains
+Pydantic snapshots; Auth0 resolution nevertheless flushes a last-active update into
+that session without committing it. Closing an arbitrary borrowed session inside
+the executor would be an unsafe general contract.
+
+A bounded redesign would finish this route's authentication session explicitly,
+then use existing session-factory read contexts: scopes/version to a typed detached
+snapshot; embedding preparation without SQL; each collection's network retrieval
+before its session performs visibility/enrichment SQL; finally fresh scopes,
+coverage and exact publication checks in one read phase. Generic executor behavior
+and other routes stay unchanged. Test auth side-effect semantics and revocation
+between phases, including a constrained pool, before claiming reduced occupancy.
+No extra service, table, result cache or concurrent `AsyncSession` use is proposed.
+
+The installed PyVespa `Vespa.query` creates a fresh `VespaSync` HTTP session per
+call, then retains the full decoded response in `VespaQueryResponse.json`. This is
+a source-level finding, not proof that connection setup causes the observed tail.
+Vespa's [result-format documentation](https://docs.vespa.ai/en/reference/querying/default-result-format.html)
+provides `querytime`, `summaryfetchtime` and `searchtime` in seconds when
+`presentation.timing=true` is requested. A temporary diagnostic can copy the query
+body and add only that presentation flag, retaining those three numeric values
+alongside worker-entry/exit times. No query trace, response body or result content
+needs to be logged. Pooling changes should wait for that decomposition.
