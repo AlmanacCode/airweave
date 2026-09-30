@@ -117,6 +117,7 @@ class ComposioAuthProvider(BaseAuthProvider):
             "google_drive": frozenset({"www.googleapis.com"}),
             "slack": frozenset({"slack.com"}),
             "linear": frozenset({"api.linear.app", "uploads.linear.app"}),
+            "github": frozenset({"api.github.com"}),
         }
         if source_short_name not in hosts and source_short_name != "wispr":
             raise AuthProviderConfigError(

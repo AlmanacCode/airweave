@@ -35,7 +35,7 @@ test-store:
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/entities/canonical/tests airweave/domains/syncs/tests
 
 test-capture:
-	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/platform/sources/tests tests/unit/platform/sources/records tests/unit/platform/sources/test_*_capture.py tests/unit/platform/http_client/test_composio_transport.py airweave/domains/storage/tests/test_file_service.py
+	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/platform/sources/tests tests/unit/platform/sources/records tests/unit/platform/sources/test_*_capture.py tests/unit/domains/entities/test_github_projection.py tests/unit/platform/http_client/test_composio_transport.py airweave/domains/storage/tests/test_file_service.py
 
 test-search:
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/search

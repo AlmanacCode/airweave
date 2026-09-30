@@ -121,6 +121,7 @@ from .github import (
     GitHubPullRequestEntity,
     GithubRepoEntity,
     GitHubRepositoryEntity,
+    GitHubTextEntity,
 )
 from .gitlab import (
     GitLabCodeFileEntity,
@@ -469,6 +470,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
     ],
     "github": [
         GitHubCodeFileEntity,
+        GitHubTextEntity,
         GithubContentEntity,
         GitHubDirectoryEntity,
         GitHubFileDeletionEntity,

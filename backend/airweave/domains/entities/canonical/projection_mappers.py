@@ -225,6 +225,10 @@ async def map_record(
             from airweave.domains.entities.canonical.gmail_projection import map_gmail
 
             entities = await map_gmail(record, storage, directory)
+        elif source_name == "github":
+            from airweave.domains.entities.canonical.github_projection import map_github
+
+            entities = await map_github(record, storage, directory)
         elif source_name == "linear":
             from airweave.domains.entities.canonical.linear_projection import map_linear
 

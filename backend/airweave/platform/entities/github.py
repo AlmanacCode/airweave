@@ -558,3 +558,23 @@ class GitHubFileDeletionEntity(DeletionEntity):
     def web_url(self) -> str:
         """Fallback to repository page since deleted files have no direct URLs."""
         return f"https://github.com/{self.repo_owner}/{self.repo_name}"
+
+
+class GitHubTextEntity(BaseEntity):
+    """Searchable native GitHub text with its exact resource kind and content coverage."""
+
+    original_id: str = AirweaveField(
+        ..., description="Canonical original identity", is_entity_id=True
+    )
+    title: str = AirweaveField(
+        ..., description="Native title or resource label", is_name=True, embeddable=True
+    )
+    resource_kind: str = AirweaveField(
+        ..., description="Native GitHub resource kind", embeddable=True
+    )
+    repository: str = AirweaveField(..., description="Repository full name", embeddable=True)
+    text: str = AirweaveField(..., description="Retained native text", embeddable=True)
+    state: str | None = AirweaveField(None, description="Native state", embeddable=True)
+    content_coverage: str = AirweaveField(
+        ..., description="Capture content coverage", embeddable=False
+    )

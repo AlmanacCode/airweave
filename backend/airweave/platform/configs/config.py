@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from airweave.platform.configs._base import BaseConfig, RequiredTemplateConfig
 from airweave.platform.utils.ssrf import validate_host, validate_url
@@ -176,52 +176,46 @@ class ElasticsearchConfig(SourceConfig):
     pass
 
 
+class GitHubRepositorySelection(BaseModel):
+    """Stable authorized repository/owner identities plus a refreshable native route."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    repository_id: int = Field(gt=0, strict=True)
+    owner_id: int = Field(gt=0, strict=True)
+    full_name: str = Field(pattern=r"^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$", max_length=300)
+    ref: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=1024,
+        description="Selected branch name; defaults to the repository default branch",
+    )
+
+
 class GitHubConfig(SourceConfig):
-    """Github configuration schema."""
+    """Selected repositories captured through one owned account and durable page engine."""
 
-    repo_name: str = Field(
-        title="Repository Name",
-        description="Repository to sync in owner/repo format (e.g., 'airweave-ai/airweave')",
-        min_length=3,
-        pattern=r"^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$",
-    )
-    branch: str = Field(
-        default="",
-        title="Branch name",
-        description=(
-            "Specific branch to sync (e.g., 'main', 'development'). "
-            "If empty, uses the default branch."
-        ),
-    )
-    sync_pull_requests: bool = Field(
-        default=False,
-        title="Sync Pull Requests",
-        description=(
-            "Sync merged pull requests and their review comments. "
-            "Enables searching over PR descriptions, discussions, and code review feedback."
-        ),
-    )
+    model_config = ConfigDict(extra="forbid")
+    repositories: tuple[GitHubRepositorySelection, ...] = Field(min_length=1, max_length=500)
+    include_code: bool = True
+    include_conversations: bool = True
 
-    @field_validator("repo_name")
+    @model_validator(mode="before")
     @classmethod
-    def validate_repo_name(cls, v: str) -> str:
-        """Validate repository name is in owner/repo format."""
-        if not v or not v.strip():
-            raise ValueError("Repository name is required")
-        v = v.strip()
-        if "/" not in v:
-            raise ValueError(
-                "Repository must be in 'owner/repo' format (e.g., 'airweave-ai/airweave')"
-            )
-        parts = v.split("/")
-        if len(parts) != 2:
-            raise ValueError(
-                "Repository must be in 'owner/repo' format (e.g., 'airweave-ai/airweave')"
-            )
-        owner, repo = parts
-        if not owner or not repo:
-            raise ValueError("Both owner and repository name must be non-empty")
-        return v
+    def require_stable_selection(cls, value):
+        """Old name-only configurations cannot silently authorize a replacement repository."""
+        if isinstance(value, dict) and "repo_name" in value:
+            raise ValueError("Refresh GitHub repository selections with repository and owner IDs")
+        return value
+
+    @model_validator(mode="after")
+    def unique_selection(self) -> "GitHubConfig":
+        """One selected ref per repository; no ambiguous duplicate scope owners."""
+        ids = [selection.repository_id for selection in self.repositories]
+        if len(ids) != len(set(ids)):
+            raise ValueError("GitHub repository selections must be unique")
+        if not self.include_code and not self.include_conversations:
+            raise ValueError("Select GitHub code or conversations to capture")
+        return self
 
 
 class GitLabConfig(SourceConfig):
