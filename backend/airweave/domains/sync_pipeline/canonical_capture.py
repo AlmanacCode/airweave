@@ -8,7 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.core.events.sync import EntityBatchProcessedEvent, TypeActionCounts
 from airweave.core.protocols.event_bus import EventBus
-from airweave.domains.entities.canonical.cycle_models import CaptureCycle, CompleteCycle
+from airweave.domains.entities.canonical.cycle_models import (
+    CaptureCycle,
+    CompleteCycle,
+    CycleConfiguration,
+)
 from airweave.domains.entities.canonical.models import CaptureResult
 from airweave.domains.entities.canonical.page_source import CanonicalPageSource
 from airweave.domains.entities.canonical.requests import (
@@ -42,7 +46,7 @@ class CanonicalCapturePipeline:
         event_bus: EventBus,
         record_types: tuple[str, ...],
         attempt: CaptureAttempt,
-        container_parents: dict[str, str] | None = None,
+        container_parents: dict[str, str | tuple[str | None, ...]] | None = None,
         page_source: CanonicalPageSource | None = None,
         files: FileService | None = None,
     ):
@@ -54,23 +58,30 @@ class CanonicalCapturePipeline:
         self._event_bus = event_bus
         self._record_types = frozenset(record_types)
         self._container_parents = dict(container_parents or {})
-        for child, parent in self._container_parents.items():
-            if child not in self._record_types or parent not in self._record_types:
-                raise ValueError(
-                    "Container relationships must name declared canonical record types"
-                )
-            if parent in self._container_parents:
-                raise ValueError("Only root-container visibility relationships are supported")
         self.page_source = page_source
         self.files = files
         self._cycle: CaptureCycle | None = None
         if page_source is not None:
             config = page_source.capture_cycle_configuration
-            if config.root_record_type not in self._record_types or any(
-                self._container_parents.get(child) != config.root_record_type
-                for child in config.child_record_types
-            ):
+            declared = CycleConfiguration.from_source(
+                fingerprint=config.fingerprint,
+                record_types=record_types,
+                container_parents=self._container_parents,
+            )
+            if config != declared:
                 raise ValueError("Page source cycle must match its declared container topology")
+        else:
+            for child, parent in self._container_parents.items():
+                if (
+                    child not in self._record_types
+                    or not isinstance(parent, str)
+                    or parent not in self._record_types
+                ):
+                    raise ValueError(
+                        "Container relationships must name declared canonical record types"
+                    )
+                if parent in self._container_parents:
+                    raise ValueError("Nested sources require the durable page capability")
         self._attempt = attempt
         self._fence: WriterFence | None = None
         self._completed_scopes: set[CompletedScope] = set()
@@ -116,7 +127,6 @@ class CanonicalCapturePipeline:
             self._writer(),
             self.page_source,
             progress,
-            self._with_parent,
             check_limits,
             self.files,
         ).run()

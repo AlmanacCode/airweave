@@ -86,11 +86,11 @@ class BoundedPageSource:
         self.canonical_container_parents = source.canonical_container_parents
         self.capture_cycle_configuration = source.capture_cycle_configuration
 
-    async def capture_page(self, scope, continuation, *, files: FileService):
+    async def capture_page(self, scope, continuation, *, files: FileService, parent=None):
         if self.resume_probe is not None:
             await self.resume_probe.before_page(scope, continuation)
         try:
-            page = await self.source.capture_page(scope, continuation, files=files)
+            page = await self.source.capture_page(scope, continuation, files=files, parent=parent)
         except InvalidScanContinuation:
             if self.resume_probe is not None:
                 self.resume_probe.cursor_expired()
@@ -100,8 +100,11 @@ class BoundedPageSource:
             raise BudgetExceeded("records")
         return page
 
-    async def confirm_root_absent(self, native_id):
-        await self.source.confirm_root_absent(native_id)
+    def child_scope(self, parent, record_type):
+        return self.source.child_scope(parent, record_type)
+
+    async def confirm_absent(self, record):
+        await self.source.confirm_absent(record)
 
 
 async def bounded_observations(source, cursor, files, counters, record_limit):
@@ -657,6 +660,8 @@ async def main():
                 "0003_mail_thread_index.py",
                 "0004_projection_generation.py",
                 "0005_capture_scan.py",
+                "0006_record_visibility.py",
+                "0007_scan_scope_owner.py",
             ):
                 await connection.run_sync(harness.migrate, migration)
         organization_id, sync_id = uuid4(), uuid4()

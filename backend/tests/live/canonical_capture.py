@@ -299,6 +299,8 @@ async def main():
                 "0003_mail_thread_index.py",
                 "0004_projection_generation.py",
                 "0005_capture_scan.py",
+                "0006_record_visibility.py",
+                "0007_scan_scope_owner.py",
             ):
                 await connection.run_sync(migrate, migration)
         with TemporaryDirectory(prefix="airweave-private-live-") as directory:

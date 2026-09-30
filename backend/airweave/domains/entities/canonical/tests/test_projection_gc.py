@@ -199,7 +199,7 @@ async def test_hidden_parent_retirement_restoration_requires_fresh_generation(da
     # Add a real captured parent reference, then simulate the crash window between
     # parent revocation and bounded child reconciliation: child remains active.
     await capture(database, service, fence, observation(identity=parent))
-    await capture(database, service, fence, observation(parent=parent))
+    await capture(database, service, fence, observation(parent=parent, allow_reparent=True))
     await capture(
         database,
         service,

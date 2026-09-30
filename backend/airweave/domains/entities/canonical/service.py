@@ -10,23 +10,24 @@ from airweave.domains.entities.canonical.cycle_models import (
     BeginCycle,
     CaptureCycle,
     CompleteCycle,
-    CycleRoot,
     RestartCycle,
+    ScopeWork,
 )
 from airweave.domains.entities.canonical.cycle_store import (
     begin_cycle,
     complete_cycle,
     cursor_row,
     cycle_state,
-    list_cycle_roots,
+    next_scope_work,
     restart_cycle,
 )
-from airweave.domains.entities.canonical.models import CaptureResult, ReconcileResult
+from airweave.domains.entities.canonical.models import CaptureResult, ReconcileResult, SourceRecord
 from airweave.domains.entities.canonical.requests import (
     CaptureBatch,
     CompletedScope,
     ReconcileScope,
     RemovedScope,
+    ScopeRemovalReason,
     StartedScope,
     WriterFence,
 )
@@ -115,6 +116,36 @@ class CanonicalCaptureService:
         async with UnitOfWork(db):
             await self.store.save_checkpoint(db, fence, cursor_data)
 
+    async def next_scope_work(
+        self, db: AsyncSession, fence: WriterFence, cycle_id: UUID
+    ) -> ScopeWork | None:
+        """Read the next eligible incomplete scope under the existing writer fence."""
+        async with UnitOfWork(db):
+            await self.store._fenced_sync(db, fence)
+            return await next_scope_work(db, fence, cycle_id)
+
+    async def withdraw_scan_parent(
+        self,
+        db: AsyncSession,
+        fence: WriterFence,
+        parent: SourceRecord,
+        *,
+        expected_epoch: int,
+        removal_reason: ScopeRemovalReason,
+    ) -> CaptureResult:
+        """Attest exact fetched routing revision and owner epoch in the withdrawal transaction."""
+        async with UnitOfWork(db):
+            return await self.scans.withdraw_parent(
+                db, fence, parent, expected_epoch=expected_epoch, removal_reason=removal_reason
+            )
+
+    async def scan_missing(
+        self, db: AsyncSession, fence: WriterFence, state: ScanState, *, after: UUID | None = None
+    ) -> tuple[SourceRecord, ...]:
+        """Read exact inventory omissions under the same attempt and scan revision."""
+        async with UnitOfWork(db):
+            return await self.scans.missing(db, fence, state, after=after)
+
     async def read_scan(
         self, db: AsyncSession, fence: WriterFence, scope: CompletedScope
     ) -> ScanState | None:
@@ -160,17 +191,3 @@ class CanonicalCaptureService:
         async with UnitOfWork(db):
             await self.store._fenced_sync(db, request.fence)
             return await restart_cycle(db, request)
-
-    async def list_cycle_roots(
-        self,
-        db: AsyncSession,
-        fence: WriterFence,
-        cycle_id: UUID,
-        *,
-        after: UUID | None = None,
-        missing: bool = False,
-    ) -> tuple[CycleRoot, ...]:
-        """Read a bounded scope-discovery page after verifying current writer ownership."""
-        async with UnitOfWork(db):
-            await self.store._fenced_sync(db, fence)
-            return await list_cycle_roots(db, fence, cycle_id, after=after, missing=missing)

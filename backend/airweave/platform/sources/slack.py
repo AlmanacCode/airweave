@@ -16,6 +16,7 @@ from airweave.core.shared_models import RateLimitLevel
 from airweave.domains.auth_provider.exceptions import AuthProviderRateLimitError
 from airweave.domains.browse_tree.types import NodeSelectionData
 from airweave.domains.entities.canonical.cycle_models import CycleConfiguration
+from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.page_source import (
     CapturePage,
     InvalidScanContinuation,
@@ -144,10 +145,10 @@ class SlackSource(BaseSource):
 
     canonical_record_types = ("channel", "message")
     canonical_container_parents = {"message": "channel"}
-    capture_cycle_configuration = CycleConfiguration(
+    capture_cycle_configuration = CycleConfiguration.from_source(
         fingerprint=hashlib.sha256(b"slack:whole-conversations:history-and-replies:v1").hexdigest(),
-        root_record_type="channel",
-        child_record_types=("message",),
+        record_types=canonical_record_types,
+        container_parents=canonical_container_parents,
     )
 
     @classmethod
@@ -216,8 +217,19 @@ class SlackSource(BaseSource):
             completeness="partial" if message.get("files") else "complete",
         )
 
+    def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
+        """Keep the established native container identity for this flat provider."""
+        return CompletedScope(
+            record_type=record_type, container_id=parent.identity.native_id, parent=parent.identity
+        )
+
     async def capture_page(
-        self, scope: CompletedScope, continuation: ScanContinuation, *, files: FileService
+        self,
+        scope: CompletedScope,
+        continuation: ScanContinuation,
+        *,
+        files: FileService,
+        parent: SourceRecord | None = None,
     ) -> CapturePage:
         """Fetch one page; record and nested reply progress are committed by the pipeline."""
         try:
@@ -335,8 +347,9 @@ class SlackSource(BaseSource):
             recent = (*recent[-15:], digest)
         return items, following, recent
 
-    async def confirm_root_absent(self, native_id: str) -> None:
+    async def confirm_absent(self, record: SourceRecord) -> None:
         """Require provider confirmation before hiding an omitted prior conversation."""
+        native_id = record.identity.native_id
         try:
             await self._get("https://slack.com/api/conversations.info", {"channel": native_id})
         except SlackApiError as exc:

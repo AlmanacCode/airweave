@@ -3,8 +3,9 @@
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import exists, select
+from sqlalchemy import and_, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from airweave.domains.entities.canonical.checkpoint import CanonicalCheckpoint
 from airweave.domains.entities.canonical.cycle_models import (
@@ -12,12 +13,17 @@ from airweave.domains.entities.canonical.cycle_models import (
     BeginCycle,
     CaptureCycle,
     CompleteCycle,
-    CycleRoot,
     CycleVersion,
     RestartCycle,
+    ScopeWork,
 )
-from airweave.domains.entities.canonical.requests import CompletedScope, WriterFence
-from airweave.domains.entities.canonical.store import CanonicalStoreError, content_is_available
+from airweave.domains.entities.canonical.requests import CompletedScope, RecordIdentity, WriterFence
+from airweave.domains.entities.canonical.store import (
+    CanonicalStoreError,
+    ancestor_chain,
+    content_is_available,
+    source_record,
+)
 from airweave.models.capture_scan import CaptureScan
 from airweave.models.entity import Entity
 from airweave.models.sync import Sync
@@ -101,52 +107,186 @@ async def attest_cycle(
     return cursor, state
 
 
-async def root_ready(db: AsyncSession, fence: WriterFence, state: CaptureCycle) -> bool:
-    """A retry must refresh membership before touching or finishing child scopes."""
-    root = await db.scalar(
-        select(CaptureScan).where(
+def inventory_complete(subject, fence: WriterFence, state: CaptureCycle):
+    """Exact inventory that captured a parent must be fresh for this writer attempt."""
+    owner = aliased(Entity)
+    parent_id = (
+        select(owner.id)
+        .where(
+            owner.organization_id == subject.organization_id,
+            owner.sync_id == subject.sync_id,
+            owner.entity_definition_short_name == subject.parent_record_type,
+            owner.native_id == subject.parent_native_id,
+            owner.container_id.is_not_distinct_from(subject.parent_container_id),
+        )
+        .correlate(subject)
+        .scalar_subquery()
+    )
+    return exists(
+        select(CaptureScan.id).where(
             CaptureScan.organization_id == fence.organization_id,
             CaptureScan.sync_id == fence.sync_id,
-            CaptureScan.record_type == state.configuration.root_record_type,
-            CaptureScan.container_id.is_(None),
             CaptureScan.cycle_id == state.version.cycle_id,
+            CaptureScan.record_type == subject.entity_definition_short_name,
+            CaptureScan.container_id.is_not_distinct_from(subject.container_id),
+            CaptureScan.parent_record_id.is_not_distinct_from(parent_id),
+            CaptureScan.parent_visibility_epoch.is_not_distinct_from(
+                subject.parent_visibility_epoch
+            ),
+            CaptureScan.membership_attempt_id == fence.attempt_id,
             CaptureScan.phase == "complete",
         )
     )
-    return root is not None and (
-        not state.configuration.child_record_types
-        or state.root_writer_attempt_id == fence.attempt_id
+
+
+def membership_ready(fence: WriterFence, state: CaptureCycle):
+    """Current parent and every ancestor need completed current-attempt inventories."""
+    chain = ancestor_chain()
+    ancestor = aliased(Entity)
+    stale_ancestor = exists(
+        select(chain.c.id)
+        .join(ancestor, ancestor.id == chain.c.id)
+        .where(~inventory_complete(ancestor, fence, state))
     )
+    return and_(inventory_complete(Entity, fence, state), ~stale_ancestor)
+
+
+async def root_ready(db: AsyncSession, fence: WriterFence, state: CaptureCycle) -> bool:
+    """Every declared root inventory completes before descendant work."""
+    for kind in state.configuration.root_record_types:
+        predicates = [
+            CaptureScan.organization_id == fence.organization_id,
+            CaptureScan.sync_id == fence.sync_id,
+            CaptureScan.record_type == kind,
+            CaptureScan.container_id.is_(None),
+            CaptureScan.parent_record_id.is_(None),
+            CaptureScan.cycle_id == state.version.cycle_id,
+            CaptureScan.phase == "complete",
+        ]
+        if state.configuration.children_of(kind):
+            predicates.append(CaptureScan.membership_attempt_id == fence.attempt_id)
+        if await db.scalar(select(CaptureScan.id).where(*predicates).limit(1)) is None:
+            return False
+    return True
+
+
+async def scope_owner(
+    db: AsyncSession, fence: WriterFence, state: CaptureCycle, scope: CompletedScope
+) -> Entity | None:
+    """Resolve full parent identity; only old unambiguous flat requests are normalized."""
+    allowed = state.configuration.parents.get(scope.record_type)
+    if allowed is None:
+        raise CycleConflict("Scope kind is not declared by the active cycle")
+    identity = scope.parent
+    if identity is None:
+        if scope.container_id is None and None in allowed:
+            return None
+        flat = tuple(parent for parent in allowed if parent is not None)
+        if (
+            len(flat) != 1
+            or state.configuration.parents[flat[0]] != (None,)
+            or scope.container_id is None
+        ):
+            raise CycleConflict("Nested scope requires its exact parent identity")
+        identity = RecordIdentity(record_type=flat[0], native_id=scope.container_id)
+    if identity.record_type not in allowed:
+        raise CycleConflict("Scope parent kind is not declared by the active cycle")
+    parent = await db.scalar(
+        select(Entity)
+        .where(
+            Entity.organization_id == fence.organization_id,
+            Entity.sync_id == fence.sync_id,
+            Entity.entity_definition_short_name == identity.record_type,
+            Entity.entity_id == identity.entity_key,
+            Entity.record_revision > 0,
+        )
+        .execution_options(populate_existing=True)
+    )
+    if parent is None:
+        raise CycleConflict("Scope parent is missing; refresh membership before resuming")
+    return parent
 
 
 async def attest_scope(
     db: AsyncSession, fence: WriterFence, state: CaptureCycle, scope: CompletedScope
 ) -> bool:
-    """Only whole root or visible declared child scopes belong to this cycle."""
-    if scope.record_type == state.configuration.root_record_type and scope.container_id is None:
+    """A scope's full owner chain must be visible and freshly enumerated."""
+    parent = await scope_owner(db, fence, state, scope)
+    if parent is None:
         return True
     if (
-        scope.record_type not in state.configuration.child_record_types
-        or scope.container_id is None
+        await db.scalar(select(Entity.id).where(Entity.id == parent.id, content_is_available()))
+        is None
     ):
-        raise CycleConflict("Scope is not declared by the active cycle")
-    if not await root_ready(db, fence, state):
-        raise CycleConflict("Refresh and complete root membership before child work")
-    parent = await db.scalar(
-        select(Entity).where(
-            Entity.organization_id == fence.organization_id,
-            Entity.sync_id == fence.sync_id,
-            Entity.entity_definition_short_name == state.configuration.root_record_type,
-            Entity.container_id.is_(None),
-            Entity.native_id == scope.container_id,
-            Entity.record_revision > 0,
-            Entity.deleted_at.is_(None),
-            content_is_available(),
+        raise CycleConflict("Child scope no longer has a visible parent")
+    ready = await db.scalar(
+        select(Entity.id).where(
+            Entity.id == parent.id, content_is_available(), membership_ready(fence, state)
         )
     )
-    if parent is None:
-        raise CycleConflict("Child scope no longer has a visible parent")
+    if ready is None or not await root_ready(db, fence, state):
+        raise CycleConflict("Refresh and complete ancestor membership before child work")
     return False
+
+
+def child_scope_complete(fence: WriterFence, state: CaptureCycle, record_type: str):
+    """A completed child scope belongs to this exact owner generation."""
+    predicates = [
+        CaptureScan.organization_id == fence.organization_id,
+        CaptureScan.sync_id == fence.sync_id,
+        CaptureScan.record_type == record_type,
+        CaptureScan.parent_record_id == Entity.id,
+        CaptureScan.parent_visibility_epoch == Entity.visibility_epoch,
+        CaptureScan.cycle_id == state.version.cycle_id,
+        CaptureScan.phase == "complete",
+    ]
+    if state.configuration.children_of(record_type):
+        predicates.append(CaptureScan.membership_attempt_id == fence.attempt_id)
+    return exists(select(CaptureScan.id).where(*predicates))
+
+
+async def next_scope_work(db: AsyncSession, fence: WriterFence, cycle_id: UUID) -> ScopeWork | None:
+    """Reevaluate SQL frontier each time; newly discovered earlier UUIDs cannot be skipped."""
+    _, state = await attest_cycle(db, fence, cycle_id)
+    for kind in state.configuration.root_record_types:
+        predicates = [
+            CaptureScan.organization_id == fence.organization_id,
+            CaptureScan.sync_id == fence.sync_id,
+            CaptureScan.record_type == kind,
+            CaptureScan.container_id.is_(None),
+            CaptureScan.parent_record_id.is_(None),
+            CaptureScan.cycle_id == cycle_id,
+            CaptureScan.phase == "complete",
+        ]
+        if state.configuration.children_of(kind):
+            predicates.append(CaptureScan.membership_attempt_id == fence.attempt_id)
+        if await db.scalar(select(CaptureScan.id).where(*predicates).limit(1)) is None:
+            return ScopeWork(record_type=kind)
+    for child_type, allowed in state.configuration.parents.items():
+        parent_types = tuple(kind for kind in allowed if kind is not None)
+        if not parent_types:
+            continue
+        parent = await db.scalar(
+            select(Entity)
+            .where(
+                Entity.organization_id == fence.organization_id,
+                Entity.sync_id == fence.sync_id,
+                Entity.entity_definition_short_name.in_(parent_types),
+                content_is_available(),
+                membership_ready(fence, state),
+                ~child_scope_complete(fence, state, child_type),
+            )
+            .order_by(Entity.id)
+            .limit(1)
+            .execution_options(populate_existing=True)
+        )
+        if parent is not None:
+            return ScopeWork(
+                record_type=child_type,
+                parent=source_record(parent),
+                parent_visibility_epoch=parent.visibility_epoch,
+            )
+    return None
 
 
 async def complete_cycle(db: AsyncSession, sync: Sync, request: CompleteCycle) -> CaptureCycle:
@@ -156,28 +296,20 @@ async def complete_cycle(db: AsyncSession, sync: Sync, request: CompleteCycle) -
         raise CycleConflict("Cycle changed before completion")
     if not await root_ready(db, request.fence, state):
         raise CycleConflict("Root enumeration is incomplete or stale")
-    for child_type in state.configuration.child_record_types:
-        complete_child = exists(
-            select(CaptureScan.id).where(
-                CaptureScan.organization_id == request.fence.organization_id,
-                CaptureScan.sync_id == request.fence.sync_id,
-                CaptureScan.record_type == child_type,
-                CaptureScan.container_id == Entity.native_id,
-                CaptureScan.cycle_id == state.version.cycle_id,
-                CaptureScan.phase == "complete",
-            )
-        )
+    for child_type, parents in state.configuration.parents.items():
+        parent_types = tuple(kind for kind in parents if kind is not None)
+        if not parent_types:
+            continue
         missing = await db.scalar(
             select(Entity.id)
             .where(
                 Entity.organization_id == request.fence.organization_id,
                 Entity.sync_id == request.fence.sync_id,
-                Entity.entity_definition_short_name == state.configuration.root_record_type,
-                Entity.container_id.is_(None),
+                Entity.entity_definition_short_name.in_(parent_types),
                 Entity.record_revision > 0,
                 Entity.deleted_at.is_(None),
                 content_is_available(),
-                ~complete_child,
+                ~child_scope_complete(request.fence, state, child_type),
             )
             .limit(1)
         )
@@ -216,48 +348,3 @@ async def restart_cycle(db: AsyncSession, request: RestartCycle) -> CaptureCycle
     persist(cursor, state)
     await db.flush()
     return state
-
-
-async def list_cycle_roots(
-    db: AsyncSession,
-    fence: WriterFence,
-    cycle_id: UUID,
-    *,
-    after: UUID | None = None,
-    missing: bool = False,
-) -> tuple[CycleRoot, ...]:
-    """Read up to 100 roots under the fence; absence checks require the final root page."""
-    _, state = await attest_cycle(db, fence, cycle_id)
-    predicates = [
-        Entity.organization_id == fence.organization_id,
-        Entity.sync_id == fence.sync_id,
-        Entity.entity_definition_short_name == state.configuration.root_record_type,
-        Entity.container_id.is_(None),
-        Entity.record_revision > 0,
-        Entity.deleted_at.is_(None),
-        content_is_available(),
-    ]
-    if after is not None:
-        predicates.append(Entity.id > after)
-    if missing:
-        root = await db.scalar(
-            select(CaptureScan).where(
-                CaptureScan.organization_id == fence.organization_id,
-                CaptureScan.sync_id == fence.sync_id,
-                CaptureScan.record_type == state.configuration.root_record_type,
-                CaptureScan.container_id.is_(None),
-                CaptureScan.cycle_id == cycle_id,
-                CaptureScan.phase == "reconciling",
-            )
-        )
-        if root is None or state.root_writer_attempt_id != fence.attempt_id:
-            raise CycleConflict("Root absence checks require completed current-attempt collection")
-        predicates.append(Entity.last_seen_run_id.is_distinct_from(root.sweep_id))
-    elif not await root_ready(db, fence, state):
-        raise CycleConflict("Root membership must complete before child discovery")
-    rows = (
-        await db.execute(
-            select(Entity.id, Entity.native_id).where(*predicates).order_by(Entity.id).limit(100)
-        )
-    ).all()
-    return tuple(CycleRoot(id=row.id, native_id=row.native_id) for row in rows)

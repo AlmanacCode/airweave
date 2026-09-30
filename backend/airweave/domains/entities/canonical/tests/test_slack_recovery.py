@@ -440,7 +440,7 @@ async def test_scope_withdrawal_keeps_uncertain_reason_without_claiming_access_r
     instance, _, pipeline = runner(database, source, [ROOT, HISTORY])
     original_page = pipeline.page_source.capture_page
 
-    async def unavailable(scope, continuation, *, files):
+    async def unavailable(scope, continuation, *, files, parent=None):
         if scope.record_type == "message" and continuation.value.get("pending_threads"):
             raise ScopeAccessLost(
                 "Selected scope is no longer available", removal_reason="scope_removed"
@@ -457,3 +457,48 @@ async def test_scope_withdrawal_keeps_uncertain_reason_without_claiming_access_r
                 db, source[1].organization_id, source[1].sync_id, row.id
             )
             assert value.content_access == "unavailable" and value.payload == {}
+
+
+@pytest.mark.parametrize("change", ["rename", "revive"])
+async def test_old_provider_route_failure_cannot_withdraw_changed_same_fence_parent(
+    database, source, change
+):
+    from datetime import datetime, timezone
+
+    from airweave.domains.entities.canonical.page_source import ScopeAccessLost
+    from airweave.domains.entities.canonical.requests import CaptureBatch, CaptureRecord
+    from airweave.domains.entities.canonical.scan_store import ScanConflict
+
+    service, fence = source
+    instance, connector, pipeline = runner(database, source, [ROOT])
+    original_page = connector.capture_page
+
+    async def change_during_network(scope, continuation, *, files, parent=None):
+        if parent is None:
+            return await original_page(scope, continuation, files=files, parent=parent)
+        update = CaptureRecord(
+            identity=parent.identity,
+            parent=parent.parent,
+            payload={**parent.payload, "name": "Current renamed channel"},
+            observed_at=datetime.now(timezone.utc),
+        )
+        records = (update,)
+        if change == "revive":
+            records = (
+                update.model_copy(update={"kind": "delete", "removal_reason": "access_revoked"}),
+                update,
+            )
+        async with database() as db:
+            await service.capture(db, CaptureBatch(fence=fence, records=records))
+        raise ScopeAccessLost("Old endpoint routing reported access loss")
+
+    connector.capture_page = change_during_network
+    with pytest.raises(ScanConflict, match="changed during provider access"):
+        await run(instance)
+    rows, cursor, scans = await saved(database)
+    current = next(row for row in rows if row.native_id == "C1")
+    assert current.deleted_at is None and current.removal_reason is None
+    assert current.source_payload["name"] == "Current renamed channel"
+    assert current.visibility_epoch == (2 if change == "revive" else 1)
+    assert "canonical_checkpoint" not in cursor
+    assert next(scan for scan in scans if scan.record_type == "message").phase == "collecting"

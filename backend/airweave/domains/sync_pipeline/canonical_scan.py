@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.cycle_models import BeginCycle, CaptureCycle
 from airweave.domains.entities.canonical.cycle_store import CycleConflict
-from airweave.domains.entities.canonical.models import CaptureResult
+from airweave.domains.entities.canonical.models import CaptureResult, SourceRecord
 from airweave.domains.entities.canonical.page_source import (
     CanonicalPageSource,
     InvalidScanContinuation,
@@ -17,11 +17,8 @@ from airweave.domains.entities.canonical.page_source import (
     ScopeRemovalReason,
 )
 from airweave.domains.entities.canonical.requests import (
-    CaptureBatch,
     CaptureRecord,
     CompletedScope,
-    RecordIdentity,
-    RemovedScope,
     WriterFence,
 )
 from airweave.domains.entities.canonical.scan_models import (
@@ -44,14 +41,13 @@ class CanonicalScanDriver:
         fence: WriterFence,
         source: CanonicalPageSource,
         progress: Callable[[CaptureResult, tuple[CaptureRecord, ...]], Awaitable[None]],
-        with_parent: Callable[[CaptureRecord], CaptureRecord],
         check_limits: Callable[[], Awaitable[None]],
         files: FileService,
     ):
         """Reuse the capture service and pipeline progress/guard callbacks."""
         self.service, self.sessions, self.fence, self.source = service, sessions, fence, source
         self.files = files
-        self.progress, self.with_parent, self.check_limits = progress, with_parent, check_limits
+        self.progress, self.check_limits = progress, check_limits
 
     async def run(self) -> CaptureCycle:
         """Refresh membership first, then resume its currently visible child scopes."""
@@ -68,30 +64,36 @@ class CanonicalScanDriver:
             cycle = await self.service.begin_cycle(
                 db, BeginCycle(fence=self.fence, configuration=configuration, expected=expected)
             )
-        root = CompletedScope(record_type=configuration.root_record_type)
-        await self.scan(cycle, root, refresh_membership=True)
-        after: UUID | None = None
         while True:
             async with self.sessions() as db:
-                roots = await self.service.list_cycle_roots(
-                    db, self.fence, cycle.version.cycle_id, after=after
-                )
-            if not roots:
+                work = await self.service.next_scope_work(db, self.fence, cycle.version.cycle_id)
+            if work is None:
                 break
-            for item in roots:
-                for child_type in configuration.child_record_types:
-                    scope = CompletedScope(record_type=child_type, container_id=item.native_id)
-                    try:
-                        await self.scan(cycle, scope)
-                    except ScopeAccessLost as error:
-                        await self.withdraw_root(
-                            configuration.root_record_type,
-                            item.native_id,
-                            configuration.child_record_types,
-                            error.removal_reason,
-                        )
-                        break
-            after = roots[-1].id
+            scope = (
+                CompletedScope(record_type=work.record_type)
+                if work.parent is None
+                else self.source.child_scope(work.parent, work.record_type)
+            )
+            if scope.record_type != work.record_type or scope.parent != (
+                work.parent.identity if work.parent else None
+            ):
+                raise CycleConflict("Source returned a scope with the wrong exact owner")
+            try:
+                await self.scan(
+                    cycle,
+                    scope,
+                    parent=work.parent,
+                    parent_epoch=work.parent_visibility_epoch,
+                    refresh_membership=bool(configuration.children_of(work.record_type)),
+                )
+            except ScopeAccessLost as error:
+                if work.parent is None:
+                    raise
+                if work.parent_visibility_epoch is None:
+                    raise CycleConflict("Scope owner epoch is missing") from error
+                await self.withdraw_parent(
+                    work.parent, work.parent_visibility_epoch, error.removal_reason
+                )
         async with self.sessions() as db:
             current = await self.service.read_cycle(db, self.fence)
         if current is None:
@@ -104,6 +106,8 @@ class CanonicalScanDriver:
         scope: CompletedScope,
         *,
         refresh_membership: bool = False,
+        parent: SourceRecord | None = None,
+        parent_epoch: int | None = None,
     ) -> None:
         """Only a provider invalid-cursor response permits one explicit sweep restart."""
         async with self.sessions() as db:
@@ -111,8 +115,10 @@ class CanonicalScanDriver:
         restart = bool(
             previous
             and previous.cycle_id == cycle.version.cycle_id
-            and refresh_membership
-            and cycle.root_writer_attempt_id != self.fence.attempt_id
+            and (
+                (refresh_membership and previous.membership_attempt_id != self.fence.attempt_id)
+                or previous.parent_visibility_epoch != parent_epoch
+            )
         )
         async with self.sessions() as db:
             state = await self.service.begin_scan(
@@ -130,7 +136,9 @@ class CanonicalScanDriver:
         while state.phase == "collecting":
             await self.check_limits()
             try:
-                page = await self.source.capture_page(scope, state.continuation, files=self.files)
+                page = await self.source.capture_page(
+                    scope, state.continuation, files=self.files, parent=parent
+                )
             except InvalidScanContinuation:
                 if restarts >= 1:
                     raise
@@ -157,7 +165,7 @@ class CanonicalScanDriver:
                         scope=scope,
                         cycle_id=state.cycle_id,
                         expected=state.version,
-                        records=tuple(self.with_parent(r) for r in page.records),
+                        records=tuple(self._parented(r, scope) for r in page.records),
                         continuation=page.continuation,
                         final=page.final,
                     ),
@@ -165,23 +173,28 @@ class CanonicalScanDriver:
             state = result.state
             await self.progress(result.capture, page.records)
         if state.phase == "reconciling" and refresh_membership:
-            await self.confirm_omissions(cycle)
+            await self.confirm_omissions(state)
         await self.reconcile(state)
 
-    async def confirm_omissions(self, cycle: CaptureCycle) -> None:
-        """A provider error or accessible omission fails before any absence removal."""
+    @staticmethod
+    def _parented(record: CaptureRecord, scope: CompletedScope) -> CaptureRecord:
+        """Legacy flat adapters may omit the parent; never overwrite a conflicting declaration."""
+        if record.parent is not None and record.parent != scope.parent:
+            raise CycleConflict("Captured record declares a different scope parent")
+        return record.model_copy(update={"parent": scope.parent})
+
+    async def confirm_omissions(self, state: ScanState) -> None:
+        """Accessible omissions or provider errors fail before any absence removal."""
         after: UUID | None = None
         while True:
             async with self.sessions() as db:
-                roots = await self.service.list_cycle_roots(
-                    db, self.fence, cycle.version.cycle_id, after=after, missing=True
-                )
-            if not roots:
+                records = await self.service.scan_missing(db, self.fence, state, after=after)
+            if not records:
                 return
-            for item in roots:
+            for record in records:
                 await self.check_limits()
-                await self.source.confirm_root_absent(item.native_id)
-            after = roots[-1].id
+                await self.source.confirm_absent(record)
+            after = records[-1].id
 
     async def reconcile(self, state: ScanState) -> None:
         """Each bounded removal batch resumes from its committed scan version."""
@@ -201,46 +214,23 @@ class CanonicalScanDriver:
             state = result.state
             await self.progress(result.capture, ())
 
-    async def withdraw_root(
-        self,
-        root_type: str,
-        native_id: str,
-        child_types: tuple[str, ...],
-        removal_reason: ScopeRemovalReason,
+    async def withdraw_parent(
+        self, parent: SourceRecord, expected_epoch: int, removal_reason: ScopeRemovalReason
     ) -> None:
-        """Withdraw the parent before bounded children, retaining the source-audited reason."""
-        observed = datetime.now(timezone.utc)
+        """Withdraw exact owner first; recursive visibility closes before bounded cleanup."""
         async with self.sessions() as db:
-            result = await self.service.capture(
+            result = await self.service.withdraw_scan_parent(
                 db,
-                CaptureBatch(
-                    fence=self.fence,
-                    records=(
-                        CaptureRecord(
-                            identity=RecordIdentity(record_type=root_type, native_id=native_id),
-                            payload={"id": native_id},
-                            kind="delete",
-                            removal_reason=removal_reason,
-                            observed_at=observed,
-                        ),
-                    ),
-                ),
+                self.fence,
+                parent,
+                expected_epoch=expected_epoch,
+                removal_reason=removal_reason,
             )
         await self.progress(result, ())
-        for child_type in child_types:
-            while True:
-                await self.check_limits()
-                async with self.sessions() as db:
-                    result = await self.service.remove_scope(
-                        db,
-                        self.fence,
-                        RemovedScope(
-                            record_type=child_type,
-                            container_id=native_id,
-                            removal_reason=removal_reason,
-                            observed_at=observed,
-                        ),
-                    )
-                await self.progress(result.capture, ())
-                if not result.has_more:
-                    break
+        while True:
+            await self.check_limits()
+            async with self.sessions() as db:
+                result = await self.service.reconcile_parents(db, self.fence)
+            await self.progress(result.capture, ())
+            if not result.has_more:
+                return

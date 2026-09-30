@@ -58,6 +58,8 @@ class ScanState(BaseModel):
     continuation: ScanContinuation
     started_at: AwareDatetime
     completed_at: AwareDatetime | None
+    parent_visibility_epoch: int | None = None
+    membership_attempt_id: UUID | None = None
 
 
 class CommitScanPage(BaseModel):

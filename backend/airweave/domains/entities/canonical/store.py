@@ -61,7 +61,7 @@ class WriterBusy(CanonicalStoreError):
 
 def capture_fingerprint(record: CaptureRecord) -> str:
     """Observation times never create changes; sparse tombstone payloads do."""
-    material = record.model_dump(mode="json", exclude={"observed_at"})
+    material = record.model_dump(mode="json", exclude={"observed_at", "allow_reparent"})
     serialized = json.dumps(
         material, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     )
@@ -355,6 +355,12 @@ class CanonicalRecordStore:
                     .execution_options(populate_existing=True)
                 )
             ).scalar_one_or_none()
+            if entity is not None and observation.kind == "delete" and observation.parent is None:
+                # Native deletion feeds may contain only an object ID. Missing parent data
+                # is not evidence that the object moved out of its known authorization chain.
+                observation = observation.model_copy(
+                    update={"parent": source_record(entity).parent}
+                )
             parent_epoch = await self._parent_attestation(db, sync, observation, entity)
             fingerprint = capture_fingerprint(observation)
             was_available = (
@@ -375,6 +381,11 @@ class CanonicalRecordStore:
                     else (None, None, None)
                 )
             )
+            if parent_changed and not observation.allow_reparent:
+                raise CanonicalStoreError(
+                    "Existing identity belongs to a different parent; "
+                    "explicit provider move required"
+                )
             attestation_changed = (
                 entity is not None and entity.parent_visibility_epoch != parent_epoch
             )
@@ -459,7 +470,13 @@ class CanonicalRecordStore:
         return await self._reconcile_scope_locked(db, sync, request)
 
     async def _reconcile_scope_locked(
-        self, db: AsyncSession, sync: Sync, request: ReconcileScope, *, seen_id: UUID | None = None
+        self,
+        db: AsyncSession,
+        sync: Sync,
+        request: ReconcileScope,
+        *,
+        seen_id: UUID | None = None,
+        parent_scoped: bool = False,
     ) -> ReconcileResult:
         """Share exact-scope reconciliation with durable whole-scope scans."""
         statement = (
@@ -476,6 +493,17 @@ class CanonicalRecordStore:
             .order_by(Entity.id)
             .limit(request.limit + 1)
         )
+        if parent_scoped:
+            parent = request.scope.parent
+            statement = statement.where(
+                Entity.parent_record_type.is_not_distinct_from(
+                    parent.record_type if parent else None
+                ),
+                Entity.parent_native_id.is_not_distinct_from(parent.native_id if parent else None),
+                Entity.parent_container_id.is_not_distinct_from(
+                    parent.container_id if parent else None
+                ),
+            )
         entities = list((await db.scalars(statement)).all())
         observations = tuple(
             CaptureRecord(

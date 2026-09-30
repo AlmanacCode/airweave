@@ -177,11 +177,18 @@ async def test_reparent_invalidates_descendants_and_failed_batch_rolls_back(data
     leaf = node("leaf", child.identity)
     result = await capture(database, service, fence, first, second, child, leaf)
     leaf_id = result.changes[-1].record.id
-    moved = child.model_copy(update={"parent": second.identity})
+    moved = child.model_copy(update={"parent": second.identity, "allow_reparent": True})
+    with pytest.raises(CanonicalStoreError, match="different parent"):
+        await capture(database, service, fence, moved.model_copy(update={"allow_reparent": False}))
+    assert (await available(database, [leaf_id]))[leaf_id] is True
     with pytest.raises(CanonicalStoreError):
         await capture(database, service, fence, moved, node("bad", node("missing").identity))
     assert (await available(database, [leaf_id]))[leaf_id] is True
     await capture(database, service, fence, moved)
+    replay = await capture(
+        database, service, fence, moved.model_copy(update={"allow_reparent": False})
+    )
+    assert replay.unchanged == 1 and replay.changes == ()
     assert (await available(database, [leaf_id]))[leaf_id] is False
     await capture(database, service, fence, leaf)
     assert (await available(database, [leaf_id]))[leaf_id] is True

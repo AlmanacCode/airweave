@@ -82,7 +82,18 @@ class PageResumeProbe:
             assert sync.writer_job_id == self.job_id and sync.writer_attempt_id == self.attempt_id
             assert job.organization_id == self.organization_id and job.sync_id == self.sync_id
             assert job.status == "running" and cycle.phase == "active"
-            assert cycle.root_writer_attempt_id == self.attempt_id
+            root = await db.scalar(
+                select(CaptureScan).where(
+                    CaptureScan.organization_id == self.organization_id,
+                    CaptureScan.sync_id == self.sync_id,
+                    CaptureScan.cycle_id == cycle.version.cycle_id,
+                    CaptureScan.record_type == "channel",
+                    CaptureScan.parent_record_id.is_(None),
+                    CaptureScan.container_id.is_(None),
+                )
+            )
+            assert root is not None and root.phase == "complete"
+            assert root.membership_attempt_id == self.attempt_id
             assert row.cycle_id == cycle.version.cycle_id and row.phase == "collecting"
             assert row.continuation == continuation.value
             target = ResumeTarget(

@@ -372,7 +372,8 @@ async def test_explicit_restart_preserves_originals_and_last_checkpoint(database
     async with database() as db:
         replacement = await service.restart_cycle(db, request)
     assert replacement.version.cycle_id != active.version.cycle_id
-    assert replacement.phase == "active" and replacement.root_writer_attempt_id is None
+    assert replacement.phase == "active"
+    assert "root_writer_attempt_id" not in replacement.model_dump()
     async with database() as db:
         with pytest.raises(CycleConflict):
             await service.restart_cycle(db, request)

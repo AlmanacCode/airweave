@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from airweave.domains.entities.canonical.requests import CompletedScope
+from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.requests import CompletedScope, RecordIdentity
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
 from airweave.domains.sources.token_providers.static import StaticTokenProvider
 from airweave.platform.sources.slack import SlackApiError, SlackSource
@@ -75,10 +76,16 @@ async def test_incomplete_pagination_fails(pages):
 async def test_prior_channel_loss_requires_explicit_provider_confirmation():
     connector = source()
     connector._get = AsyncMock(side_effect=SlackApiError("channel_not_found"))
-    await connector.confirm_root_absent("C1")
+    await connector.confirm_absent(
+        SourceRecord.model_construct(identity=RecordIdentity(record_type="channel", native_id="C1"))
+    )
     connector._get = AsyncMock(return_value={"channel": {"id": "C1"}})
     with pytest.raises(ValueError, match="omitted"):
-        await connector.confirm_root_absent("C1")
+        await connector.confirm_absent(
+            SourceRecord.model_construct(
+                identity=RecordIdentity(record_type="channel", native_id="C1")
+            )
+        )
 
 
 @pytest.mark.asyncio

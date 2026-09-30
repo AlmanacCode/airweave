@@ -5,27 +5,89 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from airweave.domains.entities.canonical.requests import WriterFence
+from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.requests import RecordKind, WriterFence
 
 CYCLE_KEY = "canonical_cycle"
 
 
 class CycleConfiguration(BaseModel):
-    """Whole-scope topology; child containers are visible root native IDs."""
+    """Immutable copy of the source's allowed record-parent relationships."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
-    root_record_type: str = Field(min_length=1, max_length=200)
-    child_record_types: tuple[str, ...] = Field(default=(), max_length=20)
+    parents: dict[RecordKind, tuple[RecordKind | None, ...]]
+
+    @classmethod
+    def from_source(
+        cls,
+        *,
+        fingerprint: str,
+        record_types: tuple[str, ...],
+        container_parents: dict[str, str | tuple[str | None, ...]],
+    ) -> "CycleConfiguration":
+        """Snapshot the existing source declaration; no second topology registry."""
+        if len(set(record_types)) != len(record_types):
+            raise ValueError("Duplicate source record kind")
+        if set(container_parents) - set(record_types):
+            raise ValueError("Parent relationship has an undeclared source record kind")
+        parents = {}
+        for kind in record_types:
+            declared = container_parents.get(kind, (None,))
+            parents[kind] = (declared,) if isinstance(declared, str) else declared
+        return cls(fingerprint=fingerprint, parents=parents)
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_flat(cls, value):
+        """Read schema1 flat declarations without retaining a competing topology."""
+        if isinstance(value, dict) and "root_record_type" in value:
+            upgraded = dict(value)
+            root = upgraded.pop("root_record_type")
+            children = upgraded.pop("child_record_types", ())
+            if not isinstance(children, (list, tuple)):
+                raise ValueError("Legacy child kinds must be an array")
+            if "parents" in upgraded or root in children or len(set(children)) != len(children):
+                raise ValueError("Ambiguous capture topology")
+            upgraded["parents"] = {root: (None,), **{child: (root,) for child in children}}
+            return upgraded
+        return value
 
     @model_validator(mode="after")
-    def distinct_types(self) -> "CycleConfiguration":
-        """Keep scope discovery bounded and unambiguous."""
-        if len(set(self.child_record_types)) != len(self.child_record_types):
-            raise ValueError("Child record types must be unique")
-        if any(not item or len(item) > 200 for item in self.child_record_types):
-            raise ValueError("Invalid child record type")
+    def reachable_types(self) -> "CycleConfiguration":
+        """Type cycles are valid; every declared kind must be reachable from a root."""
+        if not self.parents or any(not kind or not values for kind, values in self.parents.items()):
+            raise ValueError("Capture topology must declare kinds and their parents")
+        if any(len(set(values)) != len(values) for values in self.parents.values()):
+            raise ValueError("Duplicate allowed parent kind")
+        if any(
+            parent is not None and parent not in self.parents
+            for values in self.parents.values()
+            for parent in values
+        ):
+            raise ValueError("Unknown parent kind")
+        reachable = {kind for kind, values in self.parents.items() if None in values}
+        while True:
+            expanded = reachable | {
+                kind
+                for kind, values in self.parents.items()
+                if any(parent in reachable for parent in values)
+            }
+            if expanded == reachable:
+                break
+            reachable = expanded
+        if reachable != set(self.parents):
+            raise ValueError("Capture kinds must be reachable from a root")
         return self
+
+    @property
+    def root_record_types(self) -> tuple[str, ...]:
+        """Kinds permitting records without a parent."""
+        return tuple(kind for kind, parents in self.parents.items() if None in parents)
+
+    def children_of(self, kind: str) -> tuple[str, ...]:
+        """Scopes required for a visible record of this kind."""
+        return tuple(child for child, parents in self.parents.items() if kind in parents)
 
 
 class CycleVersion(BaseModel):
@@ -40,12 +102,21 @@ class CaptureCycle(BaseModel):
     """Completion stays durable until an explicit next-cycle CAS."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     version: CycleVersion
     configuration: CycleConfiguration
     phase: Literal["active", "complete"] = "active"
-    root_writer_attempt_id: UUID | None = None
     completed_job_id: UUID | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_version(cls, value):
+        """Flat persisted cycles normalize through the same configuration boundary."""
+        if isinstance(value, dict) and value.get("schema_version") == 1:
+            upgraded = {**value, "schema_version": 2}
+            upgraded.pop("root_writer_attempt_id", None)
+            return upgraded
+        return value
 
 
 class BeginCycle(BaseModel):
@@ -74,9 +145,10 @@ class RestartCycle(BaseModel):
     configuration: CycleConfiguration
 
 
-class CycleRoot(BaseModel):
-    """Bounded operational scope discovery, without copying provider payloads."""
+class ScopeWork(BaseModel):
+    """An eligible incomplete inventory and its exact captured owner, never a durable queue."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    id: UUID
-    native_id: str
+    record_type: str
+    parent: SourceRecord | None = None
+    parent_visibility_epoch: int | None = None

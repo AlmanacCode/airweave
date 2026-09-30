@@ -7,8 +7,9 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.page_source import ScopeAccessLost
-from airweave.domains.entities.canonical.requests import CompletedScope
+from airweave.domains.entities.canonical.requests import CompletedScope, RecordIdentity
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
 from airweave.domains.sources.exceptions import SourceError, SourceRateLimitError
 from airweave.domains.sources.token_providers.protocol import ManagedAuthProvider
@@ -199,8 +200,16 @@ async def test_omitted_readable_selected_root_blocks_reconciliation():
         response({"issue": {**node(), "team": {"id": str(UUID(int=99))}}}),
     )
     with pytest.raises(ValueError, match="still readable"):
-        await capture.confirm_root_absent(str(ISSUE))
-    await capture.confirm_root_absent(str(ISSUE))
+        await capture.confirm_absent(
+            SourceRecord.model_construct(
+                identity=RecordIdentity(record_type="issue", native_id=str(ISSUE))
+            )
+        )
+    await capture.confirm_absent(
+        SourceRecord.model_construct(
+            identity=RecordIdentity(record_type="issue", native_id=str(ISSUE))
+        )
+    )
 
 
 @pytest.mark.asyncio

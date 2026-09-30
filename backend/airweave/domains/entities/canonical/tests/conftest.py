@@ -131,6 +131,101 @@ def seed_flat_visibility(connection):
         )
 
 
+def seed_flat_scan(connection, mode="scan_upgrade"):
+    """A schema1 active cycle with an acknowledged provider continuation before0007."""
+    from sqlalchemy import MetaData, Table
+
+    metadata = MetaData()
+    cursor = Table("sync_cursor", metadata, autoload_with=connection)
+    scans = Table("capture_scan", metadata, autoload_with=connection)
+    parent = connection.execute(
+        text("SELECT organization_id,sync_id FROM entity WHERE native_id='active-root'")
+    ).one()
+    cycle_id, sweep_id = uuid4(), uuid4()
+    now = datetime.now(timezone.utc)
+    connection.execute(
+        cursor.insert().values(
+            id=uuid4(),
+            organization_id=parent.organization_id,
+            sync_id=parent.sync_id,
+            created_at=now.replace(tzinfo=None),
+            modified_at=now.replace(tzinfo=None),
+            last_updated=now,
+            cursor_data={
+                "canonical_cycle": {
+                    "schema_version": 1,
+                    "version": {"cycle_id": str(cycle_id), "revision": 7},
+                    "configuration": {
+                        "fingerprint": "a" * 64,
+                        "root_record_type": "block",
+                        "child_record_types": ["leaf"],
+                    },
+                    "phase": "active",
+                    "root_writer_attempt_id": str(uuid4()),
+                }
+            },
+        )
+    )
+    connection.execute(
+        scans.insert().values(
+            id=uuid4(),
+            organization_id=parent.organization_id,
+            sync_id=parent.sync_id,
+            created_at=now.replace(tzinfo=None),
+            modified_at=now.replace(tzinfo=None),
+            scope_key='["leaf","active-root"]',
+            record_type="leaf",
+            container_id="active-root",
+            cycle_id=cycle_id,
+            sweep_id=sweep_id,
+            revision=11,
+            phase="collecting",
+            fingerprint="a" * 64,
+            continuation={"cursor": "synthetic-acknowledged-page"},
+            started_at=now,
+        )
+    )
+
+    if mode != "scan_upgrade":
+        stored = connection.execute(cursor.select()).mappings().one()
+        changed = dict(stored["cursor_data"])
+        legacy = changed["canonical_cycle"]
+        if mode == "scan_upgrade_children_object":
+            legacy["configuration"]["child_record_types"] = {"leaf": True}
+        elif mode == "scan_upgrade_foreign_version":
+            legacy["schema_version"] = 77
+        elif mode == "scan_upgrade_completed":
+            legacy["phase"] = "complete"
+        elif mode == "scan_upgrade_too_many_children":
+            legacy["configuration"]["child_record_types"] = [
+                "leaf",
+                *[f"kind{i}" for i in range(20)],
+            ]
+        elif mode == "scan_upgrade_default_children":
+            legacy["configuration"].pop("child_record_types")
+            connection.execute(
+                scans.insert().values(
+                    id=uuid4(),
+                    organization_id=parent.organization_id,
+                    sync_id=parent.sync_id,
+                    created_at=now.replace(tzinfo=None),
+                    modified_at=now.replace(tzinfo=None),
+                    scope_key='["block",null]',
+                    record_type="block",
+                    container_id=None,
+                    cycle_id=cycle_id,
+                    sweep_id=uuid4(),
+                    revision=9,
+                    phase="complete",
+                    fingerprint="a" * 64,
+                    continuation={},
+                    started_at=now,
+                    completed_at=now,
+                )
+            )
+        connection.execute(cursor.update().values(cursor_data=changed))
+
+
 @pytest.fixture
 async def database(request):
     """Every test gets its own schema; no global application DSN is consulted."""
@@ -145,16 +240,43 @@ async def database(request):
     try:
         async with engine.begin() as connection:
             await connection.run_sync(migrate, "0000_baseline.py")
-            if getattr(request, "param", None) in ("legacy", "forest_upgrade"):
+            if getattr(request, "param", None) in (
+                "legacy",
+                "forest_upgrade",
+                "scan_upgrade",
+                "scan_upgrade_children_object",
+                "scan_upgrade_foreign_version",
+                "scan_upgrade_completed",
+                "scan_upgrade_default_children",
+                "scan_upgrade_too_many_children",
+            ):
                 await connection.run_sync(seed_legacy)
             await connection.run_sync(migrate, "0001_canonical_records.py")
             await connection.run_sync(migrate, "0002_projection_publication.py")
             await connection.run_sync(migrate, "0003_mail_thread_index.py")
             await connection.run_sync(migrate, "0004_projection_generation.py")
             await connection.run_sync(migrate, "0005_capture_scan.py")
-            if getattr(request, "param", None) == "forest_upgrade":
+            if getattr(request, "param", None) in (
+                "forest_upgrade",
+                "scan_upgrade",
+                "scan_upgrade_children_object",
+                "scan_upgrade_foreign_version",
+                "scan_upgrade_completed",
+                "scan_upgrade_default_children",
+                "scan_upgrade_too_many_children",
+            ):
                 await connection.run_sync(seed_flat_visibility)
             await connection.run_sync(migrate, "0006_record_visibility.py")
+            if getattr(request, "param", None) in (
+                "scan_upgrade",
+                "scan_upgrade_children_object",
+                "scan_upgrade_foreign_version",
+                "scan_upgrade_completed",
+                "scan_upgrade_default_children",
+                "scan_upgrade_too_many_children",
+            ):
+                await connection.run_sync(seed_flat_scan, request.param)
+            await connection.run_sync(migrate, "0007_scan_scope_owner.py")
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()

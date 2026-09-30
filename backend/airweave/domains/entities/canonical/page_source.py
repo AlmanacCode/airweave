@@ -5,6 +5,7 @@ from typing import Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from airweave.domains.entities.canonical.cycle_models import CycleConfiguration
+from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.requests import (
     CaptureRecord,
     CompletedScope,
@@ -46,15 +47,24 @@ class CanonicalPageSource(Protocol):
     """A source fetches pages; SQL, attempts, scope discovery and checkpointing stay outside it."""
 
     canonical_record_types: tuple[str, ...]
-    canonical_container_parents: dict[str, str]
+    canonical_container_parents: dict[str, str | tuple[str | None, ...]]
     capture_cycle_configuration: CycleConfiguration
 
     async def capture_page(
-        self, scope: CompletedScope, continuation: ScanContinuation, *, files: FileService
+        self,
+        scope: CompletedScope,
+        continuation: ScanContinuation,
+        *,
+        files: FileService,
+        parent: SourceRecord | None = None,
     ) -> CapturePage:
         """Fetch one page without advancing durable state or performing writes."""
         ...
 
-    async def confirm_root_absent(self, native_id: str) -> None:
-        """Raise unless an omitted previously captured root is confirmed inaccessible."""
+    def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
+        """Source-owned stable container policy; always retain the full parent identity."""
+        ...
+
+    async def confirm_absent(self, record: SourceRecord) -> None:
+        """Raise unless an omitted inventory record is confirmed outside accessible scope."""
         ...

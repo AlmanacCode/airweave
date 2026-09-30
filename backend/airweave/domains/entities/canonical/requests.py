@@ -1,19 +1,21 @@
 """Validated source capture commands. Provider payloads remain opaque JSON."""
 
+import hashlib
 import json
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 ScopeRemovalReason = Literal["scope_removed", "access_revoked"]
+RecordKind = Annotated[str, Field(min_length=1, max_length=200)]
 
 
 class RecordIdentity(BaseModel):
     """Native identity inside one sync, including provider-required container."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    record_type: str = Field(min_length=1)
+    record_type: RecordKind
     native_id: str = Field(min_length=1)
     container_id: str | None = None
 
@@ -23,6 +25,19 @@ class RecordIdentity(BaseModel):
         return json.dumps(
             [self.container_id, self.native_id], ensure_ascii=False, separators=(",", ":")
         )
+
+
+def parent_container_key(parent: RecordIdentity) -> str:
+    """Optional source identity policy: bounded full-parent locator, stable across rebuilds.
+
+    New connectors choosing this policy use it for every child, including root-owned
+    children. Native parent identity remains in CaptureRecord.parent and native JSON.
+    Existing connectors may retain their audited provider-global container IDs.
+    """
+    material = json.dumps(
+        parent.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return "parent:" + hashlib.sha256(material.encode()).hexdigest()
 
 
 class BlobReference(BaseModel):
@@ -44,6 +59,10 @@ class CaptureRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     identity: RecordIdentity
     parent: RecordIdentity | None = None
+    allow_reparent: bool = Field(
+        default=False,
+        description="Audited provider evidence that this same object moved; never a retry override",
+    )
     payload: dict[str, JsonValue]
     payload_schema_version: int = Field(default=1, ge=1)
     kind: Literal["upsert", "delete"] = "upsert"
@@ -88,11 +107,12 @@ class CaptureBatch(BaseModel):
 
 
 class CompletedScope(BaseModel):
-    """Evidence that one exact type/container was exhaustively enumerated."""
+    """Evidence for one exact type/container and, for nested pages, its full owner."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    record_type: str = Field(min_length=1)
+    record_type: RecordKind
     container_id: str | None = None
+    parent: RecordIdentity | None = None
 
 
 class ReconcileScope(BaseModel):
