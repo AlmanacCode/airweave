@@ -65,15 +65,24 @@ async def _drive(
                 breadcrumbs=[],
             ),
         )
-    if len(record.blobs) != 1:
-        raise ProjectionMappingError("Drive content requires exactly one captured blob")
-    blob = record.blobs[0]
-    content = await read_blob(record, blob, storage)
-    media_type = blob.media_type or _string(data.get("mimeType"))
-    suffix = mimetypes.guess_extension(media_type) or Path(_string(data.get("name"))).suffix
-    if not suffix:
-        raise ProjectionMappingError("Drive captured bytes have no known file format")
-    suffix = suffix.lower()
+    if any(blob.role == "representation_manifest" for blob in record.blobs):
+        from airweave.domains.entities.canonical.workspace_docs import read_document
+
+        document = await read_document(record, storage)
+        content = document.text().encode("utf-8")
+        media_type = "text/plain"
+        suffix = ".txt"
+    else:
+        # Historical Drive records retain their export-only contract.
+        if len(record.blobs) != 1:
+            raise ProjectionMappingError("Drive content requires exactly one captured blob")
+        blob = record.blobs[0]
+        content = await read_blob(record, blob, storage)
+        media_type = blob.media_type or _string(data.get("mimeType"))
+        suffix = mimetypes.guess_extension(media_type) or Path(_string(data.get("name"))).suffix
+        if not suffix:
+            raise ProjectionMappingError("Drive captured bytes have no known file format")
+        suffix = suffix.lower()
     local_path = await write_blob(content, directory, suffix=suffix)
     metadata = {
         **data,
