@@ -56,7 +56,7 @@ async def test_prefilter_excludes_over_two_hundred_wrong_dates_before_top_matche
                     else "event",
                     "airweave_system_metadata_source_created_known": int(known),
                     "airweave_system_metadata_source_created_us": epoch_microseconds(instant)
-                    if correct
+                    if number >= 201
                     else 0,
                     "dense_embedding": {"values": vector},
                     "sparse_embedding": {"cells": {"1": 1.0}},
