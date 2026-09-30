@@ -208,6 +208,9 @@ async def synthetic_source(name, account, expected_email, key, fence, **options)
         yield connector, 'provider_email'
 
 lifecycle.rest_source = synthetic_source
+# This offline test uses the disposable database fixture (TCP in CI, socket locally).
+# Keep the live harness's private-socket guard unchanged for real account trials.
+lifecycle.harness.test_database_url = lambda: os.environ['CANONICAL_TEST_DATABASE_URL']
 # All provider traffic uses the scripted MockTransport; synthetic credentials only.
 os.environ['COMPOSIO_API_KEY'] = 'synthetic-test-only'
 os.environ['LIVE_GMAIL_ACCOUNT_ID'] = 'synthetic-test-only'
