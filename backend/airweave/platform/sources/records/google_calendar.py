@@ -223,6 +223,11 @@ async def _capture_member(
                 scan_id=uuid4(),
             )
     except SourceEntityNotFoundError:
+        # Master enumeration can finish before expanded instances lose access.
+        # Its token cannot survive withdrawing those originals: restoration must
+        # reacquire unchanged masters, which an incremental response may omit.
+        tokens.pop(calendar_id, None)
+        coverage.pop(calendar_id, None)
         yield CaptureRecord(
             identity=RecordIdentity(record_type="calendar", native_id=calendar_id),
             payload={"id": calendar_id},

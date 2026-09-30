@@ -185,3 +185,56 @@ async def test_operational_occurrences_publish_zero_documents_without_retry(data
             for w in await projections.pending(db, fence.organization_id, fence.sync_id)
         )
         assert (await db.get(Entity, row.id)).indexed_chunk_count == 0
+
+
+async def test_occurrence_access_loss_then_full_reacquisition_restores_original(database, source):
+    from airweave.domains.entities.canonical.tests.test_capture_pipeline import components
+    from airweave.domains.sources.exceptions import SourceEntityNotFoundError
+    from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
+    from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
+    from airweave.domains.syncs.cursors.cursor import SyncCursor
+    from airweave.platform.configs.config import CalendarOccurrenceWindow
+    from airweave.platform.sources.records.google_calendar import generate_calendar_observations
+
+    capture, fence = source
+    state = SyncCursor(fence.sync_id)
+    window = CalendarOccurrenceWindow(start="2026-03-01T00:00:00Z", end="2026-04-01T00:00:00Z")
+    native = {"id": "unchanged", "status": "confirmed", "summary": "Original"}
+
+    async def run(restored, attempt):
+        async def get(url, params):
+            if url.endswith("calendarList"):
+                return {"items": [{"id": "cal", "timeZone": "UTC"}]}
+            if params["singleEvents"] == "true":
+                if not restored:
+                    raise SourceEntityNotFoundError("synthetic access loss")
+                return {"items": []}
+            assert "syncToken" not in params
+            return {"items": [native], "nextSyncToken": "restored" if restored else "discard"}
+
+        ctx, _, runtime, bus = components(database, source)
+        pipeline = CanonicalCapturePipeline(
+            capture,
+            database,
+            bus,
+            ("calendar", "event", "event_occurrence"),
+            CaptureAttempt(id=fence.attempt_id if attempt == 1 else uuid4(), number=attempt),
+            {"event": "calendar", "event_occurrence": "calendar"},
+        )
+        await pipeline.start(ctx)
+        async for observation in generate_calendar_observations(get, state, window):
+            await pipeline.process([observation], ctx, runtime)
+        await pipeline.cleanup_orphaned_entities(ctx, runtime)
+
+    await run(False, 1)
+    async with database() as db:
+        entity = await db.scalar(select(Entity).where(Entity.native_id == "unchanged"))
+        record_id = entity.id
+        lost = await capture.store.read(db, fence.organization_id, fence.sync_id, record_id)
+        assert lost.content_access == "unavailable" and lost.payload == {}
+    assert state.data["calendar_tokens"] == {}
+    await run(True, 2)
+    async with database() as db:
+        restored = await capture.store.read(db, fence.organization_id, fence.sync_id, record_id)
+        assert restored.content_access == "available"
+        assert restored.deleted_at is None and restored.payload == native

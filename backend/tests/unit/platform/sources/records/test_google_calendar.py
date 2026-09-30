@@ -315,3 +315,37 @@ async def test_selected_calendar_loses_access_between_membership_and_events():
     revoked = [item for item in result if isinstance(item, RemovedScope)]
     assert len(revoked) == 2 and all(item.removal_reason == "access_revoked" for item in revoked)
     assert state.data["calendar_tokens"] == {}
+
+
+async def test_occurrence_access_loss_discards_master_token_before_restoration():
+    from airweave.domains.sources.exceptions import SourceEntityNotFoundError
+    from airweave.platform.configs.config import CalendarOccurrenceWindow
+
+    window = CalendarOccurrenceWindow(start="2026-03-01T00:00:00Z", end="2026-04-01T00:00:00Z")
+    state = cursor({"cal": "old"})
+    get = ScriptedGet(
+        [
+            {"items": [{"id": "cal", "timeZone": "UTC"}]},
+            {"items": [{"id": "unchanged"}], "nextSyncToken": "must-discard"},
+            SourceEntityNotFoundError("synthetic access loss"),
+        ]
+    )
+    lost = [item async for item in generate_calendar_observations(get, state, window)]
+    assert state.data["calendar_tokens"] == {}
+    assert state.data["occurrence_coverage"] == {}
+    assert {item.record_type for item in lost if isinstance(item, RemovedScope)} == {
+        "event",
+        "event_occurrence",
+    }
+    restored_get = ScriptedGet(
+        [
+            {"items": [{"id": "cal", "timeZone": "UTC"}]},
+            {"items": [{"id": "unchanged"}], "nextSyncToken": "restored"},
+            {"items": []},
+        ]
+    )
+    restored = [item async for item in generate_calendar_observations(restored_get, state, window)]
+    assert "syncToken" not in restored_get.calls[1][1]
+    assert any(isinstance(item, StartedScope) and item.record_type == "event" for item in restored)
+    assert state.data["calendar_tokens"] == {"cal": "restored"}
+    assert "cal" in state.data["occurrence_coverage"]
