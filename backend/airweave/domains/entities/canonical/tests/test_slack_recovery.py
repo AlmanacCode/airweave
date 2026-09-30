@@ -429,3 +429,30 @@ async def test_unavailable_parent_without_tombstone_also_invalidates_child_progr
     assert connector._get.call_args_list[1].args[0].endswith("conversations.history")
     rows, _, _ = await saved(database)
     assert all(row.deleted_at is None and row.removal_reason is None for row in rows)
+
+
+async def test_scope_withdrawal_keeps_uncertain_reason_without_claiming_access_revocation(
+    database, source
+):
+    from airweave.domains.entities.canonical.page_source import ScopeAccessLost
+
+    instance, _, pipeline = runner(database, source, [ROOT, HISTORY])
+    original_page = pipeline.page_source.capture_page
+
+    async def unavailable(scope, continuation):
+        if scope.record_type == "message" and continuation.value.get("pending_threads"):
+            raise ScopeAccessLost(
+                "Selected scope is no longer available", removal_reason="scope_removed"
+            )
+        return await original_page(scope, continuation)
+
+    pipeline.page_source.capture_page = unavailable
+    await run(instance)
+    rows, _, _ = await saved(database)
+    assert all(row.removal_reason == "scope_removed" for row in rows)
+    async with database() as db:
+        for row in rows:
+            value = await source[0].store.read(
+                db, source[1].organization_id, source[1].sync_id, row.id
+            )
+            assert value.content_access == "unavailable" and value.payload == {}

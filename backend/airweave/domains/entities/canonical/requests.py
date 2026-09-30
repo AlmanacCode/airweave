@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+ScopeRemovalReason = Literal["scope_removed", "access_revoked"]
+
 
 class RecordIdentity(BaseModel):
     """Native identity inside one sync, including provider-required container."""
@@ -111,5 +113,5 @@ class StartedScope(CompletedScope):
 class RemovedScope(CompletedScope):
     """Provider-confirmed scope loss; applies to children even if seen in this run."""
 
-    removal_reason: Literal["scope_removed", "access_revoked"]
+    removal_reason: ScopeRemovalReason
     observed_at: AwareDatetime

@@ -2,10 +2,14 @@
 
 from typing import Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from airweave.domains.entities.canonical.cycle_models import CycleConfiguration
-from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope
+from airweave.domains.entities.canonical.requests import (
+    CaptureRecord,
+    CompletedScope,
+    ScopeRemovalReason,
+)
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
 
 
@@ -23,7 +27,17 @@ class InvalidScanContinuation(Exception):
 
 
 class ScopeAccessLost(Exception):
-    """Provider explicitly confirmed access loss for the requested child container."""
+    """The source's audited contract says this child container is no longer available."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        removal_reason: ScopeRemovalReason = "access_revoked",
+    ):
+        """Slack keeps its confirmed-access default; other sources must choose explicitly."""
+        super().__init__(message)
+        self.removal_reason = TypeAdapter(ScopeRemovalReason).validate_python(removal_reason)
 
 
 @runtime_checkable

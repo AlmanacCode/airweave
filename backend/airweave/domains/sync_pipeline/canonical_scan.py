@@ -14,6 +14,7 @@ from airweave.domains.entities.canonical.page_source import (
     CanonicalPageSource,
     InvalidScanContinuation,
     ScopeAccessLost,
+    ScopeRemovalReason,
 )
 from airweave.domains.entities.canonical.requests import (
     CaptureBatch,
@@ -79,11 +80,12 @@ class CanonicalScanDriver:
                     scope = CompletedScope(record_type=child_type, container_id=item.native_id)
                     try:
                         await self.scan(cycle, scope)
-                    except ScopeAccessLost:
+                    except ScopeAccessLost as error:
                         await self.withdraw_root(
                             configuration.root_record_type,
                             item.native_id,
                             configuration.child_record_types,
+                            error.removal_reason,
                         )
                         break
             after = roots[-1].id
@@ -197,9 +199,13 @@ class CanonicalScanDriver:
             await self.progress(result.capture, ())
 
     async def withdraw_root(
-        self, root_type: str, native_id: str, child_types: tuple[str, ...]
+        self,
+        root_type: str,
+        native_id: str,
+        child_types: tuple[str, ...],
+        removal_reason: ScopeRemovalReason,
     ) -> None:
-        """Explicit provider access loss hides the parent before bounded child cleanup."""
+        """Withdraw the parent before bounded children, retaining the source-audited reason."""
         observed = datetime.now(timezone.utc)
         async with self.sessions() as db:
             result = await self.service.capture(
@@ -211,7 +217,7 @@ class CanonicalScanDriver:
                             identity=RecordIdentity(record_type=root_type, native_id=native_id),
                             payload={"id": native_id},
                             kind="delete",
-                            removal_reason="access_revoked",
+                            removal_reason=removal_reason,
                             observed_at=observed,
                         ),
                     ),
@@ -228,7 +234,7 @@ class CanonicalScanDriver:
                         RemovedScope(
                             record_type=child_type,
                             container_id=native_id,
-                            removal_reason="access_revoked",
+                            removal_reason=removal_reason,
                             observed_at=observed,
                         ),
                     )
