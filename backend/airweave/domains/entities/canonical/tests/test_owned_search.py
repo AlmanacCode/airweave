@@ -362,3 +362,39 @@ async def test_final_gate_drops_early_hit_changed_during_later_collection(
     assert calls == 2 and response.status_code == 200
     assert response.json()["items"] == [] and response.json()["excluded_candidates"] == 1
     assert "Private original text" not in response.text
+
+
+@pytest.mark.parametrize(
+    "provider,thread_id,expected",
+    [
+        ("gmail", "thread-1", "thread-1"),
+        ("slack", "thread-1", None),
+        ("gmail", None, None),
+        ("gmail", "bad/id", None),
+        ("gmail", {"bad": "value"}, None),
+    ],
+)
+async def test_email_route_uses_visible_canonical_provider_payload(
+    database, indexed, http_search, provider, thread_id, expected
+):
+    from airweave.models.entity import Entity
+
+    fence, locator, _ = indexed
+    client, vector, _, _, _ = http_search
+    async with database() as db:
+        await db.execute(update(SourceConnection).values(short_name=provider))
+        await db.execute(
+            update(Entity).values(
+                entity_definition_short_name="message", source_payload={"threadId": thread_id}
+            )
+        )
+        await db.commit()
+    candidate = hit(fence, locator.encode())
+    candidate.airweave_system_metadata.source_name = provider
+    vector.seed_results(SearchResults(results=[candidate]))
+    response = await client.post(
+        "/sync/search",
+        json={"query": "budget", "sync_ids": [str(fence.sync_id)], "mode": "keyword"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["items"][0]["email_thread_id"] == expected

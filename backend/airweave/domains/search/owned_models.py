@@ -50,6 +50,7 @@ class OwnedSearchHit(BaseModel):
     identity: RecordIdentity
     title: str
     excerpts: tuple[str, ...]
+    email_thread_id: str | None = Field(default=None, max_length=512, pattern=r"^[A-Za-z0-9_-]+$")
     observed_at: AwareDatetime
     source_created_at: AwareDatetime | None
     source_updated_at: AwareDatetime | None

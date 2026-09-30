@@ -1,5 +1,6 @@
 """Original-record indexed retrieval using the existing executor and SQL authority."""
 
+import re
 from collections import defaultdict
 from uuid import UUID
 
@@ -213,6 +214,14 @@ class OwnedSearchService:
                     source_created_at=row.source_created_at,
                     source_updated_at=row.source_updated_at,
                     completeness=row.completeness,
+                    email_thread_id=(
+                        thread_id
+                        if scopes[row.sync_id].short_name == "gmail"
+                        and row.entity_definition_short_name == "message"
+                        and isinstance(thread_id := (row.source_payload or {}).get("threadId"), str)
+                        and re.fullmatch(r"[A-Za-z0-9_-]{1,512}", thread_id)
+                        else None
+                    ),
                 )
                 scores[row.id] = (1 / (60 + rank), locator)
             excerpt = result.textual_representation[:2000]
