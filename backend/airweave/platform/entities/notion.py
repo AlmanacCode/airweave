@@ -556,3 +556,27 @@ class NotionFileEntity(FileEntity):
         if self.web_url_value:
             return self.web_url_value
         return self.url
+
+
+class NotionOriginalEntity(BaseEntity):
+    """Searchable metadata or block-local text from one retained Notion original."""
+
+    native_id: str = AirweaveField(..., description="Native Notion UUID.", is_entity_id=True)
+    original_kind: str = AirweaveField(..., description="Native Notion object kind.")
+    title: str = AirweaveField(
+        ..., description="Retained title or block label.", is_name=True, embeddable=True
+    )
+    text: str = AirweaveField(
+        ..., description="Retained metadata or this block's text only.", embeddable=True
+    )
+    native_url: Optional[str] = AirweaveField(
+        None, description="URL supplied by Notion, when retained."
+    )
+    content_coverage: str = AirweaveField(
+        ..., description="What this projection includes and omits."
+    )
+
+    @computed_field(return_type=str)
+    def web_url(self) -> str:
+        """Preserve native navigation without inventing block or child URLs."""
+        return self.native_url or ""

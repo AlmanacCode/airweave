@@ -235,6 +235,10 @@ async def map_record(
             from airweave.domains.entities.canonical.linear_projection import map_linear
 
             entities = await map_linear(record, storage, directory)
+        elif source_name == "notion":
+            from airweave.domains.entities.canonical.notion_projection import map_notion
+
+            entities = map_notion(record)
         elif source_name == "google_drive":
             entities = await _drive(record, storage, directory)
         elif source_name == "google_calendar":

@@ -198,6 +198,7 @@ from .monday import (
 from .notion import (
     NotionDatabaseEntity,
     NotionFileEntity,
+    NotionOriginalEntity,
     NotionPageEntity,
     NotionPropertyEntity,
 )
@@ -570,6 +571,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
     "notion": [
         NotionDatabaseEntity,
         NotionFileEntity,
+        NotionOriginalEntity,
         NotionPageEntity,
         NotionPropertyEntity,
     ],
