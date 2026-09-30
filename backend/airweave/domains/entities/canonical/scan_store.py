@@ -410,7 +410,10 @@ class CanonicalScanStore:
             Entity.record_revision > 0,
             Entity.last_seen_run_id.is_distinct_from(row.sweep_id),
         ]
-        if cycle.configuration.policy(row.record_type) != "discovery_with_validation":
+        if (
+            cycle.configuration.policy(row.record_type) != "discovery_with_validation"
+            and row.record_type not in cycle.configuration.known_object_validation
+        ):
             predicates.append(Entity.deleted_at.is_(None))
         if after is not None:
             predicates.append(Entity.id > after)
@@ -428,6 +431,7 @@ class CanonicalScanStore:
         if (
             cycle.configuration.policy(request.state.scope.record_type)
             != "discovery_with_validation"
+            and request.state.scope.record_type not in cycle.configuration.known_object_validation
         ):
             raise ScanConflict("This scope does not accept known-object validation")
         candidates = await self.missing(db, request.fence, request.state)
@@ -480,11 +484,12 @@ class CanonicalScanStore:
         if row.phase != "reconciling":
             raise ScanConflict("Only fully collected scans can reconcile absence")
         policy = cycle.configuration.policy(row.record_type)
+        if (
+            policy == "discovery_with_validation"
+            or row.record_type in cycle.configuration.known_object_validation
+        ) and await self.missing(db, request.fence, await self._state(db, row)):
+            raise ScanConflict("Known objects still require exact validation")
         if policy != "exhaustive":
-            if policy == "discovery_with_validation" and await self.missing(
-                db, request.fence, await self._state(db, row)
-            ):
-                raise ScanConflict("Known objects still require exact validation")
             row.phase = "complete"
             row.completed_at = datetime.now(timezone.utc)
             row.revision += 1

@@ -4,7 +4,12 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from airweave.domains.entities.canonical.cycle_models import CycleConfiguration
+from airweave.domains.entities.canonical.cycle_models import (
+    CaptureCycle,
+    CaptureMode,
+    CycleConfiguration,
+    ProviderCheckpoint,
+)
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.requests import (
     CaptureRecord,
@@ -27,6 +32,32 @@ class CapturePage(BaseModel):
     )
     continuation: ScanContinuation
     final: bool = False
+    provider_checkpoint: ProviderCheckpoint | None = None
+
+
+class CapturePlan(BaseModel):
+    """Immutable source plan selected once before engine cycle creation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    mode: CaptureMode = "full"
+    starting_checkpoint: ProviderCheckpoint | None = None
+
+
+class InvalidCaptureCheckpoint(Exception):
+    """Native evidence invalidates a whole cycle boundary, not merely a page token."""
+
+
+@runtime_checkable
+class CheckpointedPageSource(Protocol):
+    """Sources with a native changes API reuse the same cycle and page authority."""
+
+    async def prepare_cycle(self, previous: CaptureCycle | None) -> CapturePlan:
+        """Provider I/O occurs before the fenced cycle CAS; None requests a fresh full pass."""
+        ...
+
+    def initial_continuation(self, cycle: CaptureCycle) -> ScanContinuation:
+        """Derive resumable page state only from the persisted immutable plan."""
+        ...
 
 
 class InvalidScanContinuation(Exception):
@@ -77,7 +108,7 @@ class CanonicalPageSource(Protocol):
 
 @runtime_checkable
 class KnownObjectSource(Protocol):
-    """Only discovery-with-validation sources implement exact current reads."""
+    """Sources declaring exact known-object validation implement current reads."""
 
     async def refresh_known(self, record: SourceRecord, *, files: FileService) -> CaptureRecord:
         """Return exact fresh state or explicit unavailability; errors never mean absence."""

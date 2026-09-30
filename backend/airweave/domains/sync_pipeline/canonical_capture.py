@@ -12,6 +12,7 @@ from airweave.domains.entities.canonical.cycle_models import (
     CaptureCycle,
     CompleteCycle,
     CycleConfiguration,
+    TerminalCheckpoint,
 )
 from airweave.domains.entities.canonical.models import CaptureResult
 from airweave.domains.entities.canonical.page_source import CanonicalPageSource
@@ -68,6 +69,7 @@ class CanonicalCapturePipeline:
                 record_types=record_types,
                 container_parents=self._container_parents,
                 completion_policies=config.completion_policies,
+                known_object_validation=config.known_object_validation,
             )
             if config != declared:
                 raise ValueError("Page source cycle must match its declared container topology")
@@ -313,9 +315,13 @@ class CanonicalCapturePipeline:
                 if current.completed_job_id != self._writer().job_id:
                     raise SyncFailureError("Completed cycle belongs to another job")
                 return
+            terminal = await self._terminal_checkpoint(current)
             async with self._sessions() as db:
                 self._cycle = await self._service.complete_cycle(
-                    db, CompleteCycle(fence=self._writer(), expected=current.version)
+                    db,
+                    CompleteCycle(
+                        fence=self._writer(), expected=current.version, terminal_checkpoint=terminal
+                    ),
                 )
             return
         if runtime.cursor is None or not runtime.cursor.cursor_data:
@@ -324,6 +330,24 @@ class CanonicalCapturePipeline:
             return
         async with self._sessions() as db:
             await self._service.save_checkpoint(db, self._writer(), runtime.cursor.cursor_data)
+
+    async def _terminal_checkpoint(self, current: CaptureCycle) -> TerminalCheckpoint | None:
+        """Read only the committed terminal root boundary; the store reattests it at publication."""
+        terminal = None
+        if current.starting_checkpoint is not None or current.mode == "changes":
+            if len(current.configuration.root_record_types) != 1:
+                raise SyncFailureError("Checkpoint capture requires one terminal root scope")
+            kind = current.configuration.root_record_types[0]
+            async with self._sessions() as db:
+                scan = await self._service.read_scan(
+                    db, self._writer(), CompletedScope(record_type=kind)
+                )
+            if scan is None or scan.provider_checkpoint is None:
+                raise SyncFailureError("Capture has no committed terminal provider checkpoint")
+            terminal = TerminalCheckpoint(
+                record_type=kind, expected=scan.version, checkpoint=scan.provider_checkpoint
+            )
+        return terminal
 
     async def cleanup_temp_files(self, sync_context: SyncContext, runtime: SyncRuntime) -> None:
         """Reuse source-job temporary-file cleanup; immutable blobs are not temporary."""

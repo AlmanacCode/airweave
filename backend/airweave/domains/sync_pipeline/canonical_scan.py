@@ -7,11 +7,14 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from airweave.domains.entities.canonical.cycle_models import BeginCycle, CaptureCycle
+from airweave.domains.entities.canonical.cycle_models import BeginCycle, CaptureCycle, RestartCycle
 from airweave.domains.entities.canonical.cycle_store import CycleConflict
 from airweave.domains.entities.canonical.models import CaptureResult, SourceRecord
 from airweave.domains.entities.canonical.page_source import (
     CanonicalPageSource,
+    CapturePlan,
+    CheckpointedPageSource,
+    InvalidCaptureCheckpoint,
     InvalidScanContinuation,
     KnownObjectSource,
     ScopeAccessLost,
@@ -27,6 +30,7 @@ from airweave.domains.entities.canonical.scan_models import (
     CommitOmission,
     CommitScanPage,
     ReconcileScan,
+    ScanContinuation,
     ScanState,
 )
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
@@ -62,10 +66,55 @@ class CanonicalScanDriver:
             expected = current.version
         else:
             expected = None
+        plan = (
+            CapturePlan(mode=current.mode, starting_checkpoint=current.starting_checkpoint)
+            if current is not None and current.phase == "active"
+            else (
+                await self.source.prepare_cycle(current)
+                if isinstance(self.source, CheckpointedPageSource)
+                else CapturePlan()
+            )
+        )
         async with self.sessions() as db:
             cycle = await self.service.begin_cycle(
-                db, BeginCycle(fence=self.fence, configuration=configuration, expected=expected)
+                db,
+                BeginCycle(
+                    fence=self.fence,
+                    configuration=configuration,
+                    expected=expected,
+                    mode=plan.mode,
+                    starting_checkpoint=plan.starting_checkpoint,
+                ),
             )
+        for restart in range(2):
+            try:
+                return await self.run_cycle(cycle)
+            except InvalidCaptureCheckpoint:
+                if restart or not isinstance(self.source, CheckpointedPageSource):
+                    raise
+                await self.check_limits()
+                plan = await self.source.prepare_cycle(None)
+                if plan.mode != "full":
+                    raise CycleConflict("An invalid checkpoint requires a fresh full capture")
+                async with self.sessions() as db:
+                    current = await self.service.read_cycle(db, self.fence)
+                    if current is None or current.version.cycle_id != cycle.version.cycle_id:
+                        raise CycleConflict("Cycle changed during checkpoint recovery")
+                    cycle = await self.service.restart_cycle(
+                        db,
+                        RestartCycle(
+                            fence=self.fence,
+                            expected=current.version,
+                            configuration=configuration,
+                            mode=plan.mode,
+                            starting_checkpoint=plan.starting_checkpoint,
+                        ),
+                    )
+        raise AssertionError("Unreachable checkpoint recovery")
+
+    async def run_cycle(self, cycle: CaptureCycle) -> CaptureCycle:
+        """Process the current frontier; every acknowledgement remains in the existing SQL store."""
+        configuration = cycle.configuration
         while True:
             async with self.sessions() as db:
                 work = await self.service.next_scope_work(db, self.fence, cycle.version.cycle_id)
@@ -132,6 +181,7 @@ class CanonicalScanDriver:
                     fingerprint=cycle.configuration.fingerprint,
                     expected=previous.version if previous else None,
                     restart=restart,
+                    continuation=self.initial_continuation(cycle),
                 ),
             )
         restarts = 0
@@ -155,6 +205,7 @@ class CanonicalScanDriver:
                             fingerprint=state.fingerprint,
                             expected=state.version,
                             restart=True,
+                            continuation=self.initial_continuation(cycle),
                         ),
                     )
                 continue
@@ -171,16 +222,27 @@ class CanonicalScanDriver:
                         discovered_records=page.discovered_records,
                         continuation=page.continuation,
                         final=page.final,
+                        provider_checkpoint=page.provider_checkpoint,
                     ),
                 )
             state = result.state
             await self.progress(result.capture, (*page.records, *page.discovered_records))
         if state.phase == "reconciling":
-            if state.completion_policy == "discovery_with_validation":
+            if state.completion_policy == "discovery_with_validation" or (
+                state.scope.record_type in cycle.configuration.known_object_validation
+            ):
                 state = await self.refresh_known(state)
             elif state.completion_policy == "exhaustive" and refresh_membership:
                 await self.confirm_omissions(state)
         await self.reconcile(state)
+
+    def initial_continuation(self, cycle: CaptureCycle) -> ScanContinuation:
+        """Sources without a native changes contract retain the empty initial cursor."""
+        return (
+            self.source.initial_continuation(cycle)
+            if isinstance(self.source, CheckpointedPageSource)
+            else ScanContinuation()
+        )
 
     @staticmethod
     def _parented(record: CaptureRecord, scope: CompletedScope) -> CaptureRecord:

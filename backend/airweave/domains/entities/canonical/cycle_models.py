@@ -34,10 +34,13 @@ class CycleConfiguration(BaseModel):
     fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
     parents: dict[RecordKind, tuple[RecordKind | None, ...]]
     completion_policies: dict[RecordKind, CompletionPolicy] = Field(default_factory=dict)
+    known_object_validation: tuple[RecordKind, ...] = ()
 
     def digest(self) -> str:
         """Bind history to scope, topology and guarantees, including default policies."""
         value = self.model_dump(mode="json")
+        if not self.known_object_validation:
+            value.pop("known_object_validation")  # Preserve existing default configuration digests.
         value["completion_policies"] = {kind: self.policy(kind) for kind in self.parents}
         return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
@@ -53,6 +56,7 @@ class CycleConfiguration(BaseModel):
         record_types: tuple[str, ...],
         container_parents: dict[str, str | tuple[str | None, ...]],
         completion_policies: dict[RecordKind, CompletionPolicy] | None = None,
+        known_object_validation: tuple[RecordKind, ...] = (),
     ) -> "CycleConfiguration":
         """Snapshot the existing source declaration; no second topology registry."""
         if len(set(record_types)) != len(record_types):
@@ -64,7 +68,10 @@ class CycleConfiguration(BaseModel):
             declared = container_parents.get(kind, (None,))
             parents[kind] = (declared,) if isinstance(declared, str) else declared
         return cls(
-            fingerprint=fingerprint, parents=parents, completion_policies=completion_policies or {}
+            fingerprint=fingerprint,
+            parents=parents,
+            completion_policies=completion_policies or {},
+            known_object_validation=known_object_validation,
         )
 
     @model_validator(mode="before")
@@ -86,6 +93,10 @@ class CycleConfiguration(BaseModel):
     @model_validator(mode="after")
     def reachable_types(self) -> "CycleConfiguration":
         """Type cycles are valid; every declared kind must be reachable from a root."""
+        if len(set(self.known_object_validation)) != len(self.known_object_validation) or (
+            set(self.known_object_validation) - set(self.parents)
+        ):
+            raise ValueError("Known-object validation requires unique declared kinds")
         if set(self.completion_policies) - set(self.parents):
             raise ValueError("Completion policy has an undeclared record kind")
         if not self.parents or any(not kind or not values for kind, values in self.parents.items()):
