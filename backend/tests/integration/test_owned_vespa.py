@@ -4,13 +4,8 @@ Explicit opt-in: OWNED_VESPA_TEST=1. This deploys the repository schema package
 and is unsuitable for an existing application or customer index.
 """
 
-import asyncio
-import io
 import json
 import os
-import time
-import zipfile
-from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -19,6 +14,7 @@ from vespa.application import Vespa
 
 from airweave.core.logging import logger
 from airweave.domains.embedders.types import DenseEmbedding, SparseEmbedding
+from airweave.domains.entities.canonical.tests.vespa_helpers import deploy_schema
 from airweave.domains.search.adapters.vector_db.filter_translator import FilterTranslator
 from airweave.domains.search.adapters.vector_db.vespa_client import VespaVectorDB
 from airweave.domains.search.types.embeddings import QueryEmbeddings
@@ -29,44 +25,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-async def wait_healthy(client, url, seconds=180):
-    """Bound readiness independently of the enclosing CI job timeout."""
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        try:
-            response = await client.get(url)
-            if (
-                response.status_code == 200
-                and response.json().get("status", {}).get("code") == "up"
-            ):
-                return
-        except (httpx.TransportError, ValueError):
-            pass
-        await asyncio.sleep(2)
-    raise AssertionError(f"Disposable Vespa did not become ready: {url}")
-
-
 @pytest.mark.asyncio
 async def test_real_schema_retrieval_collection_isolation_and_delete():
     """Exercise real query compilation/rank profiles; vectors are fixed fixtures."""
-    package = Path(__file__).resolve().parents[3] / "vespa/app"
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w") as output:
-        for path in sorted(package.rglob("*")):
-            if path.is_file():
-                content = path.read_text().replace("{{EMBEDDING_DIM}}", "384")
-                output.writestr(
-                    str(path.relative_to(package)), content.replace("{{VERSION}}", "test")
-                )
     async with httpx.AsyncClient(timeout=120) as http:
-        await wait_healthy(http, "http://localhost:19071/state/v1/health")
-        deployed = await http.post(
-            "http://localhost:19071/application/v2/tenant/default/prepareandactivate",
-            content=archive.getvalue(),
-            headers={"Content-Type": "application/zip"},
-        )
-        assert deployed.status_code == 200, deployed.text
-        await wait_healthy(http, "http://localhost:8081/state/v1/health")
+        await deploy_schema(http)
         collection, other = str(uuid4()), str(uuid4())
         sync = str(uuid4())
         vector = [1.0] + [0.0] * 383
