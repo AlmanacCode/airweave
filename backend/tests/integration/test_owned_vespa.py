@@ -105,7 +105,12 @@ async def test_real_schema_retrieval_collection_isolation_and_delete():
             )
             for mode in RetrievalStrategy:
                 compiled = await engine.compile_query(
-                    SearchPlan(query=SearchQuery(primary="fundraising"), retrieval_strategy=mode),
+                    SearchPlan(
+                        query=SearchQuery(primary="fundraising"),
+                        retrieval_strategy=mode,
+                        limit=20,
+                        offset=0,
+                    ),
                     embeddings,
                     collection,
                 )
