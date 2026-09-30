@@ -218,8 +218,10 @@ def prepare_resume_probe(manifest, sessions, organization_id, sync_id, job_id, a
     if manifest.get("resume_stage") not in {"interrupt", "resume"}:
         return None
     from capture_resume import PageResumeProbe
+    from wispr_resume import WisprResumeProbe
 
-    return PageResumeProbe(
+    probe_type = WisprResumeProbe if manifest.get("wispr_resume") else PageResumeProbe
+    return probe_type(
         sessions,
         organization_id,
         sync_id,
@@ -568,8 +570,13 @@ async def run_trials(manifest, evidence_reader=None):
     path = Path(manifest["root"]) / "manifest.json"
     results = []
     name = manifest["provider"]
-    resume_trial = name == "slack"
-    stages = ("interrupt", "resume", "new_cycle") if resume_trial else ("first", "second")
+    wispr_resume = manifest.get("wispr_resume", False)
+    resume_trial = name == "slack" or wispr_resume
+    stages = (
+        (("interrupt", "resume") if wispr_resume else ("interrupt", "resume", "new_cycle"))
+        if resume_trial
+        else ("first", "second")
+    )
     total_requests, total_records = manifest["request_limit"], manifest["record_limit"]
     deadline = time.monotonic() + manifest["timeout"] if resume_trial else None
     interrupted_job_id = str(uuid4())
@@ -613,6 +620,13 @@ async def run_trials(manifest, evidence_reader=None):
         if stage == "interrupt":
             if code != 75 or not result.get("intentional_interruption"):
                 break
+        elif (
+            wispr_resume
+            and stage == "resume"
+            and code == 76
+            and result.get("wispr_recovery_verified")
+        ):
+            break
         elif code:
             break
     return results
@@ -636,6 +650,9 @@ async def main():
     name = os.environ.get("LIVE_LIFECYCLE_PROVIDER", "gmail")
     if name not in {"gmail", "google_calendar", "google_drive", "slack", "wispr"}:
         raise ValueError("Unsupported lifecycle provider")
+    wispr_resume = os.environ.get("LIVE_WISPR_RESUME") == "1"
+    if wispr_resume and name != "wispr":
+        raise ValueError("Wispr resume requires Wispr provider")
     free_disk_bytes = check_free_disk(name)
     url = harness.test_database_url()
     schema = "canonical_live_" + uuid4().hex
@@ -709,6 +726,8 @@ async def main():
                 "sync_id": str(sync_id),
                 "query": f"after:{end - 7 * 86400} before:{end}",
             }
+            if wispr_resume:
+                manifest.update(wispr_resume=True, request_limit=20, record_limit=600, timeout=180)
             if name == "google_calendar":
                 now = datetime.now(timezone.utc).replace(microsecond=0)
                 manifest["calendar_config"] = {
@@ -756,6 +775,11 @@ async def main():
                 "schema_removed": True,
                 "blob_directory_removed": True,
                 "resume_verified": bool(resume_verified),
+                "wispr_recovery_verified": bool(
+                    wispr_resume
+                    and len(results) == 2
+                    and results[1].get("wispr_recovery_verified", False)
+                ),
                 "resumed_page_committed": any(
                     item.get("resumed_page_committed", False) for item in results
                 ),
@@ -770,7 +794,14 @@ async def main():
             }
         )
     )
-    success = resume_verified if name == "slack" else len(results) == 2
+    wispr_verified = (
+        wispr_resume and len(results) == 2 and results[1].get("wispr_recovery_verified", False)
+    )
+    success = (
+        wispr_verified
+        if wispr_resume
+        else (resume_verified if name == "slack" else len(results) == 2)
+    )
     return 0 if success and not any(item["failed"] for item in results) else 1
 
 

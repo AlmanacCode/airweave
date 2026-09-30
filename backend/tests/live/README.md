@@ -293,28 +293,31 @@ resume using synthetic Slack responses and isolated PostgreSQL. Its budget tests
 use fake child processes to check decreasing limits and unknown killed-child usage.
 These are harness tests, not evidence of live Slack coverage or throughput.
 
-### Planned Wispr same-job recovery proof (not yet runnable)
+### Opt-in Wispr same-job recovery proof
 
-The current `LIVE_LIFECYCLE_PROVIDER=wispr PYTHONPATH=. .venv/bin/python
-tests/live/provider_lifecycle.py` invokes the real page pipeline, but does **not**
-prove failure recovery: `run_trials` restarts a failed Wispr run zero times, and
-`PageResumeProbe` matches only Slack message scopes with pending replies. Its
-current Wispr limits are150 requests/1,000 observations/300 seconds **per process**,
-not an aggregate interruption budget. Do not call that command a resume trial.
+From `backend`, with the same private PostgreSQL and existing verified account environment:
 
-A narrowly extended existing probe should interrupt before the next body request
-after three meeting child scopes are SQL-verified complete. Persist only private
-scan/cycle identity, revision and completed-sibling identity evidence; retain no
-meeting content in diagnostic output. A fresh child uses the same job with writer
-attempt2, refreshes listing membership, then commits one previously incomplete
-meeting. Verify the three prior child revisions remain unchanged and intercept
-GET arguments in memory to assert zero calls for those completed identities. End
-after this proof, without requiring a complete traversal or starting a new cycle.
+```sh
+LIVE_LIFECYCLE_PROVIDER=wispr LIVE_WISPR_RESUME=1 PYTHONPATH=. .venv/bin/python tests/live/provider_lifecycle.py
+```
 
-Proposed aggregate guard:20 HTTP requests including account/session/listing/body
-calls across both children,600 observed records and180 seconds total; no retries.
-A body needing many ranges, changed inventory, rate failure or exhausted budget
-may make the proof inconclusive; stop immediately on a rate signal. Reuse the parent's remaining-budget accounting,
-private PostgreSQL schema and cleanup on every exit. Add offline process/SQL tests
-for the Wispr selector and early-failure path before requesting a live run. No new
-command switch or executable trial mode has been implemented for this proposal.
+Required secret environment names are `COMPOSIO_API_KEY`, `LIVE_WISPR_ACCOUNT_ID`
+and `LIVE_WISPR_USER_ID`; PostgreSQL uses `CANONICAL_TEST_DATABASE_URL`. Do not
+print these values. This mode shares a hard20 HTTP request,600 observed record,
+180 second budget across both processes, including account/session/listing calls.
+No retries or new account grants occur. Errors, including rate failures, stop the trial.
+
+The first process exits before another body call after SQL verifies three completed
+meeting children. The second uses the same job/cycle with a new writer attempt,
+refreshes listing membership and commits one additional body. Before each body call,
+the typed probe rejects a completed sibling identity. It verifies prior scan revisions
+remain unchanged and then exits intentionally. Private evidence contains only scan
+identities and native-ID SHA256 digests, never meeting content; output contains counts
+and booleans. Parent cleanup removes the private schema/files on all normal or failed
+exits. `wispr_recovery_verified` is distinct from full traversal or deletion completeness.
+
+A source with fewer than five discoverable meetings, many body ranges, changed inventory,
+rate failure or exhausted budget can leave the proof inconclusive. Without the opt-in
+flag, Wispr retains its ordinary first/second-cycle trial; that is not a recovery proof.
+Offline PostgreSQL/subprocess tests verify the actual process exits and fresh retry,
+failed-body stop, and aggregate budget. No live recovery result is claimed here.
