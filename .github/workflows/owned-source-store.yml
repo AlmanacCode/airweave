@@ -78,3 +78,16 @@ jobs:
           OWNED_VESPA_TEST: '1'
           EMBEDDING_DIMENSIONS: '384'
         run: make test-index
+
+  image:
+    needs: correctness
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Build the deployable image without publishing
+        run: docker build --tag almanac-source-store:ci backend
+      - name: Verify packaged Python and entrypoint syntax
+        run: |
+          docker run --rm --entrypoint python almanac-source-store:ci -m compileall -q airweave
+          docker run --rm --entrypoint /bin/sh almanac-source-store:ci -n /app/entrypoint.sh
