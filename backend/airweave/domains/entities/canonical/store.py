@@ -59,6 +59,16 @@ class WriterBusy(CanonicalStoreError):
     code = "writer_busy"
 
 
+def _require_current_generation(sync: Sync, job: SyncJob) -> None:
+    """A prior credential or unverified connection cannot acquire or use a writer."""
+    generation = sync.provisioning_generation
+    if job.provisioning_generation != generation or (
+        generation > 0
+        and (sync.provisioning_ready_generation != generation or sync.status != "active")
+    ):
+        raise StaleWriter("Source connection generation is not admitted for capture")
+
+
 def capture_fingerprint(record: CaptureRecord) -> str:
     """Observation times never create changes; sparse tombstone payloads do."""
     material = record.model_dump(
@@ -220,6 +230,35 @@ class CanonicalRecordStore:
             raise SourceNotFound("Source does not exist in this organization")
         return sync
 
+    async def admit_job(
+        self, db: AsyncSession, organization_id: UUID, sync_id: UUID, job_id: UUID
+    ) -> int:
+        """Read one current job/source generation before external source construction.
+
+        This is an admission snapshot, not a replacement for the locked write fence.
+        Callers compare it again after construction; every write rechecks independently.
+        """
+        row = (
+            await db.execute(
+                select(Sync, SyncJob)
+                .join(SyncJob, SyncJob.sync_id == Sync.id)
+                .where(
+                    Sync.id == sync_id,
+                    Sync.organization_id == organization_id,
+                    SyncJob.id == job_id,
+                    SyncJob.organization_id == organization_id,
+                )
+                .execution_options(populate_existing=True)
+            )
+        ).one_or_none()
+        if row is None:
+            raise StaleWriter("Source job is unavailable for capture")
+        sync, job = row
+        if job.status not in ("pending", "running"):
+            raise StaleWriter("Source run is no longer active")
+        _require_current_generation(sync, job)
+        return sync.provisioning_generation
+
     async def activate_writer(
         self,
         db: AsyncSession,
@@ -248,6 +287,7 @@ class CanonicalRecordStore:
         ).scalar_one_or_none()
         if job is None or job.status not in ("pending", "running"):
             raise StaleWriter("Writer must be an active job of this source")
+        _require_current_generation(sync, job)
         identical = (
             sync.writer_job_id == job_id
             and sync.writer_attempt_id == attempt_id
@@ -287,11 +327,19 @@ class CanonicalRecordStore:
             or sync.writer_attempt_number != fence.attempt_number
         ):
             raise StaleWriter("Source run has been superseded")
-        status = await db.scalar(
-            select(SyncJob.status).where(SyncJob.id == fence.job_id).with_for_update()
+        job = await db.scalar(
+            select(SyncJob)
+            .where(
+                SyncJob.id == fence.job_id,
+                SyncJob.sync_id == fence.sync_id,
+                SyncJob.organization_id == fence.organization_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
-        if status not in ("pending", "running"):
+        if job is None or job.status not in ("pending", "running"):
             raise StaleWriter("Source run is no longer active")
+        _require_current_generation(sync, job)
         return sync
 
     async def capture(self, db: AsyncSession, batch: CaptureBatch) -> CaptureResult:

@@ -895,6 +895,8 @@ async def main():
                 "0006_record_visibility.py",
                 "0007_scan_scope_owner.py",
                 "0008_scope_execution.py",
+                "0009_extraction_coverage.py",
+                "0010_owned_provisioning.py",
             ):
                 await connection.run_sync(harness.migrate, migration)
         organization_id, sync_id = uuid4(), uuid4()

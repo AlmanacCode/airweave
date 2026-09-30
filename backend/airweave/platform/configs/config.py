@@ -796,9 +796,17 @@ class SlabConfig(SourceConfig):
 
 
 class SlackConfig(SourceConfig):
-    """Slack configuration schema."""
+    """Trusted native workspace/user pair for owned Slack capture."""
 
-    pass
+    expected_team_id: str | None = Field(default=None, min_length=1, pattern=r"^\S+$")
+    expected_user_id: str | None = Field(default=None, min_length=1, pattern=r"^\S+$")
+
+    @model_validator(mode="after")
+    def complete_principal(self):
+        """A workspace alone cannot attest a user's private-channel visibility."""
+        if (self.expected_team_id is None) != (self.expected_user_id is None):
+            raise ValueError("Slack identity requires both team and user IDs")
+        return self
 
 
 class SQLServerConfig(SourceConfig):

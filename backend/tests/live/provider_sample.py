@@ -116,15 +116,24 @@ async def rest_source(
                 GoogleCalendarSource,
                 calendar_config or GoogleCalendarConfig(),
             ),
-            "slack": (SlackSource, SlackConfig()),
+            "slack": (
+                SlackSource,
+                SlackConfig(
+                    expected_team_id=os.environ["LIVE_SLACK_TEAM_ID"],
+                    expected_user_id=os.environ["LIVE_SLACK_USER_ID"],
+                )
+                if name == "slack"
+                else SlackConfig(),
+            ),
         }[name]
         source = await source_type.create(
             auth=auth, logger=logging.getLogger("probe"), http_client=wrapped, config=config
         )
-        # Google sources attest their explicitly pinned native identity during create.
-        if name not in {"gmail", "google_calendar", "google_drive"}:
+        # Sources attest their explicitly pinned native identity during create.
+        if name not in {"gmail", "google_calendar", "google_drive", "slack"}:
             await verify_rest_identity(name, source, expected_email)
         identity_kind = {
+            "slack": "provider_team_user_id",
             "google_drive": "provider_permission_id",
             "google_calendar": "provider_primary_calendar_id",
         }.get(name, "provider_email")

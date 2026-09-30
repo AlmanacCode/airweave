@@ -15,6 +15,7 @@ from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
 from airweave.models.capture_scan import CaptureScan
 from airweave.models.entity import Entity
 from airweave.models.sync_cursor import SyncCursor
+from airweave.platform.configs.config import SlackConfig
 from airweave.platform.sources.slack import SlackApiError, SlackSource
 
 ROOT = {"channels": [{"id": "C1", "name": "Synthetic channel"}]}
@@ -23,13 +24,16 @@ HISTORY = {"messages": [MESSAGE]}
 REPLIES = {"messages": [MESSAGE, {"ts": "1.1", "thread_ts": "1", "text": "Synthetic reply"}]}
 
 
-def runner(database, source, responses, attempt=1, service=None):
+async def runner(database, source, responses, attempt=1, service=None):
     original_service, fence = source
     service = service or original_service
     ctx, _, runtime, bus = components(database, source)
     connector = SlackSource(
         auth=StaticTokenProvider("fixture"), logger=MagicMock(), http_client=MagicMock()
     )
+    connector.slack_config = SlackConfig(expected_team_id="T1", expected_user_id="U1")
+    connector._get = AsyncMock(return_value={"ok": True, "team_id": "T1", "user_id": "U1"})
+    await connector.validate()
     connector._get = AsyncMock(side_effect=responses)
     pipeline = CanonicalCapturePipeline(
         service,
@@ -67,7 +71,7 @@ async def saved(database):
 async def test_cancel_after_history_resumes_pending_reply_without_repeating_history(
     database, source
 ):
-    first, _, _ = runner(database, source, [ROOT, HISTORY, asyncio.CancelledError()])
+    first, _, _ = await runner(database, source, [ROOT, HISTORY, asyncio.CancelledError()])
     with pytest.raises(asyncio.CancelledError):
         await run(first)
     rows, cursor, scans = await saved(database)
@@ -75,7 +79,7 @@ async def test_cancel_after_history_resumes_pending_reply_without_repeating_hist
     assert "canonical_checkpoint" not in cursor
     message_scan = next(scan for scan in scans if scan.record_type == "message")
     assert message_scan.continuation["pending_threads"] == ["1"]
-    second, connector, _ = runner(database, source, [ROOT, REPLIES], attempt=2)
+    second, connector, _ = await runner(database, source, [ROOT, REPLIES], attempt=2)
     await run(second)
     assert [call.args[0].split("/")[-1] for call in connector._get.call_args_list] == [
         "conversations.list",
@@ -95,13 +99,13 @@ async def test_lost_page_ack_reloads_committed_pending_threads(database, source)
                 raise ConnectionError("synthetic lost commit acknowledgement")
             return result
 
-    first, connector, _ = runner(
+    first, connector, _ = await runner(
         database, source, [ROOT, HISTORY], service=LostAck(source[0].store)
     )
     with pytest.raises(ConnectionError, match="acknowledgement"):
         await run(first)
     assert connector._get.await_count == 2
-    second, connector, _ = runner(database, source, [ROOT, REPLIES], attempt=2)
+    second, connector, _ = await runner(database, source, [ROOT, REPLIES], attempt=2)
     await run(second)
     assert connector._get.call_args_list[-1].args[0].endswith("conversations.replies")
 
@@ -113,13 +117,13 @@ async def test_expired_reply_cursor_restarts_whole_scope_and_never_partial_recon
         "messages": [{"ts": "1.old", "thread_ts": "1"}],
         "response_metadata": {"next_cursor": "expired"},
     }
-    first, _, _ = runner(database, source, [ROOT, HISTORY, first_reply, asyncio.CancelledError()])
+    first, _, _ = await runner(database, source, [ROOT, HISTORY, first_reply, asyncio.CancelledError()])
     with pytest.raises(asyncio.CancelledError):
         await run(first)
     rows, _, scans = await saved(database)
     assert next(row for row in rows if row.native_id == "1.old").deleted_at is None
     old_sweep = next(scan for scan in scans if scan.record_type == "message").sweep_id
-    second, connector, _ = runner(
+    second, connector, _ = await runner(
         database, source, [ROOT, SlackApiError("invalid_cursor"), HISTORY, REPLIES], attempt=2
     )
     await run(second)
@@ -135,7 +139,7 @@ async def test_expired_reply_cursor_restarts_whole_scope_and_never_partial_recon
 async def test_repeated_invalid_cursor_fails_without_checkpoint_or_absence(
     database, source, error_code
 ):
-    first, _, _ = runner(
+    first, _, _ = await runner(
         database,
         source,
         [ROOT, HISTORY, SlackApiError(error_code), HISTORY, SlackApiError(error_code)],
@@ -153,14 +157,14 @@ async def test_repeated_invalid_cursor_fails_without_checkpoint_or_absence(
 async def test_membership_loss_on_retry_hides_pending_children_only_after_confirmation(
     database, source, accessible
 ):
-    first, _, _ = runner(database, source, [ROOT, HISTORY, asyncio.CancelledError()])
+    first, _, _ = await runner(database, source, [ROOT, HISTORY, asyncio.CancelledError()])
     with pytest.raises(asyncio.CancelledError):
         await run(first)
     responses = [
         {"channels": []},
         {"channel": {"id": "C1"}} if accessible else SlackApiError("channel_not_found"),
     ]
-    second, connector, pipeline = runner(database, source, responses, attempt=2)
+    second, connector, pipeline = await runner(database, source, responses, attempt=2)
     if accessible:
         with pytest.raises(ValueError, match="omitted"):
             await run(second)
@@ -180,14 +184,14 @@ async def test_membership_loss_on_retry_hides_pending_children_only_after_confir
 async def test_crash_after_scans_then_lost_final_ack_same_job_does_not_start_new_cycle(
     database, source
 ):
-    first, _, _ = runner(database, source, [ROOT, HISTORY, REPLIES])
+    first, _, _ = await runner(database, source, [ROOT, HISTORY, REPLIES])
     await run(first, checkpoint=False)
     _, cursor, _ = await saved(database)
     cycle_id = cursor["canonical_cycle"]["version"]["cycle_id"]
-    second, connector, _ = runner(database, source, [ROOT], attempt=2)
+    second, connector, _ = await runner(database, source, [ROOT], attempt=2)
     await run(second)
     assert connector._get.await_count == 1
-    third, connector, _ = runner(database, source, [], attempt=3)
+    third, connector, _ = await runner(database, source, [], attempt=3)
     await run(third)
     assert connector._get.await_count == 0
     _, cursor, _ = await saved(database)
@@ -198,7 +202,7 @@ async def test_new_job_starts_fresh_cycle_without_overriding_successful_old_job(
     from airweave.domains.entities.canonical.store import StaleWriter
     from airweave.models.sync_job import SyncJob
 
-    first, _, _ = runner(database, source, [ROOT, HISTORY, REPLIES])
+    first, _, _ = await runner(database, source, [ROOT, HISTORY, REPLIES])
     await run(first)
     _, cursor, _ = await saved(database)
     prior_cycle = cursor["canonical_cycle"]["version"]["cycle_id"]
@@ -216,11 +220,11 @@ async def test_new_job_starts_fresh_cycle_without_overriding_successful_old_job(
             )
         )
         await db.commit()
-    stale, _, _ = runner(database, source, [], attempt=2)
+    stale, _, _ = await runner(database, source, [], attempt=2)
     with pytest.raises(StaleWriter, match="active job"):
         await run(stale)
     new_source = (service, fence.model_copy(update={"job_id": new_job_id, "attempt_id": uuid4()}))
-    new, connector, _ = runner(database, new_source, [ROOT, HISTORY, REPLIES])
+    new, connector, _ = await runner(database, new_source, [ROOT, HISTORY, REPLIES])
     await run(new)
     assert connector._get.await_count == 3
     _, cursor, _ = await saved(database)
@@ -231,7 +235,7 @@ async def test_new_job_starts_fresh_cycle_without_overriding_successful_old_job(
 
 
 async def test_access_lost_during_reply_withdraws_root_and_children(database, source):
-    first, _, _ = runner(database, source, [ROOT, HISTORY, SlackApiError("not_in_channel")])
+    first, _, _ = await runner(database, source, [ROOT, HISTORY, SlackApiError("not_in_channel")])
     await run(first)
     rows, cursor, _ = await saved(database)
     assert cursor["canonical_cycle"]["phase"] == "complete"
@@ -258,7 +262,7 @@ async def test_oversized_page_or_pending_thread_queue_fails_before_commit(
             for i in range(count)
         ]
     }
-    first, _, _ = runner(database, source, [ROOT, oversized])
+    first, _, _ = await runner(database, source, [ROOT, oversized])
     with pytest.raises(ValueError, match="invalid page") as error:
         await run(first)
     assert "private fixture" not in str(error.value)
@@ -282,7 +286,7 @@ async def test_interrupted_omission_confirmations_remove_nothing_then_retry(data
             for value in ("C1", "C2")
         ),
     )
-    first, _, _ = runner(
+    first, _, _ = await runner(
         database,
         source,
         [
@@ -296,7 +300,7 @@ async def test_interrupted_omission_confirmations_remove_nothing_then_retry(data
     rows, cursor, _ = await saved(database)
     assert all(row.deleted_at is None for row in rows)
     assert "canonical_checkpoint" not in cursor
-    second, connector, _ = runner(
+    second, connector, _ = await runner(
         database,
         source,
         [{"channels": []}, SlackApiError("channel_not_found"), SlackApiError("channel_not_found")],
@@ -327,7 +331,7 @@ async def test_cleanup_budget_stop_preserves_reconciling_state_and_resumes(datab
             for i in range(251)
         ),
     )
-    first, _, _ = runner(database, source, [ROOT, {"messages": []}])
+    first, _, _ = await runner(database, source, [ROOT, {"messages": []}])
     checks = 0
 
     async def limit():
@@ -344,7 +348,7 @@ async def test_cleanup_budget_stop_preserves_reconciling_state_and_resumes(datab
     assert sum(row.deleted_at is not None for row in messages) == 250
     assert next(scan for scan in scans if scan.record_type == "message").phase == "reconciling"
     assert "canonical_checkpoint" not in cursor
-    second, connector, _ = runner(database, source, [ROOT], attempt=2)
+    second, connector, _ = await runner(database, source, [ROOT], attempt=2)
     await run(second)
     assert connector._get.await_count == 1
     rows, cursor, _ = await saved(database)
@@ -363,11 +367,11 @@ async def test_restored_root_restarts_withdrawn_child_scope_in_same_cycle(
         HISTORY,
         REPLIES if completed_child else SlackApiError("not_in_channel"),
     ]
-    first, _, _ = runner(database, source, first_responses)
+    first, _, _ = await runner(database, source, first_responses)
     await run(first, checkpoint=False)
     restore_attempt = 2
     if completed_child:
-        removed, _, _ = runner(
+        removed, _, _ = await runner(
             database, source, [{"channels": []}, SlackApiError("channel_not_found")], attempt=2
         )
         await run(removed, checkpoint=False)
@@ -375,7 +379,7 @@ async def test_restored_root_restarts_withdrawn_child_scope_in_same_cycle(
     before, cursor, scans = await saved(database)
     assert all(row.deleted_at is not None for row in before)
     old_sweep = next(scan for scan in scans if scan.record_type == "message").sweep_id
-    restored, connector, _ = runner(
+    restored, connector, _ = await runner(
         database, source, [ROOT, HISTORY, REPLIES], attempt=restore_attempt
     )
     await run(restored)
@@ -390,9 +394,9 @@ async def test_restored_root_restarts_withdrawn_child_scope_in_same_cycle(
 async def test_root_revival_and_child_invalidation_roll_back_together(database, source):
     from airweave.domains.entities.canonical.scan_store import CanonicalScanStore
 
-    first, _, _ = runner(database, source, [ROOT, HISTORY, REPLIES])
+    first, _, _ = await runner(database, source, [ROOT, HISTORY, REPLIES])
     await run(first, checkpoint=False)
-    removed, _, _ = runner(
+    removed, _, _ = await runner(
         database, source, [{"channels": []}, SlackApiError("channel_not_found")], attempt=2
     )
     await run(removed, checkpoint=False)
@@ -407,7 +411,7 @@ async def test_root_revival_and_child_invalidation_roll_back_together(database, 
 
     service = CanonicalCaptureService(source[0].store)
     service.scans = FailAfterPage(service.store)
-    restoring, _, _ = runner(database, source, [ROOT], attempt=3, service=service)
+    restoring, _, _ = await runner(database, source, [ROOT], attempt=3, service=service)
     with pytest.raises(RuntimeError, match="after revival"):
         await run(restoring)
     after, _, scans = await saved(database)
@@ -422,13 +426,13 @@ async def test_root_revival_and_child_invalidation_roll_back_together(database, 
 async def test_unavailable_parent_without_tombstone_also_invalidates_child_progress(
     database, source
 ):
-    first, _, _ = runner(database, source, [ROOT, HISTORY, SlackApiError("not_in_channel")])
+    first, _, _ = await runner(database, source, [ROOT, HISTORY, SlackApiError("not_in_channel")])
     await run(first, checkpoint=False)
     async with database() as db:
         root = await db.scalar(select(Entity).where(Entity.native_id == "C1"))
         root.deleted_at = None  # Exercise the independent content-access gate representation.
         await db.commit()
-    restored, connector, _ = runner(database, source, [ROOT, HISTORY, REPLIES], attempt=2)
+    restored, connector, _ = await runner(database, source, [ROOT, HISTORY, REPLIES], attempt=2)
     await run(restored)
     assert connector._get.call_args_list[1].args[0].endswith("conversations.history")
     rows, _, _ = await saved(database)
@@ -440,7 +444,7 @@ async def test_scope_withdrawal_keeps_uncertain_reason_without_claiming_access_r
 ):
     from airweave.domains.entities.canonical.page_source import ScopeAccessLost
 
-    instance, _, pipeline = runner(database, source, [ROOT, HISTORY])
+    instance, _, pipeline = await runner(database, source, [ROOT, HISTORY])
     original_page = pipeline.page_source.capture_page
 
     async def unavailable(scope, continuation, *, files, parent=None):
@@ -473,7 +477,7 @@ async def test_old_provider_route_failure_cannot_withdraw_changed_same_fence_par
     from airweave.domains.entities.canonical.scan_store import ScanConflict
 
     service, fence = source
-    instance, connector, pipeline = runner(database, source, [ROOT])
+    instance, connector, pipeline = await runner(database, source, [ROOT])
     original_page = connector.capture_page
 
     async def change_during_network(scope, continuation, *, files, parent=None):
@@ -508,7 +512,7 @@ async def test_old_provider_route_failure_cannot_withdraw_changed_same_fence_par
 
 
 async def test_missing_queued_thread_restarts_inventory_before_absence(database, source):
-    instance, connector, _ = runner(
+    instance, connector, _ = await runner(
         database,
         source,
         [
@@ -546,7 +550,7 @@ async def test_native_slack_dates_reach_persisted_search_fields_and_date_filters
     from airweave.platform.destinations.vespa.transformer import EntityTransformer
     from airweave.platform.entities._base import AirweaveSystemMetadata
 
-    first, _, _ = runner(
+    first, _, _ = await runner(
         database,
         source,
         [
@@ -573,6 +577,7 @@ async def test_native_slack_dates_reach_persisted_search_fields_and_date_filters
 
     # Exercise the same canonical metadata stamper and Vespa serializer used by projection.
     async with map_record(source_record(edited), "slack", MagicMock()) as entities:
+        entities = entities.entities
         (entity,) = entities
     entity.airweave_system_metadata = AirweaveSystemMetadata()
     stamp_search_metadata(entity.airweave_system_metadata, source_record(edited))
