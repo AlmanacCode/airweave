@@ -444,3 +444,41 @@ async def test_dates_and_types_prefilter_before_candidate_limit(indexed, http_se
     assert by_field["airweave_system_metadata.source_created_known"] == 1
     assert by_field["airweave_system_metadata.source_created_us"] == 1767225600000001
     assert by_field["airweave_system_metadata.source_updated_known"] == 1
+
+
+async def test_capture_discovery_coverage_is_separate_from_retrieval(
+    database, source, indexed, http_search
+):
+    from airweave.domains.entities.canonical.cycle_models import BeginCycle, CycleConfiguration
+
+    service, fence = source
+    async with database() as db:
+        await service.begin_cycle(
+            db,
+            BeginCycle(
+                fence=fence,
+                configuration=CycleConfiguration(
+                    fingerprint="d" * 64,
+                    parents={"event": (None,)},
+                    completion_policies={"event": "discovery_only"},
+                ),
+            ),
+        )
+    client, vector, _, _, _ = http_search
+    vector.seed_results(SearchResults(results=[]))
+    response = await client.post(
+        "/sync/search",
+        json={
+            "query": "budget",
+            "sync_ids": [str(fence.sync_id)],
+            "mode": "keyword",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["sources"][0]["capture"] == {
+        "phase": "active",
+        "policies": {"event": "discovery_only"},
+        "discovery": "incomplete",
+    }
+    assert not body["retrieval_incomplete"]

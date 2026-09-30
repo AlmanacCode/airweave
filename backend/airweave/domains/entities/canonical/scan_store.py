@@ -28,6 +28,7 @@ from airweave.domains.entities.canonical.requests import (
 )
 from airweave.domains.entities.canonical.scan_models import (
     BeginScan,
+    CommitOmission,
     CommitScanPage,
     ReconcileScan,
     ScanContinuation,
@@ -42,6 +43,7 @@ from airweave.domains.entities.canonical.store import (
 )
 from airweave.models.capture_scan import CaptureScan
 from airweave.models.entity import Entity
+from airweave.models.sync_cursor import SyncCursor
 
 
 class ScanConflict(CanonicalStoreError):
@@ -121,7 +123,15 @@ class CanonicalScanStore:
         parent = await db.get(Entity, row.parent_record_id) if row.parent_record_id else None
         if row.parent_record_id is not None and parent is None:
             raise CycleConflict("Scope parent disappeared; explicitly restart the cycle")
-        return scan_state(row, parent)
+        cursor = await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == row.sync_id))
+        cycle = cycle_state(cursor) if cursor else None
+        return scan_state(row, parent).model_copy(
+            update={
+                "completion_policy": cycle.configuration.policy(row.record_type)
+                if cycle
+                else "exhaustive"
+            }
+        )
 
     async def read(
         self, db: AsyncSession, fence: WriterFence, scope: CompletedScope
@@ -313,7 +323,10 @@ class CanonicalScanStore:
         parent = await scope_owner(db, fence, cycle, state.scope)
         if (
             row.phase != "reconciling"
-            or row.membership_attempt_id != fence.attempt_id
+            or (
+                cycle.configuration.children_of(row.record_type)
+                and row.membership_attempt_id != fence.attempt_id
+            )
             or row.parent_visibility_epoch != (parent.visibility_epoch if parent else None)
         ):
             raise CycleConflict("Omission checks require completed current-attempt inventory")
@@ -331,15 +344,54 @@ class CanonicalScanStore:
                 identity.container_id if identity else None
             ),
             Entity.record_revision > 0,
-            Entity.deleted_at.is_(None),
             Entity.last_seen_run_id.is_distinct_from(row.sweep_id),
         ]
+        if cycle.configuration.policy(row.record_type) != "discovery_with_validation":
+            predicates.append(Entity.deleted_at.is_(None))
         if after is not None:
             predicates.append(Entity.id > after)
         records = (
             await db.scalars(select(Entity).where(*predicates).order_by(Entity.id).limit(100))
         ).all()
         return tuple(source_record(record) for record in records)
+
+    async def omission(self, db: AsyncSession, request: CommitOmission) -> ScanResult:
+        """Commit exact known-object validation with its sweep acknowledgement."""
+        sync = await self.records._fenced_sync(db, request.fence)
+        _, cycle = await attest_cycle(db, request.fence, request.state.cycle_id)
+        if (
+            cycle.configuration.policy(request.state.scope.record_type)
+            != "discovery_with_validation"
+        ):
+            raise ScanConflict("This scope does not accept known-object validation")
+        candidates = await self.missing(db, request.fence, request.state)
+        previous = request.expected_record
+        current = next((record for record in candidates if record.id == previous.id), None)
+        if (
+            current is None
+            or current.revision != previous.revision
+            or current.identity != previous.identity
+        ):
+            raise ScanConflict("Known object changed or is outside the next validation batch")
+        observation = request.observation
+        if observation.removal_reason == "absent":
+            raise ScanConflict("Discovery requires explicit unavailability, never absence")
+        if observation.identity != current.identity or observation.parent != current.parent:
+            raise ScanConflict("Known-object validation changed identity or owner")
+        row = self._expect(
+            await self._row(db, request.fence, request.state.scope),
+            request.state.version,
+            request.state.cycle_id,
+        )
+        captured = await self.records._capture_locked(
+            db,
+            sync,
+            CaptureBatch(fence=request.fence, records=(observation,)),
+            seen_id=row.sweep_id,
+        )
+        row.revision += 1
+        await db.flush()
+        return ScanResult(state=await self._state(db, row), capture=captured)
 
     async def reconcile(self, db: AsyncSession, request: ReconcileScan) -> ScanResult:
         """A final page is necessary; absence completion is durable and bounded."""
@@ -359,6 +411,22 @@ class CanonicalScanStore:
             raise CycleConflict("Membership belongs to an earlier writer attempt")
         if row.phase != "reconciling":
             raise ScanConflict("Only fully collected scans can reconcile absence")
+        policy = cycle.configuration.policy(row.record_type)
+        if policy != "exhaustive":
+            if policy == "discovery_with_validation" and await self.missing(
+                db, request.fence, await self._state(db, row)
+            ):
+                raise ScanConflict("Known objects still require exact validation")
+            row.phase = "complete"
+            row.completed_at = datetime.now(timezone.utc)
+            row.revision += 1
+            await db.flush()
+            return ScanResult(
+                state=await self._state(db, row),
+                capture=CaptureResult(
+                    changes=(), sequence=sync.observed_change_sequence, unchanged=0
+                ),
+            )
         result = await self.records._reconcile_scope_locked(
             db,
             sync,

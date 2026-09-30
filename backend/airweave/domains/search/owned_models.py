@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from airweave.domains.entities.canonical.coverage import CaptureCoverage
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.search.types import RetrievalStrategy
 
@@ -62,6 +63,7 @@ class OwnedSearchCoverage(BaseModel):
 
     sync_id: UUID
     active_records: int
+    capture: CaptureCoverage | None = None
     pending_records: int
 
 

@@ -33,6 +33,7 @@ from airweave.domains.entities.canonical.requests import (
 )
 from airweave.domains.entities.canonical.scan_models import (
     BeginScan,
+    CommitOmission,
     CommitScanPage,
     ReconcileScan,
     ScanResult,
@@ -162,6 +163,11 @@ class CanonicalCaptureService:
         """Commit original records and their continuation atomically."""
         async with UnitOfWork(db):
             return await self.scans.page(db, request)
+
+    async def commit_omission(self, db: AsyncSession, request: CommitOmission) -> ScanResult:
+        """Accept exact provider validation without network I/O in the transaction."""
+        async with UnitOfWork(db):
+            return await self.scans.omission(db, request)
 
     async def reconcile_scan(self, db: AsyncSession, request: ReconcileScan) -> ScanResult:
         """Commit one bounded whole-scope absence reconciliation step."""

@@ -1,4 +1,4 @@
-"""Opted-in whole-scope pages; the existing capture pipeline owns durable progress."""
+"""Opted-in scope pages; the existing capture pipeline owns durable progress."""
 
 from typing import Protocol, runtime_checkable
 
@@ -67,4 +67,13 @@ class CanonicalPageSource(Protocol):
 
     async def confirm_absent(self, record: SourceRecord) -> None:
         """Raise unless an omitted inventory record is confirmed outside accessible scope."""
+        ...
+
+
+@runtime_checkable
+class KnownObjectSource(Protocol):
+    """Only discovery-with-validation sources implement exact current reads."""
+
+    async def refresh_known(self, record: SourceRecord, *, files: FileService) -> CaptureRecord:
+        """Return exact fresh state or explicit unavailability; errors never mean absence."""
         ...

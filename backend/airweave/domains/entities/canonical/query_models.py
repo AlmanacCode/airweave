@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from airweave.domains.entities.canonical.coverage import CaptureCoverage
 from airweave.domains.entities.canonical.models import ObservedChange, SourceRecord
 
 
@@ -31,6 +32,7 @@ class RecordPage(BaseModel):
     """Committed records with truthful traversal semantics."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+    capture: CaptureCoverage | None = None
     records: tuple[SourceRecord, ...]
     next_cursor: str | None
     has_more: bool

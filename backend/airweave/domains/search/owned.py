@@ -9,6 +9,7 @@ from sqlalchemy import and_, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api.context import ApiContext
+from airweave.domains.entities.canonical.coverage import capture_coverage
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
 from airweave.domains.entities.canonical.projection_store import publication_matches
 from airweave.domains.entities.canonical.requests import RecordIdentity
@@ -396,9 +397,11 @@ class OwnedSearchService:
             .group_by(Entity.sync_id)
         )
         counts = {sync: (active, pending) for sync, active, pending in rows}
+        captures = await capture_coverage(db, ctx.organization.id, tuple(request.sync_ids))
         return tuple(
             OwnedSearchCoverage(
                 sync_id=sync,
+                capture=captures.get(sync),
                 active_records=counts.get(sync, (0, 0))[0],
                 pending_records=counts.get(sync, (0, 0))[1],
             )

@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.blob_materializer import BlobIntegrityError, read_blob
+from airweave.domains.entities.canonical.coverage import capture_coverage
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query_models import (
     MailThreadCursor,
@@ -116,7 +117,10 @@ class CanonicalQueryService:
                     after_id=page[-1].id,
                 )
             )
-        return RecordPage(records=page, next_cursor=next_cursor, has_more=more)
+        coverage = await capture_coverage(db, organization_id, (sync_id,))
+        return RecordPage(
+            records=page, next_cursor=next_cursor, has_more=more, capture=coverage.get(sync_id)
+        )
 
     async def changes(
         self,

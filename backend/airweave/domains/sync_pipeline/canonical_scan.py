@@ -13,6 +13,7 @@ from airweave.domains.entities.canonical.models import CaptureResult, SourceReco
 from airweave.domains.entities.canonical.page_source import (
     CanonicalPageSource,
     InvalidScanContinuation,
+    KnownObjectSource,
     ScopeAccessLost,
     ScopeRemovalReason,
 )
@@ -23,6 +24,7 @@ from airweave.domains.entities.canonical.requests import (
 )
 from airweave.domains.entities.canonical.scan_models import (
     BeginScan,
+    CommitOmission,
     CommitScanPage,
     ReconcileScan,
     ScanState,
@@ -172,8 +174,11 @@ class CanonicalScanDriver:
                 )
             state = result.state
             await self.progress(result.capture, page.records)
-        if state.phase == "reconciling" and refresh_membership:
-            await self.confirm_omissions(state)
+        if state.phase == "reconciling":
+            if state.completion_policy == "discovery_with_validation":
+                state = await self.refresh_known(state)
+            elif state.completion_policy == "exhaustive" and refresh_membership:
+                await self.confirm_omissions(state)
         await self.reconcile(state)
 
     @staticmethod
@@ -182,6 +187,31 @@ class CanonicalScanDriver:
         if record.parent is not None and record.parent != scope.parent:
             raise CycleConflict("Captured record declares a different scope parent")
         return record.model_copy(update={"parent": scope.parent})
+
+    async def refresh_known(self, state: ScanState) -> ScanState:
+        """SQL sightings are the durable frontier; uncertain commits end this attempt."""
+        if not isinstance(self.source, KnownObjectSource):
+            raise CycleConflict("Source does not implement exact known-object validation")
+        while True:
+            async with self.sessions() as db:
+                records = await self.service.scan_missing(db, self.fence, state)
+            if not records:
+                return state
+            for record in records:
+                await self.check_limits()
+                observation = await self.source.refresh_known(record, files=self.files)
+                async with self.sessions() as db:
+                    result = await self.service.commit_omission(
+                        db,
+                        CommitOmission(
+                            fence=self.fence,
+                            state=state,
+                            expected_record=record,
+                            observation=observation,
+                        ),
+                    )
+                state = result.state
+                await self.progress(result.capture, (observation,))
 
     async def confirm_omissions(self, state: ScanState) -> None:
         """Accessible omissions or provider errors fail before any absence removal."""

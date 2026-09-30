@@ -1,4 +1,4 @@
-"""Whole-scope page commits; partial ranges must not use absence reconciliation."""
+"""Declared-scope page commits; incomplete discovery never owns absence reconciliation."""
 
 import json
 from typing import Literal
@@ -6,7 +6,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, field_validator
 
-from airweave.domains.entities.canonical.models import CaptureResult
+from airweave.domains.entities.canonical.cycle_models import CompletionPolicy
+from airweave.domains.entities.canonical.models import CaptureResult, SourceRecord
 from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope, WriterFence
 
 
@@ -47,7 +48,7 @@ class BeginScan(BaseModel):
 
 
 class ScanState(BaseModel):
-    """Complete means successful whole-scope enumeration and absence reconciliation."""
+    """Complete means the declared policy finished, not necessarily exhaustive discovery."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     scope: CompletedScope
@@ -60,6 +61,7 @@ class ScanState(BaseModel):
     completed_at: AwareDatetime | None
     parent_visibility_epoch: int | None = None
     membership_attempt_id: UUID | None = None
+    completion_policy: CompletionPolicy = "exhaustive"
 
 
 class CommitScanPage(BaseModel):
@@ -94,3 +96,13 @@ class ScanResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     state: ScanState
     capture: CaptureResult
+
+
+class CommitOmission(BaseModel):
+    """Fresh exact read after discovery; never broad absence evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    fence: WriterFence
+    state: ScanState
+    expected_record: SourceRecord
+    observation: CaptureRecord

@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.requests import RecordKind, WriterFence
 
+CompletionPolicy = Literal["exhaustive", "discovery_only", "discovery_with_validation"]
+
 CYCLE_KEY = "canonical_cycle"
 
 
@@ -17,6 +19,11 @@ class CycleConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
     parents: dict[RecordKind, tuple[RecordKind | None, ...]]
+    completion_policies: dict[RecordKind, CompletionPolicy] = Field(default_factory=dict)
+
+    def policy(self, kind: str) -> CompletionPolicy:
+        """Omitted declarations preserve historical exhaustive semantics."""
+        return self.completion_policies.get(kind, "exhaustive")
 
     @classmethod
     def from_source(
@@ -25,6 +32,7 @@ class CycleConfiguration(BaseModel):
         fingerprint: str,
         record_types: tuple[str, ...],
         container_parents: dict[str, str | tuple[str | None, ...]],
+        completion_policies: dict[RecordKind, CompletionPolicy] | None = None,
     ) -> "CycleConfiguration":
         """Snapshot the existing source declaration; no second topology registry."""
         if len(set(record_types)) != len(record_types):
@@ -35,7 +43,9 @@ class CycleConfiguration(BaseModel):
         for kind in record_types:
             declared = container_parents.get(kind, (None,))
             parents[kind] = (declared,) if isinstance(declared, str) else declared
-        return cls(fingerprint=fingerprint, parents=parents)
+        return cls(
+            fingerprint=fingerprint, parents=parents, completion_policies=completion_policies or {}
+        )
 
     @model_validator(mode="before")
     @classmethod
@@ -56,6 +66,8 @@ class CycleConfiguration(BaseModel):
     @model_validator(mode="after")
     def reachable_types(self) -> "CycleConfiguration":
         """Type cycles are valid; every declared kind must be reachable from a root."""
+        if set(self.completion_policies) - set(self.parents):
+            raise ValueError("Completion policy has an undeclared record kind")
         if not self.parents or any(not kind or not values for kind, values in self.parents.items()):
             raise ValueError("Capture topology must declare kinds and their parents")
         if any(len(set(values)) != len(values) for values in self.parents.values()):
