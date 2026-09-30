@@ -117,7 +117,14 @@ async def test_create_orchestrator_raises_when_source_connection_missing():
     ctx.organization.id = uuid4()
     db = AsyncMock()
 
-    with pytest.raises(NotFoundException, match="Source connection record not found"):
+    with (
+        patch(
+            "airweave.domains.sync_pipeline.factory.CanonicalRecordStore.admit_job",
+            new_callable=AsyncMock,
+            return_value=0,
+        ),
+        pytest.raises(NotFoundException, match="Source connection record not found"),
+    ):
         await factory.create_orchestrator(
             db=db,
             sync=sync,
@@ -161,6 +168,11 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
     db = AsyncMock()
 
     with (
+        patch(
+            "airweave.domains.sync_pipeline.factory.CanonicalRecordStore.admit_job",
+            new_callable=AsyncMock,
+            return_value=0,
+        ) as admit,
         patch("airweave.domains.sync_pipeline.factory.SyncContextBuilder") as mock_sc_builder,
         patch(
             "airweave.domains.sync_pipeline.factory.EntityDispatcherBuilder"
@@ -217,6 +229,8 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
         )
 
         assert orchestrator is not None
+        assert admit.await_count == 2
+        db.refresh.assert_awaited_once_with(sc)
         if canonical:
             assert isinstance(orchestrator.entity_pipeline, CanonicalCapturePipeline)
             mock_build_destinations.assert_not_called()
@@ -613,3 +627,49 @@ class TestLoadNodeSelections:
         assert len(result) == 1
         assert result[0].source_node_id == "node-1"
         assert result[0].node_type == "file"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("during_build", [False, True])
+async def test_generation_admission_stops_stale_factory(during_build):
+    """Stale workflow schema zero never bypasses authoritative admission."""
+    from airweave.domains.entities.canonical.store import StaleWriter
+
+    sc = MagicMock()
+    sc_repo = MagicMock(get_by_sync_id=AsyncMock(return_value=sc))
+    factory = _build_factory(sc_repo=sc_repo)
+    sync = SimpleNamespace(id=uuid4(), sync_config=None, provisioning_generation=0)
+    job = SimpleNamespace(id=uuid4(), sync_config=None, provisioning_generation=0)
+    db = AsyncMock()
+    order = []
+    db.refresh.side_effect = lambda _: order.append("refresh")
+
+    async def build(**kwargs):
+        order.append("build")
+        return MagicMock()
+
+    with (
+        patch(
+            "airweave.domains.sync_pipeline.factory.CanonicalRecordStore.admit_job",
+            new_callable=AsyncMock,
+        ) as admit,
+        patch.object(factory, "_build_source", side_effect=build) as source,
+        patch.object(factory, "_build_destinations", new_callable=AsyncMock) as destinations,
+        patch.object(factory, "_build_entity_tracker", new_callable=AsyncMock) as tracker,
+    ):
+        # Even if both DB generations are individually eligible, switching between
+        # checks must reject the source constructed under the first generation.
+        admit.side_effect = [4, 5] if during_build else StaleWriter("Stale job")
+        with pytest.raises(StaleWriter):
+            await factory.create_orchestrator(
+                db=db,
+                sync=sync,
+                sync_job=job,
+                collection=SimpleNamespace(sync_config=None),
+                connection=MagicMock(),
+                ctx=_make_ctx(),
+            )
+        assert source.await_count == int(during_build)
+        assert order == (["refresh", "build"] if during_build else [])
+        destinations.assert_not_awaited()
+        tracker.assert_not_awaited()

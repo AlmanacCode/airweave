@@ -35,7 +35,7 @@ from airweave.domains.browse_tree.types import NodeSelectionData
 from airweave.domains.entities.canonical.page_source import CanonicalPageSource
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
 from airweave.domains.entities.canonical.source import CanonicalSource, ContainerScopedSource
-from airweave.domains.entities.canonical.store import CanonicalRecordStore
+from airweave.domains.entities.canonical.store import CanonicalRecordStore, StaleWriter
 from airweave.domains.entities.protocols import (
     EntityCountRepositoryProtocol,
     EntityRepositoryProtocol,
@@ -169,7 +169,11 @@ class SyncFactory(SyncFactoryProtocol):
             f"destinations={resolved_config.destinations.model_dump()}"
         )
 
+        admission = CanonicalRecordStore()
+        generation = await admission.admit_job(db, ctx.organization.id, sync.id, sync_job.id)
         sc = await self._resolve_source_connection(db, sync, ctx)
+        # The session may already hold config from before a reconnect.
+        await db.refresh(sc)
         sc_id = sc.id  # extract before _build_source can expire the ORM instance via OAuth refresh
 
         # 2. Build source, destinations, tracker
@@ -192,6 +196,8 @@ class SyncFactory(SyncFactoryProtocol):
             execution_config=resolved_config,
             access_token=access_token,
         )
+        if await admission.admit_job(db, ctx.organization.id, sync.id, sync_job.id) != generation:
+            raise StaleWriter("Source authorization changed during initialization")
         source_entry = self._source_registry.get(sc.short_name)
         canonical_source = (
             source_result.source
