@@ -131,6 +131,7 @@ async def test_real_minilm_paraphrase_retrieval_and_exact_keyword():
     import asyncio
 
     from airweave.domains.embedders.dense.local import LocalDenseEmbedder
+    from airweave.domains.embedders.sparse.fastembed import FastEmbedSparseEmbedder
 
     corpus = [
         (
@@ -158,6 +159,7 @@ async def test_real_minilm_paraphrase_retrieval_and_exact_keyword():
     ]
     collection, foreign = str(uuid4()), str(uuid4())
     embedder = LocalDenseEmbedder(inference_url="http://localhost:8080", dimensions=384)
+    sparse_embedder = FastEmbedSparseEmbedder(model="Qdrant/bm25")
     urls = []
     async with httpx.AsyncClient(timeout=120) as http:
         try:
@@ -173,8 +175,13 @@ async def test_real_minilm_paraphrase_retrieval_and_exact_keyword():
                 pytest.fail("Pinned MiniLM service did not become healthy")
             await deploy_schema(http)
             vectors = await embedder.embed_many([title + "\n" + text for _, title, text in corpus])
+            sparse_vectors = await sparse_embedder.embed_many(
+                [title + "\n" + text for _, title, text in corpus]
+            )
             identities = {}
-            for (key, title, text), vector in zip(corpus, vectors, strict=True):
+            for (key, title, text), vector, sparse in zip(
+                corpus, vectors, sparse_vectors, strict=True
+            ):
                 assert len(vector.vector) == 384 and any(vector.vector)
                 identity = f"quality-{uuid4()}"
                 identities[key] = identity
@@ -190,13 +197,21 @@ async def test_real_minilm_paraphrase_retrieval_and_exact_keyword():
                                 "entity_id": document_id,
                                 "name": title,
                                 "textual_representation": text,
-                                "payload": "{}",
+                                "payload": json.dumps({"web_url": "https://example.com/" + key}),
                                 "airweave_system_metadata_collection_id": scope,
                                 "airweave_system_metadata_sync_id": str(uuid4()),
                                 "airweave_system_metadata_source_name": "gmail",
                                 "airweave_system_metadata_entity_type": "GmailMessageEntity",
                                 "airweave_system_metadata_original_entity_id": document_id,
                                 "dense_embedding": {"values": vector.vector},
+                                "sparse_embedding": {
+                                    "cells": {
+                                        str(index): value
+                                        for index, value in zip(
+                                            sparse.indices, sparse.values, strict=True
+                                        )
+                                    }
+                                },
                             }
                         },
                     )
@@ -219,6 +234,9 @@ async def test_real_minilm_paraphrase_retrieval_and_exact_keyword():
                 embeddings = QueryEmbeddings(
                     dense_embeddings=[await embedder.embed(query)]
                     if mode == RetrievalStrategy.SEMANTIC
+                    else None,
+                    sparse_embedding=await sparse_embedder.embed(query)
+                    if mode == RetrievalStrategy.KEYWORD
                     else None,
                 )
                 compiled = await engine.compile_query(
