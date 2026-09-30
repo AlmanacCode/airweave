@@ -61,7 +61,9 @@ class WriterBusy(CanonicalStoreError):
 
 def capture_fingerprint(record: CaptureRecord) -> str:
     """Observation times never create changes; sparse tombstone payloads do."""
-    material = record.model_dump(mode="json", exclude={"observed_at", "allow_reparent"})
+    material = record.model_dump(
+        mode="json", exclude={"observed_at", "allow_reparent", "descendant_visibility_fields"}
+    )
     serialized = json.dumps(
         material, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     )
@@ -395,10 +397,23 @@ class CanonicalRecordStore:
             attestation_changed = (
                 entity is not None and entity.parent_visibility_epoch != parent_epoch
             )
+            access_changed = (
+                entity is not None
+                and bool(observation.descendant_visibility_fields)
+                and (
+                    entity.source_payload is None
+                    or any(
+                        (key in entity.source_payload, entity.source_payload.get(key))
+                        != (key in observation.payload, observation.payload.get(key))
+                        for key in observation.descendant_visibility_fields
+                    )
+                )
+            )
             if (
                 entity is not None
                 and entity.capture_hash == fingerprint
                 and not attestation_changed
+                and not access_changed
                 and not (observation.kind == "upsert" and not was_available)
             ):
                 if mark_seen:
@@ -418,7 +433,7 @@ class CanonicalRecordStore:
                 )
                 db.add(entity)
             if observation.kind == "upsert" and (
-                was_deleted or not was_available or parent_changed
+                was_deleted or not was_available or parent_changed or access_changed
             ):
                 entity.visibility_epoch += 1
             entity.parent_visibility_epoch = parent_epoch

@@ -1,48 +1,42 @@
-"""Google Calendar source implementation.
+"""Google Calendar originals with durable per-calendar capture and observed range reads.
 
-Retrieves data from a user's Google Calendar (read-only mode):
-  - CalendarList entries (the user's list of calendars)
-  - Each underlying Calendar resource
-  - Events belonging to each Calendar
-  - (Optionally) Free/Busy data for each Calendar
+Canonical capture uses the shared page engine: complete calendar membership,
+per-calendar full or incremental raw events, and a fixed expanded-instance window.
+The engine owns every page acknowledgement and completed scope publication.
 
-Follows the same structure and pattern as other connector implementations
-(e.g., Gmail, Asana, Todoist, HubSpot). The entity schemas are defined in
-entities/google_calendar.py.
-
-Reference:
-    https://developers.google.com/calendar/api/v3/reference
-
-Now supports two flows:
-  - Non-batching / sequential (default): preserves original behavior.
-  - Batching / concurrent (opt-in): gated by `batch_generation` config and uses the
-    bounded-concurrency driver in BaseSource across all major I/O points:
-      * Per-calendar Calendar resource fetch
-      * Per-calendar event listing (still sequential within a calendar due to pagination)
-      * Per-calendar Free/Busy fetch
-
-Config (all optional, shown with defaults):
-    {
-        "batch_generation": False,     # enable/disable concurrent generation
-        "batch_size": 30,              # max concurrent workers (calendars processed in parallel)
-        "max_queue_size": 200,         # backpressure queue size
-        "preserve_order": False,       # maintain calendar order when yielding results
-        "stop_on_error": False         # cancel all on first error
-    }
+The upstream BaseSource entity interface remains implemented below; it is not the
+canonical cursor authority. Configured native calendar IDs and occurrence windows
+are validated by GoogleCalendarConfig.
 """
 
 from __future__ import annotations
 
+import json
 import urllib.parse
 from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from tenacity import retry, stop_after_attempt
+import httpx
+from tenacity import retry, retry_if_exception, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
+from airweave.domains.auth_provider.exceptions import (
+    AuthProviderRateLimitError,
+    AuthProviderServerError,
+)
 from airweave.domains.browse_tree.types import NodeSelectionData
-from airweave.domains.entities.canonical.source import SourceObservation
+from airweave.domains.entities.canonical.cycle_models import CaptureCycle, CycleConfiguration
+from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.page_source import (
+    CapturePage,
+    CapturePlan,
+    InvalidScanContinuation,
+)
+from airweave.domains.entities.canonical.requests import CompletedScope
+from airweave.domains.entities.canonical.scan_models import ScanContinuation, ScanState
+from airweave.domains.entities.canonical.scope_execution import ScopePlan
+from airweave.domains.sources.exceptions import SourceError, SourceRateLimitError
 from airweave.domains.sources.token_providers.protocol import (
     SourceAuthProvider,
     authorization_headers,
@@ -60,14 +54,30 @@ from airweave.platform.entities.google_calendar import (
     GoogleCalendarListEntity,
 )
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+from airweave.platform.http_client.bounded_response import bounded_response_bytes
 from airweave.platform.http_client.retry_helpers import (
     retry_if_rate_limit_or_timeout,
+    should_retry_on_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
 )
 from airweave.platform.sources._base import BaseSource
 from airweave.platform.sources.http_helpers import raise_for_status
-from airweave.platform.sources.records.google_calendar import generate_calendar_observations
+from airweave.platform.sources.records.calendar_pages import CalendarPages, invalid_page_token
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
+
+
+def _retry_capture(exception: BaseException) -> bool:
+    """Do not retry earlier than a provider's minimum beyond this request wait budget."""
+    if isinstance(exception, (SourceRateLimitError, AuthProviderRateLimitError)):
+        return exception.retry_after <= 120
+    if isinstance(exception, AuthProviderServerError):
+        return True
+    if isinstance(exception, httpx.HTTPStatusError) and exception.response.status_code == 429:
+        try:
+            return float(exception.response.headers.get("Retry-After", "0")) <= 120
+        except ValueError:
+            return True
+    return should_retry_on_rate_limit_or_timeout(exception)
 
 
 @source(
@@ -99,23 +109,61 @@ class GoogleCalendarSource(BaseSource):
     canonical_record_types = ("calendar", "event", "event_occurrence")
     canonical_container_parents = {"event": "calendar", "event_occurrence": "calendar"}
 
-    async def generate_observations(
+    @property
+    def capture_cycle_configuration(self) -> CycleConfiguration:
+        """Calendar membership owns exact native event and occurrence scopes."""
+        return CalendarPages(self._get_capture_json, self.calendar_config).configuration
+
+    async def prepare_cycle(self, previous: CaptureCycle | None) -> CapturePlan:
+        """Resolve the expansion window once per persisted cycle."""
+        return CalendarPages(self._get_capture_json, self.calendar_config).prepare()
+
+    async def prepare_scope(
         self,
+        scope: CompletedScope,
+        cycle: CaptureCycle,
+        previous: ScanState | None,
         *,
-        cursor: SyncCursor | None = None,
-        files: FileService | None = None,
-        node_selections: list[NodeSelectionData] | None = None,
-    ) -> AsyncGenerator[SourceObservation, None]:
-        """Capture originals and bounded provider-expanded instances with real IDs."""
-        if node_selections:
-            raise ValueError("Calendar selection scopes are not supported by canonical capture")
-        async for observation in generate_calendar_observations(
-            self._get,
-            cursor,
-            self.calendar_config.resolved_window(),
-            calendar_ids=self.calendar_config.calendar_ids,
-        ):
-            yield observation
+        parent: SourceRecord | None,
+        force_full: bool,
+    ) -> ScopePlan:
+        """Choose native delta only from compatible completed exact-scope evidence."""
+        return CalendarPages(self._get_capture_json, self.calendar_config).scope_plan(
+            scope, cycle, previous, parent=parent, force_full=force_full
+        )
+
+    def initial_scope_continuation(
+        self, scope: CompletedScope, cycle: CaptureCycle, plan: ScopePlan
+    ) -> ScanContinuation:
+        """Provider progress starts from the immutable engine-attested scope plan."""
+        return CalendarPages.initial(plan)
+
+    def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
+        """Native calendar IDs remain the stable container namespace."""
+        return CompletedScope(
+            record_type=record_type, container_id=parent.identity.native_id, parent=parent.identity
+        )
+
+    async def capture_page(
+        self,
+        scope: CompletedScope,
+        continuation: ScanContinuation,
+        *,
+        files: FileService,
+        parent: SourceRecord | None = None,
+    ) -> CapturePage:
+        """Originals and pagination commit together through the production page driver."""
+        return await CalendarPages(self._get_capture_json, self.calendar_config).page(
+            scope, continuation
+        )
+
+    async def confirm_absent(self, record: SourceRecord) -> None:
+        """An accessible omitted calendar prevents premature membership reconciliation."""
+        if record.identity.record_type != "calendar" or record.parent is not None:
+            raise ValueError("Calendar omission must identify root membership")
+        await CalendarPages(self._get_capture_json, self.calendar_config).confirm_member_absent(
+            record.identity.native_id
+        )
 
     # -----------------------
     # Construction / Config
@@ -153,6 +201,56 @@ class GoogleCalendarSource(BaseSource):
     async def _refresh_and_get_headers(self) -> Dict[str, str]:
         """Force-refresh the token and return updated headers."""
         return await authorization_headers(self.auth, refresh=True)
+
+    @retry(
+        stop=stop_after_attempt(5),
+        retry=retry_if_exception(_retry_capture),
+        wait=wait_rate_limit_with_backoff,
+        reraise=True,
+    )
+    async def _get_capture_json(self, url: str, params: Optional[dict] = None) -> dict:
+        """Bound native capture responses, preserving auth refresh and typed errors."""
+        headers = {**await self._authed_headers(), "Accept-Encoding": "identity"}
+        for attempt in range(2):
+            async with self.http_client.stream(
+                "GET", url, headers=headers, params=params
+            ) as response:
+                if response.status_code == 401 and attempt == 0 and self.auth.supports_refresh:
+                    headers = {
+                        **await self._refresh_and_get_headers(),
+                        "Accept-Encoding": "identity",
+                    }
+                    continue
+                if response.headers.get("content-encoding", "identity").lower() != "identity":
+                    raise SourceError(
+                        "Calendar did not honor identity encoding",
+                        source_short_name="google_calendar",
+                    )
+                maximum = 32 * 1024 * 1024 if response.is_success else 65536
+                body = await bounded_response_bytes(response, maximum, label="Calendar response")
+                buffered = httpx.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    request=response.request,
+                    content=body,
+                )
+                if response.status_code == 400 and params and params.get("pageToken"):
+                    try:
+                        native_error = json.loads(body)
+                    except (ValueError, UnicodeError):
+                        native_error = None
+                    if isinstance(native_error, dict) and invalid_page_token(native_error):
+                        raise InvalidScanContinuation("Calendar rejected its saved page token")
+                raise_for_status(
+                    buffered,
+                    source_short_name=self.short_name,
+                    token_provider_kind=self.auth.provider_kind,
+                )
+                value = json.loads(body)
+                if not isinstance(value, dict):
+                    raise ValueError("Calendar response must be an object")
+                return value
+        raise AssertionError("Unreachable Calendar refresh state")
 
     @retry(
         stop=stop_after_attempt(5),

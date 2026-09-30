@@ -81,6 +81,10 @@ class ScopeAccessLost(Exception):
         self.removal_reason = TypeAdapter(ScopeRemovalReason).validate_python(removal_reason)
 
 
+class RequiredScopeAccessLost(ScopeAccessLost):
+    """Withdraw known unavailable content, then fail an explicitly required source selection."""
+
+
 @runtime_checkable
 class CanonicalPageSource(Protocol):
     """A source fetches pages; SQL, attempts, scope discovery and checkpointing stay outside it."""

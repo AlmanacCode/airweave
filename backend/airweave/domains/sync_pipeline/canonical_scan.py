@@ -18,6 +18,7 @@ from airweave.domains.entities.canonical.page_source import (
     InvalidScanContinuation,
     InvalidScopeCheckpoint,
     KnownObjectSource,
+    RequiredScopeAccessLost,
     ScopeAccessLost,
     ScopedPageSource,
     ScopeRemovalReason,
@@ -188,6 +189,8 @@ class CanonicalScanDriver:
                 await self.withdraw_parent(
                     work.parent, work.parent_visibility_epoch, error.removal_reason
                 )
+                if isinstance(error, RequiredScopeAccessLost):
+                    raise
         async with self.sessions() as db:
             current = await self.service.read_cycle(db, self.fence)
         if current is None:

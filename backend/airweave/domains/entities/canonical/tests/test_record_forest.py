@@ -225,8 +225,9 @@ async def test_real_recursive_query_plan(shape, size, database, source):
     )
 
 
+@pytest.mark.parametrize("withdrawal", ["delete", "access_change"])
 async def test_nested_withdrawal_gates_original_blob_history_search_and_publication(
-    database, source
+    database, source, withdrawal
 ):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -246,7 +247,9 @@ async def test_nested_withdrawal_gates_original_blob_history_search_and_publicat
     from airweave.models.vector_db_deployment_metadata import VectorDbDeploymentMetadata
 
     service, fence = source
-    root = node("root")
+    root = node("root").model_copy(
+        update={"payload": {"accessRole": "owner"}, "descendant_visibility_fields": ("accessRole",)}
+    )
     child = node("child", root.identity)
     leaf = node("leaf", child.identity).model_copy(
         update={"blobs": (BlobReference(key="not-read", sha256="a" * 64, size_bytes=1),)}
@@ -305,18 +308,27 @@ async def test_nested_withdrawal_gates_original_blob_history_search_and_publicat
         database,
         service,
         fence,
-        root.model_copy(update={"kind": "delete", "removal_reason": "access_revoked"}),
+        root.model_copy(update={"kind": "delete", "removal_reason": "access_revoked"})
+        if withdrawal == "delete"
+        else root.model_copy(update={"payload": {"accessRole": "reader"}}),
     )
     query = CanonicalQueryService(service.store, CanonicalQueryStore(), "test-signing-key")
     storage = AsyncMock()
     async with database() as db:
         exact = await query.read(db, fence.organization_id, fence.sync_id, leaf_id)
         assert exact.content_access == "unavailable" and exact.payload == {} and not exact.blobs
-        assert not await query.queries.list_records(
+        listed = await query.queries.list_records(
             db, fence.organization_id, fence.sync_id, RecordFilters(), after_id=None, limit=100
         )
+        assert {item.identity.native_id for item in listed} == (
+            {"root"} if withdrawal == "access_change" else set()
+        )
         history = await service.store.changes(db, fence.organization_id, fence.sync_id)
-        assert all(item.record.content_access == "unavailable" for item in history.changes)
+        assert all(
+            item.record.content_access == "unavailable"
+            for item in history.changes
+            if withdrawal == "delete" or item.record.identity.native_id != "root"
+        )
         with pytest.raises(RecordNotFound):
             await query.blob(
                 db, fence.organization_id, fence.sync_id, leaf_id, 1, "a" * 64, storage
@@ -324,3 +336,70 @@ async def test_nested_withdrawal_gates_original_blob_history_search_and_publicat
         assert not storage.mock_calls
         assert not await visible_results(db, fence.organization_id, "test", [candidate], registry)
         assert not await projection.publish(db, work, generation, 1)
+
+    if withdrawal == "access_change":
+        await capture(database, service, fence, child)
+        restored = await capture(database, service, fence, leaf)
+        assert restored.changes[0].record.id == leaf_id
+        async with database() as db:
+            exact = await query.read(db, fence.organization_id, fence.sync_id, leaf_id)
+            assert exact.content_access == "available" and exact.blobs
+
+
+async def test_access_field_transition_is_atomic_and_not_metadata_revision(database, source):
+    from airweave.domains.entities.canonical.store import capture_fingerprint
+
+    service, fence = source
+    root = node("root").model_copy(
+        update={"payload": {"role": "owner"}, "descendant_visibility_fields": ("role",)}
+    )
+    child = node("child", root.identity)
+    initial = await capture(database, service, fence, root, child)
+    root_id, child_id = [item.record.id for item in initial.changes]
+    assert capture_fingerprint(root) == capture_fingerprint(
+        root.model_copy(update={"descendant_visibility_fields": ()})
+    )
+    metadata = root.model_copy(update={"payload": {"role": "owner", "summary": "Renamed"}})
+    await capture(database, service, fence, metadata)
+    async with database() as db:
+        assert (await db.get(Entity, root_id)).visibility_epoch == 1
+    downgrade = metadata.model_copy(update={"payload": {"role": "reader"}})
+    with pytest.raises(CanonicalStoreError):
+        await capture(database, service, fence, downgrade, node("orphan", node("missing").identity))
+    assert (await available(database, [child_id]))[child_id]
+    await capture(database, service, fence, downgrade)
+    assert not (await available(database, [child_id]))[child_id]
+    unchanged = await capture(database, service, fence, downgrade)
+    assert unchanged.unchanged == 1
+    async with database() as db:
+        assert (await db.get(Entity, root_id)).visibility_epoch == 2
+    missing = downgrade.model_copy(update={"payload": {}})
+    await capture(database, service, fence, missing)
+    async with database() as db:
+        assert (await db.get(Entity, root_id)).visibility_epoch == 3
+
+
+async def test_first_access_context_capture_of_legacy_null_payload(database, source):
+    service, fence = source
+    root = node("legacy").model_copy(
+        update={"payload": {"role": "reader"}, "descendant_visibility_fields": ("role",)}
+    )
+    async with database() as db:
+        row = Entity(
+            organization_id=fence.organization_id,
+            sync_id=fence.sync_id,
+            sync_job_id=fence.job_id,
+            entity_id=root.identity.entity_key,
+            entity_definition_short_name="block",
+            hash="legacy",
+            source_payload=None,
+        )
+        db.add(row)
+        await db.commit()
+        record_id = row.id
+    result = await capture(database, service, fence, root)
+    assert result.changes[0].record.id == record_id
+    assert result.changes[0].record.revision == 1
+    async with database() as db:
+        row = await db.get(Entity, record_id)
+        assert row.visibility_epoch == 2 and row.source_payload == {"role": "reader"}

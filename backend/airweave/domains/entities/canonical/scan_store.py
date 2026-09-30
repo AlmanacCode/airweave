@@ -131,7 +131,7 @@ def effective_mode(row: CaptureScan, cycle: CaptureCycle) -> str:
     return ScopeExecution.model_validate(row.execution_state).plan.mode
 
 
-def publish_scope(row: CaptureScan, cycle: CaptureCycle) -> None:
+def publish_scope(row: CaptureScan, cycle: CaptureCycle, sequence: int, attempt_id: UUID) -> None:
     """Completed evidence is derived only from this row's committed terminal state."""
     if cycle.mode != "mixed" or row.phase != "complete":
         return
@@ -144,6 +144,8 @@ def publish_scope(row: CaptureScan, cycle: CaptureCycle) -> None:
         parent_visibility_epoch=row.parent_visibility_epoch,
         request_context=execution.plan.request_context,
         policy=cycle.configuration.policy(row.record_type),
+        observed_change_sequence=sequence,
+        writer_attempt_id=attempt_id,
         checkpoint=ProviderCheckpoint.model_validate(checkpoint) if checkpoint else None,
     )
     row.execution_state = execution.model_copy(
@@ -434,7 +436,7 @@ class CanonicalScanStore:
         if request.final:
             row.phase = "complete" if mode == "changes" else "reconciling"
             row.completed_at = datetime.now(timezone.utc) if mode == "changes" else None
-            publish_scope(row, cycle)
+            publish_scope(row, cycle, sync.observed_change_sequence, request.fence.attempt_id)
         await db.flush()
         return ScanResult(state=await self._state(db, row), capture=captured)
 
@@ -607,7 +609,7 @@ class CanonicalScanStore:
             row.phase = "complete"
             row.completed_at = datetime.now(timezone.utc)
             row.revision += 1
-            publish_scope(row, cycle)
+            publish_scope(row, cycle, sync.observed_change_sequence, request.fence.attempt_id)
             await db.flush()
             return ScanResult(
                 state=await self._state(db, row),
@@ -636,6 +638,6 @@ class CanonicalScanStore:
         if not result.has_more:
             row.phase = "complete"
             row.completed_at = datetime.now(timezone.utc)
-            publish_scope(row, cycle)
+            publish_scope(row, cycle, sync.observed_change_sequence, request.fence.attempt_id)
         await db.flush()
         return ScanResult(state=await self._state(db, row), capture=result.capture)

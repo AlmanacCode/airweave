@@ -10,7 +10,6 @@ import asyncio
 import base64
 import hashlib
 import json
-from contextlib import aclosing
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
@@ -57,6 +56,7 @@ from airweave.platform.entities.gmail import (
     GmailThreadEntity,
 )
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+from airweave.platform.http_client.bounded_response import bounded_response_bytes
 from airweave.platform.http_client.retry_helpers import (
     wait_rate_limit_with_backoff,
 )
@@ -439,21 +439,7 @@ class GmailSource(BaseSource):
     @staticmethod
     async def _bounded_response_bytes(response: httpx.Response, maximum: int) -> bytes:
         """Own the raw iterator; identity encoding makes this a decoded-content bound too."""
-        if response.is_stream_consumed:
-            if len(response.content) > maximum:
-                raise FileSkippedException(
-                    "Gmail JSON response exceeds size limit", "Gmail response"
-                )
-            return response.content
-        body = bytearray()
-        async with aclosing(response.stream.__aiter__()) as chunks:
-            async for chunk in chunks:
-                if len(body) + len(chunk) > maximum:
-                    raise FileSkippedException(
-                        "Gmail JSON response exceeds size limit", "Gmail response"
-                    )
-                body.extend(chunk)
-        return bytes(body)
+        return await bounded_response_bytes(response, maximum, label="Gmail response")
 
     # -----------------------
     # Cursor helper

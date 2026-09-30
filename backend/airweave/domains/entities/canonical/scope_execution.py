@@ -37,6 +37,8 @@ class ScopeEvidence(BaseModel):
     request_context: dict[str, JsonValue]
     policy: CompletionPolicy
     checkpoint: ProviderCheckpoint | None = None
+    observed_change_sequence: int | None = Field(default=None, ge=0)
+    writer_attempt_id: UUID | None = None
 
     def matches(self, plan: ScopePlan, epoch: int | None) -> bool:
         """Revival or changed native request parameters cannot reuse old authority."""

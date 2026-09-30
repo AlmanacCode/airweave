@@ -1,6 +1,5 @@
 """Stored provider instances support bounded ranges without recurrence guessing."""
 
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -23,7 +22,6 @@ from airweave.domains.entities.canonical.requests import CaptureBatch
 from airweave.domains.entities.canonical.store import CanonicalStoreError
 from airweave.models import SyncCursor
 from airweave.models.source_connection import SourceConnection
-from airweave.platform.cursors.google_calendar import CalendarWindowCoverage
 from airweave.platform.sources.records.google_calendar import record
 
 
@@ -50,34 +48,31 @@ async def seed(database, source):
         },
         {"id": "ends-at-boundary", "start": {"date": "2026-03-07"}, "end": {"date": "2026-03-08"}},
     ]
-    observations = (
-        parent,
-        *(
-            record("event_occurrence", item, "cal").model_copy(update={"parent": parent.identity})
-            for item in events
-        ),
+    from airweave.domains.entities.canonical.tests.test_calendar_recovery import (
+        NativeHTTP,
+        run,
+        setup,
     )
-    async with database() as db:
-        await capture.capture(db, CaptureBatch(fence=fence, records=observations))
-    coverage = CalendarWindowCoverage(
-        start="2026-03-01T00:00:00Z",
-        end="2026-04-01T00:00:00Z",
-        timezone="America/Los_Angeles",
-        completed_at=datetime.now(timezone.utc),
-        scan_id=uuid4(),
+    from airweave.platform.configs.config import GoogleCalendarConfig
+
+    native = NativeHTTP(
+        [
+            ("/users/me/calendarList", {"items": [parent.payload]}),
+            ("/calendars/cal/events", {"items": [], "nextSyncToken": "seed"}),
+            ("/calendars/cal/events", {"items": events}),
+        ]
     )
+    config = GoogleCalendarConfig(
+        occurrence_window={"start": "2026-03-01T00:00:00Z", "end": "2026-04-01T00:00:00Z"}
+    )
+    pipeline, ctx, runtime, client = await setup(database, source, native, config=config)
+    await run(pipeline, ctx, runtime)
+    await client.aclose()
     async with database() as db:
-        await capture.save_checkpoint(
-            db,
-            fence,
-            {
-                "occurrence_coverage": {"cal": coverage.model_dump(mode="json")},
-                "canonical_checkpoint": {
-                    "writer_attempt_id": str(uuid4()),
-                    "observed_change_sequence": 999999,
-                },
-            },
+        result = await CalendarRangeService("secret").read(
+            db, fence.organization_id, fence.sync_id, "cal", window()
         )
+        coverage = result.coverage
     return parent, coverage
 
 
@@ -257,12 +252,12 @@ async def test_budget_rejects_oversized_row_before_orm_materialization(database,
 
 
 async def test_empty_selection_reconciles_partial_parent_without_saved_cursor(database, source):
-    from airweave.domains.entities.canonical.requests import (
-        CompletedScope,
-        ReconcileScope,
-        StartedScope,
+    from airweave.domains.entities.canonical.tests.test_calendar_recovery import (
+        NativeHTTP,
+        run,
+        setup,
     )
-    from airweave.platform.sources.records.google_calendar import generate_calendar_observations
+    from airweave.platform.configs.config import GoogleCalendarConfig
 
     capture, fence = source
     parent = record("calendar", {"id": "partial", "timeZone": "UTC"})
@@ -272,36 +267,26 @@ async def test_empty_selection_reconciles_partial_parent_without_saved_cursor(da
     async with database() as db:
         result = await capture.capture(db, CaptureBatch(fence=fence, records=(parent, child)))
     child_id = result.changes[-1].record.id
-
-    async def never_get(*args, **kwargs):
-        raise AssertionError("Empty selection must not fetch provider")
-
-    # Same-attempt retry is intentionally harder: StartedScope must clear old sightings.
-    async for item in generate_calendar_observations(never_get, None, calendar_ids=()):
-        if isinstance(item, StartedScope):
-            async with database() as db:
-                await capture.start_scope(db, fence, item)
-        elif type(item) is CompletedScope:
-            async with database() as db:
-                await capture.reconcile_scope(
-                    db,
-                    ReconcileScope(fence=fence, scope=item, observed_at=datetime.now(timezone.utc)),
-                )
+    native = NativeHTTP([])
+    pipeline, ctx, runtime, client = await setup(
+        database, source, native, config=GoogleCalendarConfig(calendar_ids=())
+    )
+    await run(pipeline, ctx, runtime)
     async with database() as db:
         current = await capture.store.read(db, fence.organization_id, fence.sync_id, child_id)
         assert current.content_access == "unavailable" and current.payload == {}
-        await db.rollback()
-        removed = await capture.reconcile_parents(db, fence)
-        assert removed.capture.changes[0].record.removal_reason != "provider_deleted"
+        assert current.removal_reason != "provider_deleted"
+    assert not native.calls
+    await client.aclose()
 
 
 async def test_missing_selected_calendar_revokes_partial_parent_without_cursor(database, source):
-    from airweave.domains.entities.canonical.requests import (
-        CaptureRecord,
-        RemovedScope,
-        StartedScope,
+    from airweave.domains.entities.canonical.tests.test_calendar_recovery import (
+        NativeHTTP,
+        run,
+        setup,
     )
-    from airweave.platform.sources.records.google_calendar import generate_calendar_observations
+    from airweave.platform.configs.config import GoogleCalendarConfig
 
     capture, fence = source
     parent = record("calendar", {"id": "missing", "timeZone": "UTC"})
@@ -311,27 +296,18 @@ async def test_missing_selected_calendar_revokes_partial_parent_without_cursor(d
     async with database() as db:
         initial = await capture.capture(db, CaptureBatch(fence=fence, records=(parent, child)))
     child_id = initial.changes[-1].record.id
-
-    async def empty_membership(*args, **kwargs):
-        return {"items": []}
-
+    native = NativeHTTP(
+        [("/users/me/calendarList", {"items": []}), ("/users/me/calendarList/missing", (404, {}))]
+    )
+    pipeline, ctx, runtime, client = await setup(
+        database, source, native, config=GoogleCalendarConfig(calendar_ids=("missing",))
+    )
     with pytest.raises(ValueError, match="not accessible"):
-        async for item in generate_calendar_observations(
-            empty_membership, None, calendar_ids=("missing",)
-        ):
-            async with database() as db:
-                if isinstance(item, CaptureRecord):
-                    await capture.capture(db, CaptureBatch(fence=fence, records=(item,)))
-                elif isinstance(item, StartedScope):
-                    await capture.start_scope(db, fence, item)
-                elif isinstance(item, RemovedScope):
-                    await capture.remove_scope(db, fence, item)
-                else:
-                    raise AssertionError("Missing requested scope cannot complete")
+        await run(pipeline, ctx, runtime)
     async with database() as db:
         current = await capture.store.read(db, fence.organization_id, fence.sync_id, child_id)
         assert current.content_access == "unavailable" and current.payload == {}
-        assert current.removal_reason == "access_revoked"
-        assert (
-            await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == fence.sync_id)) is None
-        )
+        # Child cleanup may follow a later retry; recursive parent visibility hides it now.
+        cursor = await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == fence.sync_id))
+        assert cursor.cursor_data["canonical_cycle"]["phase"] == "active"
+    await client.aclose()

@@ -11,9 +11,11 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationErro
 from sqlalchemy import String, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from airweave.domains.entities.canonical.checkpoint import CanonicalCheckpoint
+from airweave.domains.entities.canonical.calendar import CalendarScopeContext
+from airweave.domains.entities.canonical.cycle_models import CYCLE_KEY, CaptureCycle
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query import InvalidRecordCursor, RecordNotFound
+from airweave.domains.entities.canonical.scope_execution import ScopeExecution
 from airweave.domains.entities.canonical.store import (
     CanonicalStoreError,
     SourceNotFound,
@@ -21,7 +23,8 @@ from airweave.domains.entities.canonical.store import (
     source_record,
 )
 from airweave.models import Entity, Sync, SyncCursor, SyncJob
-from airweave.platform.cursors.google_calendar import CalendarWindowCoverage, GoogleCalendarCursor
+from airweave.models.capture_scan import CaptureScan
+from airweave.platform.cursors.google_calendar import CalendarWindowCoverage
 
 
 class CalendarRangeError(CanonicalStoreError):
@@ -158,63 +161,25 @@ class CalendarRangeService:
         )
         if calendar is None:
             raise RecordNotFound("Calendar is not currently available")
-        stored_cursor = await db.scalar(
-            select(SyncCursor).where(
-                SyncCursor.sync_id == sync_id, SyncCursor.organization_id == organization_id
-            )
-        )
-        state = GoogleCalendarCursor.model_validate(
-            stored_cursor.cursor_data if stored_cursor else {}
-        )
-        coverage = state.occurrence_coverage.get(calendar_id)
-        stamp_data = (
-            stored_cursor.cursor_data.get("canonical_checkpoint") if stored_cursor else None
-        )
-        if (
-            coverage is None
-            or stamp_data is None
-            or query.start < coverage.start
-            or query.end > coverage.end
-        ):
-            raise CalendarRangeNotCaptured(query.start, query.end)
-        stamp = CanonicalCheckpoint.model_validate(stamp_data)
-        if calendar.source_payload.get("timeZone") != coverage.timezone:
-            raise CalendarChanged("Calendar timezone changed; refresh captured window")
+        coverage, refresh_state = await self._coverage(db, sync, calendar, query)
         sequence = sync.observed_change_sequence
         position = self._position(query, organization_id, sync_id, calendar_id, coverage, sequence)
         rows = await self._bounded_rows(db, organization_id, sync_id, calendar_id)
         matches = self._matching_rows(rows, coverage, query, position)
         # Recheck both journal and checkpoint: no snapshot or mixed-page claim.
+        calendar_record_id = calendar.id
         db.expire_all()
         latest = await db.scalar(
             select(Sync).where(Sync.id == sync_id, Sync.organization_id == organization_id)
         )
-        latest_cursor = await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == sync_id))
-        latest_scan = (
-            latest_cursor.cursor_data.get("occurrence_coverage", {})
-            .get(calendar_id, {})
-            .get("scan_id")
-            if latest_cursor
-            else None
+        latest_calendar = await db.scalar(
+            select(Entity).where(Entity.id == calendar_record_id, content_is_available())
         )
-        if (
-            latest is None
-            or latest.observed_change_sequence != sequence
-            or latest_scan != str(coverage.scan_id)
-        ):
+        if latest is None or latest_calendar is None or latest.observed_change_sequence != sequence:
             raise CalendarChanged("Calendar changed while reading; restart range query")
-        refresh_state = "last_completed"
-        if (
-            latest.writer_attempt_id != stamp.writer_attempt_id
-            or sequence != stamp.observed_change_sequence
-        ):
-            job = await db.get(SyncJob, latest.writer_job_id) if latest.writer_job_id else None
-            refresh_state = (
-                "refresh_in_progress"
-                if job
-                and str(getattr(job.status, "value", job.status)).lower() in {"running", "pending"}
-                else "refresh_incomplete"
-            )
+        latest_coverage, refresh_state = await self._coverage(db, latest, latest_calendar, query)
+        if latest_coverage != coverage:
+            raise CalendarChanged("Calendar coverage changed while reading; restart range query")
         more = len(matches) > query.limit
         page = matches[: query.limit]
         next_cursor = None
@@ -244,6 +209,73 @@ class CalendarRangeService:
             observed_change_sequence=sequence,
             scanned_records=len(rows),
         )
+
+    @staticmethod
+    async def _coverage(
+        db: AsyncSession, sync: Sync, calendar: Entity, query: CalendarRange
+    ) -> tuple[CalendarWindowCoverage, str]:
+        """Only completed exact-scope publication attests this native occurrence window."""
+        cursor = await db.scalar(
+            select(SyncCursor).where(
+                SyncCursor.sync_id == sync.id, SyncCursor.organization_id == sync.organization_id
+            )
+        )
+        raw_cycle = cursor.cursor_data.get(CYCLE_KEY) if cursor else None
+        scan = await db.scalar(
+            select(CaptureScan).where(
+                CaptureScan.sync_id == sync.id,
+                CaptureScan.organization_id == sync.organization_id,
+                CaptureScan.record_type == "event_occurrence",
+                CaptureScan.container_id == calendar.native_id,
+                CaptureScan.parent_record_id == calendar.id,
+                CaptureScan.parent_visibility_epoch == calendar.visibility_epoch,
+            )
+        )
+        if not raw_cycle or scan is None or not scan.execution_state:
+            raise CalendarRangeNotCaptured(query.start, query.end)
+        cycle = CaptureCycle.model_validate(raw_cycle)
+        execution = ScopeExecution.model_validate(scan.execution_state)
+        published = execution.published
+        if (
+            cycle.mode != "mixed"
+            or scan.fingerprint != cycle.configuration.fingerprint
+            or published is None
+            or published.parent_visibility_epoch != calendar.visibility_epoch
+            or published.policy != "exhaustive"
+        ):
+            raise CalendarRangeNotCaptured(query.start, query.end)
+        context = CalendarScopeContext.model_validate(published.request_context)
+        try:
+            coverage = CalendarWindowCoverage(
+                start=context.parameters["timeMin"],
+                end=context.parameters["timeMax"],
+                timezone=context.timezone,
+                completed_at=published.completed_at,
+                scan_id=published.sweep_id,
+            )
+        except (KeyError, ValidationError) as error:
+            raise CalendarRangeNotCaptured(query.start, query.end) from error
+        if query.start < coverage.start or query.end > coverage.end:
+            raise CalendarRangeNotCaptured(query.start, query.end)
+        if calendar.source_payload.get("timeZone") != coverage.timezone:
+            raise CalendarChanged("Calendar timezone changed; refresh captured window")
+        refresh_state = "last_completed"
+        if published.writer_attempt_id is None or published.observed_change_sequence is None:
+            return coverage, "refresh_incomplete"
+        if (
+            published.writer_attempt_id != sync.writer_attempt_id
+            or published.observed_change_sequence != sync.observed_change_sequence
+            or scan.cycle_id != cycle.version.cycle_id
+            or scan.phase != "complete"
+            or scan.sweep_id != published.sweep_id
+        ):
+            job = await db.get(SyncJob, sync.writer_job_id) if sync.writer_job_id else None
+            refresh_state = (
+                "refresh_in_progress"
+                if job and job.status in {"running", "pending"}
+                else "refresh_incomplete"
+            )
+        return coverage, refresh_state
 
     @staticmethod
     async def _bounded_rows(

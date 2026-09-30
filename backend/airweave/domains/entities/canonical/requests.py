@@ -5,7 +5,15 @@ import json
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 
 ScopeRemovalReason = Literal["scope_removed", "access_revoked"]
 RecordKind = Annotated[str, Field(min_length=1, max_length=200)]
@@ -71,6 +79,13 @@ class CaptureRecord(BaseModel):
         default=False,
         description="Audited provider evidence that this same object moved; never a retry override",
     )
+    descendant_visibility_fields: tuple[
+        Annotated[str, Field(min_length=1, max_length=200)], ...
+    ] = Field(
+        default=(),
+        max_length=8,
+        description="Audited native top-level fields whose change invalidates descendant access",
+    )
     payload: dict[str, JsonValue]
     payload_schema_version: int = Field(default=1, ge=1)
     kind: Literal["upsert", "delete"] = "upsert"
@@ -83,6 +98,16 @@ class CaptureRecord(BaseModel):
     source_updated_at: AwareDatetime | None = None
     observed_at: AwareDatetime
     blobs: tuple[BlobReference, ...] = ()
+
+    @field_validator("descendant_visibility_fields")
+    @classmethod
+    def unique_visibility_fields(cls, value):
+        """Source declarations are bounded native names, never paths or expressions."""
+        if len(set(value)) != len(value) or any(
+            not key.strip() or key != key.strip() for key in value
+        ):
+            raise ValueError("Descendant visibility fields require unique nonblank native names")
+        return value
 
     @model_validator(mode="after")
     def validate_removal(self) -> "CaptureRecord":
