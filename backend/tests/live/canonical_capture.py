@@ -228,7 +228,23 @@ async def verify(name, account, email, key, sessions, engine, root):
     async with sessions() as db:
         tail = await query.changes(db, organization_id, sync_id, cursor=change_cursor)
     assert not tail.changes
+    consumer = None
+    if name == "gmail" and os.environ.get("LIVE_ALMANAC_PYTHON"):
+        from almanac_handoff import verify_almanac_reader
+
+        PROBE_STAGE = name + ":almanac_http_reader"
+        await engine.dispose()
+        consumer = await verify_almanac_reader(
+            records=listed,
+            storage=storage,
+            query=query,
+            sessions=sessions,
+            organization_id=organization_id,
+            sync_id=sync_id,
+            root=root,
+        )
     return {
+        "almanac_reader": consumer,
         "provider": name,
         "records": len(listed),
         "journal_changes": len(changes),

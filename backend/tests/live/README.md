@@ -47,3 +47,31 @@ Output contains only counts, booleans, safe exception class names, stages, HTTP
 status/host and allowlisted provider error codes. The live
 script never prints credentials, record contents, account identifiers, filenames,
 or SQL parameters. Automated mock/store tests remain separate from this proof.
+
+## Almanac HTTP consumer handoff
+
+For Gmail, optionally set `LIVE_ALMANAC_ROOT` to the Almanac checkout and
+`LIVE_ALMANAC_PYTHON` to its Python 3.12 **venv executable path** (do not resolve
+its symlink to the base interpreter). Run the same `canonical_capture.py` command
+in Airweave's Python 3.13 environment. The callback serves the committed sample
+through the actual `api_router` on an ephemeral loopback port, then invokes
+Almanac's `backend/tests/live/read_owned_gmail.py`.
+
+The child receives a mode0600 manifest inside the existing mode0700 directory;
+its environment contains no provider credentials. It reads an actual thread and
+record/blob endpoints using `OwnedMailThreadReader` and `OwnedSourceRecords`,
+compares native header/body/reference and payload digests, verifies blob SHA/size,
+and checks that an unauthenticated probe request is denied. The server uses a
+random-key-guarded **test context override**, not hosted WorkOS or real persisted
+API-key authentication. It creates no production Almanac account binding. The
+child and server are stopped before the enclosing harness removes schema/files.
+
+Verified 2026-09-30: 7 Gmail originals, 7 journal changes, 2 blobs totaling
+1,383,758 bytes, exact replay with 0 new changes and fresh-connection readback.
+The real HTTP → Almanac reader returned 1 message with complete body and verified
+native fields; both blobs passed HTTP SHA/size verification. That selected body
+was inline (`external_body_blobs=0`): external-body retrieval is covered by
+synthetic tests, not claimed as live-covered by this sample. After the initial
+venv-launch failure and successful rerun, independent checks found 0 retained
+`canonical_live_*` schemas and 0 private live directories. No complete-source
+coverage, checkpoint, hosted authentication, or deployed product proof is claimed.
