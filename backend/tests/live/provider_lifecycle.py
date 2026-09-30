@@ -182,13 +182,9 @@ def validate_checkpoint(name, manifest, counters, saved, previous, loaded, attem
         assert saved["canonical_page_token"]
         assert counters["started"] == counters["completed"] == (0 if loaded else 1)
         assert bool(counters["resumed_changes_requests"]) == loaded
-    elif name == "slack":
+    elif name in {"slack", "wispr"}:
         assert saved["canonical_cycle"]["phase"] == "complete"
         assert saved["canonical_cycle"]["completed_job_id"]
-    elif name == "wispr":
-        assert saved is None
-        assert counters["started"] == counters["completed"] == 0
-        return
     else:
         assert saved["canonical_query"] == manifest["query"]
         assert saved["history_id"] == "" and counters["started"] == counters["completed"] == 1

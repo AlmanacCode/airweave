@@ -174,6 +174,8 @@ def _wispr_text(responses: list[JsonValue], field: str) -> str:
 
 
 def _wispr(record: SourceRecord) -> tuple[BaseEntity, ...]:
+    if record.identity.record_type == "meeting_listing":
+        return ()
     if record.identity.record_type != "meeting":
         raise ProjectionMappingError("Unsupported Wispr record type")
     responses = record.payload.get("responses")

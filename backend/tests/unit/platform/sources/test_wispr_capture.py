@@ -83,29 +83,6 @@ async def test_changed_meeting_fails_instead_of_mixing_versions(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_query_cap_partitions_by_meeting_start_not_modified(monkeypatch):
-    connector = await source()
-    row1 = {"id": "1", "start": "2026-01-01T00:00:00Z", "modified_at": "2026-09-01T00:00:00Z"}
-    row2 = {"id": "2", "start": "2026-01-03T00:00:00Z"}
-    listing = AsyncMock(side_effect=[([row1, row2], True), ([row2], False), ([row1], False)])
-    monkeypatch.setattr(connector, "_list_window", listing)
-    assert {row["id"] async for row in connector._list_all()} == {"1", "2"}
-    assert listing.call_args_list[1].args[0].isoformat() == "2026-01-02T00:00:00+00:00"
-
-
-@pytest.mark.asyncio
-async def test_unpartitionable_cap_fails(monkeypatch):
-    connector = await source()
-    monkeypatch.setattr(
-        connector,
-        "_list_window",
-        AsyncMock(return_value=([{"start": "2026-01-01T00:00:00Z"}], True)),
-    )
-    with pytest.raises(ValueError, match="cap"):
-        _ = [row async for row in connector._list_all()]
-
-
-@pytest.mark.asyncio
 async def test_explicit_tool_failure_never_becomes_partial_success(monkeypatch):
     connector = await source()
     monkeypatch.setattr(
@@ -115,3 +92,174 @@ async def test_explicit_tool_failure_never_becomes_partial_success(monkeypatch):
     )
     with pytest.raises(ValueError, match="tool execution failed; capture is incomplete"):
         await connector._meeting("m")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"meetings": [], "has_more": False, "truncated": True},
+        {"meetings": [], "has_more": True, "next_cursor": None},
+        {"meetings": [{"id": "m"}, {"id": "m"}], "has_more": False},
+    ],
+)
+async def test_listing_failure_never_commits_partial_final_page(monkeypatch, response):
+    from airweave.domains.entities.canonical.requests import CompletedScope
+    from airweave.domains.entities.canonical.scan_models import ScanContinuation
+
+    connector = await source()
+    monkeypatch.setattr(connector, "_execute", AsyncMock(return_value=response))
+    with pytest.raises(ValueError):
+        await connector.capture_page(
+            CompletedScope(record_type="meeting_listing"), ScanContinuation(), files=MagicMock()
+        )
+
+
+@pytest.mark.asyncio
+async def test_listing_preserves_native_row_and_continuation(monkeypatch):
+    from airweave.domains.entities.canonical.requests import CompletedScope
+    from airweave.domains.entities.canonical.scan_models import ScanContinuation
+
+    connector = await source()
+    row = {"id": "m", "title": "Meeting", "unknown_native": True, "start": "2026-01-01T00:00:00Z"}
+    execute = AsyncMock(return_value={"meetings": [row], "has_more": True, "next_cursor": "next"})
+    monkeypatch.setattr(connector, "_execute", execute)
+    page = await connector.capture_page(
+        CompletedScope(record_type="meeting_listing"), ScanContinuation(), files=MagicMock()
+    )
+    assert page.records[0].payload == row
+    assert page.records[0].completeness == "metadata_only"
+    assert page.records[0].source_created_at is None
+    assert page.continuation.value["cursor"] == "next"
+    assert page.final is False
+    with pytest.raises(ValueError, match="repeated pagination"):
+        await connector.capture_page(
+            CompletedScope(record_type="meeting_listing"), page.continuation, files=MagicMock()
+        )
+
+
+@pytest.mark.asyncio
+async def test_listing_projection_is_explicitly_empty():
+    from types import SimpleNamespace
+
+    from airweave.domains.entities.canonical.projection_mappers import _wispr
+
+    assert _wispr(SimpleNamespace(identity=SimpleNamespace(record_type="meeting_listing"))) == ()
+
+
+@pytest.mark.asyncio
+async def test_partitioned_listing_resumes_both_half_open_windows(monkeypatch):
+    from airweave.domains.entities.canonical.page_source import CanonicalPageSource
+    from airweave.domains.entities.canonical.requests import CompletedScope
+    from airweave.domains.entities.canonical.scan_models import ScanContinuation
+
+    connector = await source()
+    assert isinstance(connector, CanonicalPageSource)
+    rows = [
+        {"id": "a", "start": "2026-01-01T00:00:00Z"},
+        {"id": "b", "start": "2026-01-03T00:00:00Z"},
+    ]
+    execute = AsyncMock(
+        side_effect=[
+            {"meetings": rows, "has_more": True, "truncated": True},
+            {"meetings": rows[:1], "has_more": False},
+            {"meetings": rows[1:], "has_more": False},
+        ]
+    )
+    monkeypatch.setattr(connector, "_execute", execute)
+    scope = CompletedScope(record_type="meeting_listing")
+    first = await connector.capture_page(scope, ScanContinuation(), files=MagicMock())
+    assert not first.final
+    # Round-trip persisted progress into a newly constructed source.
+    resumed = await source()
+    monkeypatch.setattr(resumed, "_execute", execute)
+    second = await resumed.capture_page(
+        scope,
+        ScanContinuation.model_validate_json(first.continuation.model_dump_json()),
+        files=MagicMock(),
+    )
+    assert not second.final
+    third = await resumed.capture_page(scope, second.continuation, files=MagicMock())
+    assert third.final
+    assert execute.call_args_list[1].args[1]["until"] == "2026-01-02T00:00:00+00:00"
+    assert execute.call_args_list[2].args[1]["since"] == "2026-01-02T00:00:00+00:00"
+    assert third.records[0].identity.native_id == "b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{"id": "a"}],
+        [
+            {"id": "a", "start": "2026-01-01T00:00:00Z"},
+            {"id": "b", "start": "2026-01-01T00:00:00Z"},
+        ],
+    ],
+)
+async def test_capped_unsplittable_listing_fails_without_final_page(monkeypatch, rows):
+    from airweave.domains.entities.canonical.requests import CompletedScope
+    from airweave.domains.entities.canonical.scan_models import ScanContinuation
+
+    connector = await source()
+    monkeypatch.setattr(
+        connector,
+        "_execute",
+        AsyncMock(
+            return_value={
+                "meetings": rows,
+                "has_more": False,
+                "truncated": True,
+            }
+        ),
+    )
+    with pytest.raises(ValueError, match="cannot be partitioned safely"):
+        await connector.capture_page(
+            CompletedScope(record_type="meeting_listing"), ScanContinuation(), files=MagicMock()
+        )
+
+
+@pytest.mark.asyncio
+async def test_uncapped_listing_does_not_invent_missing_dates(monkeypatch):
+    from airweave.domains.entities.canonical.requests import CompletedScope
+    from airweave.domains.entities.canonical.scan_models import ScanContinuation
+
+    connector = await source()
+    monkeypatch.setattr(
+        connector,
+        "_execute",
+        AsyncMock(
+            return_value={
+                "meetings": [{"id": "a"}],
+                "has_more": False,
+            }
+        ),
+    )
+    page = await connector.capture_page(
+        CompletedScope(record_type="meeting_listing"), ScanContinuation(), files=MagicMock()
+    )
+    assert page.final
+    assert page.records[0].source_created_at is None
+    assert page.records[0].source_updated_at is None
+
+
+@pytest.mark.asyncio
+async def test_short_listing_pages_are_not_limited_to_six_cursors(monkeypatch):
+    from airweave.domains.entities.canonical.requests import CompletedScope
+    from airweave.domains.entities.canonical.scan_models import ScanContinuation
+
+    connector = await source()
+    execute = AsyncMock(
+        side_effect=[
+            {"meetings": [{"id": str(i)}], "has_more": i < 8, "next_cursor": str(i + 1)}
+            for i in range(9)
+        ]
+    )
+    monkeypatch.setattr(connector, "_execute", execute)
+    continuation = ScanContinuation()
+    for _ in range(9):
+        page = await connector.capture_page(
+            CompletedScope(record_type="meeting_listing"), continuation, files=MagicMock()
+        )
+        continuation = page.continuation
+    assert page.final
