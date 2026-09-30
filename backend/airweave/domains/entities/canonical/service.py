@@ -6,12 +6,18 @@ from pydantic import JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
-from airweave.domains.entities.canonical.cycle_models import BeginCycle, CaptureCycle, CompleteCycle
+from airweave.domains.entities.canonical.cycle_models import (
+    BeginCycle,
+    CaptureCycle,
+    CompleteCycle,
+    RestartCycle,
+)
 from airweave.domains.entities.canonical.cycle_store import (
     begin_cycle,
     complete_cycle,
     cursor_row,
     cycle_state,
+    restart_cycle,
 )
 from airweave.domains.entities.canonical.models import CaptureResult, ReconcileResult
 from airweave.domains.entities.canonical.requests import (
@@ -146,3 +152,9 @@ class CanonicalCaptureService:
         async with UnitOfWork(db):
             sync = await self.store._fenced_sync(db, request.fence)
             return await complete_cycle(db, sync, request)
+
+    async def restart_cycle(self, db: AsyncSession, request: RestartCycle) -> CaptureCycle:
+        """Explicitly replace active cycle state under the writer fence and exact CAS."""
+        async with UnitOfWork(db):
+            await self.store._fenced_sync(db, request.fence)
+            return await restart_cycle(db, request)

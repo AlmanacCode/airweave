@@ -356,3 +356,63 @@ async def test_visible_metadata_parent_still_requires_child_scan(database, sourc
     await finish(database, service, fence, root)
     with pytest.raises(CycleConflict, match="incomplete child"):
         await complete(database, service, fence)
+
+
+async def test_explicit_restart_preserves_originals_and_last_checkpoint(database, source):
+    from airweave.domains.entities.canonical.cycle_models import RestartCycle
+
+    service, fence = source
+    # A previous successful checkpoint must not be advanced by abandoning partial work.
+    async with database() as db:
+        await service.save_checkpoint(db, fence, {"previous_success": "synthetic"})
+    active, root, child = await fixture_scopes(database, service, fence, child_complete=False)
+    active = await refresh_cycle(database, service, fence)
+    replacement_config = CONFIG.model_copy(update={"fingerprint": "b" * 64})
+    request = RestartCycle(fence=fence, expected=active.version, configuration=replacement_config)
+    async with database() as db:
+        replacement = await service.restart_cycle(db, request)
+    assert replacement.version.cycle_id != active.version.cycle_id
+    assert replacement.phase == "active" and replacement.root_writer_attempt_id is None
+    async with database() as db:
+        with pytest.raises(CycleConflict):
+            await service.restart_cycle(db, request)
+    with pytest.raises(CycleConflict):
+        await page(database, service, fence, child, final=True)
+    with pytest.raises(CycleConflict, match="Root enumeration"):
+        await complete(database, service, fence)
+    async with database() as db:
+        saved = (await db.scalar(select(SyncCursor))).cursor_data
+        assert saved["previous_success"] == "synthetic"
+        assert saved["canonical_checkpoint"]["observed_change_sequence"] == 0
+        original = await db.scalar(select(Entity).where(Entity.native_id == "one"))
+        assert original.deleted_at is None and original.source_payload == {"id": "one"}
+    async with database() as db:
+        next_root = await service.begin_scan(
+            db,
+            BeginScan(
+                fence=fence,
+                scope=ROOT,
+                cycle_id=replacement.version.cycle_id,
+                fingerprint=replacement_config.fingerprint,
+                expected=root.version,
+            ),
+        )
+    assert next_root.phase == "collecting"
+
+
+async def test_explicit_restart_rejects_completed_boundary_and_stale_revision(database, source):
+    from airweave.domains.entities.canonical.cycle_models import RestartCycle
+
+    service, fence = source
+    active, _, _ = await fixture_scopes(database, service, fence)
+    async with database() as db:
+        with pytest.raises(CycleConflict, match="changed"):
+            await service.restart_cycle(
+                db, RestartCycle(fence=fence, expected=active.version, configuration=CONFIG)
+            )
+    finished = await complete(database, service, fence)
+    async with database() as db:
+        with pytest.raises(CycleConflict, match="active cycle"):
+            await service.restart_cycle(
+                db, RestartCycle(fence=fence, expected=finished.version, configuration=CONFIG)
+            )

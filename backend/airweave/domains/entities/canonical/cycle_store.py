@@ -13,6 +13,7 @@ from airweave.domains.entities.canonical.cycle_models import (
     CaptureCycle,
     CompleteCycle,
     CycleVersion,
+    RestartCycle,
 )
 from airweave.domains.entities.canonical.requests import CompletedScope, WriterFence
 from airweave.domains.entities.canonical.store import CanonicalStoreError, content_is_available
@@ -197,5 +198,19 @@ async def complete_cycle(db: AsyncSession, sync: Sync, request: CompleteCycle) -
             observed_change_sequence=sync.observed_change_sequence,
         ).model_dump(mode="json"),
     }
+    await db.flush()
+    return state
+
+
+async def restart_cycle(db: AsyncSession, request: RestartCycle) -> CaptureCycle:
+    """Retain captured records/checkpoint; invalidate old scans with a fresh cycle UUID."""
+    cursor, previous = await attest_cycle(db, request.fence, request.expected.cycle_id)
+    if previous.version != request.expected:
+        raise CycleConflict("Cycle changed before explicit restart")
+    state = CaptureCycle(
+        version=CycleVersion(cycle_id=uuid4(), revision=previous.version.revision + 1),
+        configuration=request.configuration,
+    )
+    persist(cursor, state)
     await db.flush()
     return state

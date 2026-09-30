@@ -62,3 +62,12 @@ class CompleteCycle(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     fence: WriterFence
     expected: CycleVersion
+
+
+class RestartCycle(BaseModel):
+    """Explicitly abandon the exact active cycle without certifying its partial capture."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    fence: WriterFence
+    expected: CycleVersion
+    configuration: CycleConfiguration
