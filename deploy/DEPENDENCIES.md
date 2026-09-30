@@ -133,6 +133,23 @@ platform. It is a fallback only if the cluster's fixed charges make the reviewed
 budget impossible. Single-replica stateful services accept downtime; neither
 option is production HA.
 
+### Existing Porter configuration readback
+
+On 2026-09-30, the existing cluster6108 form showed Karpenter cost optimization
+enabled, max8 application vCPU, on-demand capacity,50GiB node disks, no instance
+family restriction and no per-instance size restriction. No settings were saved.
+This does **not** establish a dollar ceiling or the proposed t3a.2xlarge price:
+the configured pool can select other instance families and sizes. The Porter
+[node-group documentation](https://docs.porter.run/cloud-accounts/node-groups)
+also describes fixed system and monitoring groups alongside the autoscaled
+application group, and private-node egress through NAT by default. Their actual
+sizes, node count and NAT charges have not been verified for this cluster.
+
+Before retrying provisioning, reconcile the original$201.22 estimate against all
+three groups, control plane, disks and networking. Select an explicitly priced
+bounded instance set or fixed node shape that fits the full$500 cap. Max CPU8
+alone is insufficient evidence. The quota preflight remains a separate gate.
+
 ## Evidence
 
 Local implementation: `porter.yaml`, `docker/docker-compose.yml`,
