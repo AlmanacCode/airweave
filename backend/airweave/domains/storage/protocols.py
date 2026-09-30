@@ -92,6 +92,14 @@ class StorageBackend(Protocol):
         """
         ...
 
+    async def delete_file(self, path: str) -> None:
+        """Delete exactly one object; absence succeeds, other failures raise.
+
+        Never fall back to prefix/directory deletion. Backend retention/versioning
+        policies still govern physical historical-byte reclamation.
+        """
+        ...
+
     async def delete(self, path: str) -> bool:
         """Delete a file or directory.
 

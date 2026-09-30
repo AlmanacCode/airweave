@@ -166,6 +166,20 @@ class S3Backend(StorageBackend):
         except Exception:
             return False
 
+    async def delete_file(self, path: str) -> None:
+        """S3 DeleteObject is idempotent and never interprets the key as a prefix."""
+        from botocore.exceptions import ClientError
+
+        try:
+            client = await self._get_client()
+            await client.delete_object(Bucket=self.bucket, Key=self._resolve(path))
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "NoSuchKey":
+                return
+            raise StorageException("Exact S3 object deletion failed") from None
+        except Exception:
+            raise StorageException("Exact S3 object deletion failed") from None
+
     async def delete(self, path: str) -> bool:
         """Delete object or all objects under prefix."""
         key = self._resolve(path)

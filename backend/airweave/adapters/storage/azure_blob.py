@@ -170,6 +170,18 @@ class AzureBlobBackend(StorageBackend):
         except Exception:
             return False
 
+    async def delete_file(self, path: str) -> None:
+        """Delete one exact blob; snapshots/leases errors remain explicit failures."""
+        from azure.core.exceptions import ResourceNotFoundError
+
+        try:
+            container = await self._get_container_client()
+            await container.get_blob_client(self._resolve(path)).delete_blob()
+        except ResourceNotFoundError:
+            return
+        except Exception:
+            raise StorageException("Exact Azure blob deletion failed") from None
+
     async def delete(self, path: str) -> bool:
         """Delete blob or all blobs under prefix.
 

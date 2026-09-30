@@ -121,6 +121,15 @@ class FilesystemBackend(StorageBackend):
         full_path = self._resolve(path)
         return await aiofiles.os.path.exists(full_path)
 
+    async def delete_file(self, path: str) -> None:
+        """Unlink one exact file; never recursively remove a directory."""
+        try:
+            await aiofiles.os.remove(self._resolve(path))
+        except FileNotFoundError:
+            return
+        except OSError:
+            raise StorageException("Exact file deletion failed") from None
+
     async def delete(self, path: str) -> bool:
         """Delete file or directory from filesystem."""
         full_path = self._resolve(path)

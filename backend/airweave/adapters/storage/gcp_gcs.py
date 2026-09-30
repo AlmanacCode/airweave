@@ -198,6 +198,22 @@ class GCSBackend(StorageBackend):
         except Exception:
             return False
 
+    async def delete_file(self, path: str) -> None:
+        """Delete one exact object off-loop; never enumerate a prefix."""
+        import asyncio
+
+        from google.cloud.exceptions import NotFound
+
+        def remove():
+            self._get_bucket().blob(self._resolve(path)).delete()
+
+        try:
+            await asyncio.to_thread(remove)
+        except NotFound:
+            return
+        except Exception:
+            raise StorageException("Exact GCS object deletion failed") from None
+
     async def delete(self, path: str) -> bool:
         """Delete blob or all blobs under prefix."""
         import asyncio
