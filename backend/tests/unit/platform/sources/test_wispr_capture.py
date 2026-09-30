@@ -27,6 +27,7 @@ async def test_session_is_bound_and_never_auto_connects(monkeypatch):
         side_effect=[
             {"session_id": "session"},
             {"data": {"meetings": [], "has_more": False}, "error": None},
+            {"data": {"notes": [], "has_more": False}, "error": None},
         ]
     )
     monkeypatch.setattr(connector, "_post", post)
@@ -56,7 +57,7 @@ async def test_preserves_native_ranges_and_continues_exact_offset(monkeypatch):
         ]
     )
     monkeypatch.setattr(connector, "_execute", execute)
-    result = await connector._meeting("m")
+    result = await connector._body("meeting", "m")
     assert len(result["responses"]) == 2
     assert result["responses"][0]["response"]["native_extra"] is True
     assert execute.call_args.args[1]["view_transcript"]["start_char"] == 3
@@ -81,7 +82,7 @@ async def test_changed_meeting_fails_instead_of_mixing_versions(monkeypatch):
     )
     monkeypatch.setattr(connector, "_execute", execute)
     with pytest.raises(ValueError, match="changed"):
-        await connector._meeting("m")
+        await connector._body("meeting", "m")
 
 
 @pytest.mark.asyncio
@@ -93,7 +94,7 @@ async def test_explicit_tool_failure_never_becomes_partial_success(monkeypatch):
         AsyncMock(side_effect=[{"session_id": "session"}, {"data": {}, "error": "failed"}]),
     )
     with pytest.raises(ValueError, match="tool execution failed; capture is incomplete"):
-        await connector._meeting("m")
+        await connector._body("meeting", "m")
 
 
 @pytest.mark.asyncio
@@ -286,7 +287,7 @@ async def test_ambiguous_continuation_markers_do_not_choose_a_range(monkeypatch)
     )
     monkeypatch.setattr(connector, "_execute", execute)
     with pytest.raises(ValueError, match="ambiguous continuation"):
-        await connector._meeting("m")
+        await connector._body("meeting", "m")
     assert execute.await_count == 1
 
 
@@ -299,7 +300,7 @@ async def test_rate_signal_stops_without_retry_or_invented_status(monkeypatch, e
     post = AsyncMock(side_effect=[{"session_id": "session"}, {"data": {}, "error": error}])
     monkeypatch.setattr(connector, "_post", post)
     with pytest.raises(SourceServerError, match="rate-limit signal") as failure:
-        await connector._meeting("m")
+        await connector._body("meeting", "m")
     assert post.await_count == 2
     assert failure.value.source_short_name == "wispr"
     assert failure.value.status_code is None
@@ -307,3 +308,118 @@ async def test_rate_signal_stops_without_retry_or_invented_status(monkeypatch, e
     assert "retry delay are unknown" in str(failure.value)
     # Do not turn unstructured tool text into credential failure or a timed retry.
     assert classify_error(failure.value).category is None
+
+
+@pytest.mark.asyncio
+async def test_scratchpad_ranges_preserve_normalized_text_and_native_fields(monkeypatch):
+    connector = await source()
+    execute = AsyncMock(
+        side_effect=[
+            {
+                "id": "n",
+                "title": "Note",
+                "modified_at": "2026-09-30T00:00:00Z",
+                "content": (
+                    "abc\n(...truncated, 3 chars remaining; "
+                    "continue with view_content.start_char=3...)"
+                ),
+                "future_native": {"retained": True},
+            },
+            {"id": "n", "title": "Note", "modified_at": "2026-09-30T00:00:00Z", "content": "def"},
+        ]
+    )
+    monkeypatch.setattr(connector, "_execute", execute)
+    result = await connector._body("scratchpad_note", "n")
+    assert len(result["responses"]) == 2
+    assert result["responses"][0]["response"]["future_native"] == {"retained": True}
+    assert execute.call_args_list[0].args == (
+        "WISPR_FLOW_MCP_GET_SCRATCHPAD_NOTE",
+        {"note_id": "n", "view_content": {"char_limit": 40000, "start_char": 0}},
+    )
+    assert execute.call_args.args[1]["view_content"]["start_char"] == 3
+    assert all("view_transcript" not in call.args[1] for call in execute.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_scratchpad_partitions_by_modified_time_and_keeps_native_listing(monkeypatch):
+    from airweave.domains.entities.canonical.requests import CompletedScope
+    from airweave.domains.entities.canonical.scan_models import ScanContinuation
+
+    connector = await source()
+    rows = [
+        {"id": "n1", "modified_at": "2026-01-01T00:00:00Z", "content_excerpt": "original"},
+        {"id": "n2", "modified_at": "2026-01-03T00:00:00Z", "content_excerpt": "next"},
+    ]
+    execute = AsyncMock(
+        side_effect=[
+            {"notes": rows, "has_more": True, "truncated": True},
+            {"notes": rows[:1], "has_more": False},
+            {"notes": rows[1:], "has_more": False},
+        ]
+    )
+    monkeypatch.setattr(connector, "_execute", execute)
+    scope = CompletedScope(record_type="scratchpad_listing")
+    first = await connector.capture_page(scope, ScanContinuation(), files=MagicMock())
+    assert first.records[0].payload == rows[0] and not first.final
+    assert first.records[0].identity.record_type == "scratchpad_listing"
+    second = await connector.capture_page(scope, first.continuation, files=MagicMock())
+    third = await connector.capture_page(scope, second.continuation, files=MagicMock())
+    assert third.final
+    assert execute.call_args_list[1].args[1]["until"] == "2026-01-02T00:00:00+00:00"
+    assert execute.call_args_list[2].args[1]["since"] == "2026-01-02T00:00:00+00:00"
+    assert connector.capture_cycle_configuration.policy("scratchpad_listing") == "discovery_only"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "second",
+    [
+        {"id": "wrong", "modified_at": "same", "content": "def"},
+        {"id": "n", "modified_at": "changed", "content": "def"},
+        {"id": "n", "modified_at": "same", "content": None},
+    ],
+)
+async def test_scratchpad_mismatched_or_changed_ranges_fail(monkeypatch, second):
+    connector = await source()
+    execute = AsyncMock(
+        side_effect=[
+            {
+                "id": "n",
+                "modified_at": "same",
+                "content": (
+                    "abc\n(...truncated, 3 chars remaining; "
+                    "continue with view_content.start_char=3...)"
+                ),
+            },
+            second,
+        ]
+    )
+    monkeypatch.setattr(connector, "_execute", execute)
+    with pytest.raises(ValueError):
+        await connector._body("scratchpad_note", "n")
+
+
+@pytest.mark.asyncio
+async def test_scratchpad_cap_never_substitutes_meeting_start_for_modified_time(monkeypatch):
+    from airweave.domains.entities.canonical.requests import CompletedScope
+    from airweave.domains.entities.canonical.scan_models import ScanContinuation
+
+    connector = await source()
+    monkeypatch.setattr(
+        connector,
+        "_execute",
+        AsyncMock(
+            return_value={
+                "notes": [
+                    {"id": "n1", "start": "2026-01-01T00:00:00Z"},
+                    {"id": "n2", "start": "2026-01-03T00:00:00Z"},
+                ],
+                "has_more": True,
+                "truncated": True,
+            }
+        ),
+    )
+    with pytest.raises(ValueError, match="cannot be partitioned safely"):
+        await connector.capture_page(
+            CompletedScope(record_type="scratchpad_listing"), ScanContinuation(), files=MagicMock()
+        )

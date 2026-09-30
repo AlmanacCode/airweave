@@ -1,4 +1,4 @@
-"""Capture Wispr's available meeting representations through account-bound sessions."""
+"""Capture Wispr meeting and scratchpad representations through account-bound sessions."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
+from typing import Literal
 from urllib.parse import quote
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, StrictBool
@@ -53,12 +54,22 @@ class MeetingPage(BaseModel):
     truncated: StrictBool = False
 
 
+class ScratchpadPage(BaseModel):
+    """Scratchpad search uses notes and modification-time filtering."""
+
+    model_config = ConfigDict(extra="ignore")
+    notes: list[dict[str, JsonValue]] = Field(max_length=200)
+    has_more: StrictBool
+    next_cursor: str | None = None
+    truncated: StrictBool = False
+
+
 class _Listing(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(min_length=1)
 
 
-class _MeetingVersion(BaseModel):
+class _Version(BaseModel):
     model_config = ConfigDict(extra="ignore")
     modified_at: AwareDatetime | None = None
 
@@ -101,8 +112,11 @@ class WisprSource(BaseSource):
     Captures remain explicitly partial, even after every exposed text range is fetched.
     """
 
-    canonical_record_types = ("meeting_listing", "meeting")
-    canonical_container_parents = {"meeting": "meeting_listing"}
+    canonical_record_types = ("meeting_listing", "meeting", "scratchpad_listing", "scratchpad_note")
+    canonical_container_parents = {
+        "meeting": "meeting_listing",
+        "scratchpad_note": "scratchpad_listing",
+    }
 
     @property
     def capture_cycle_configuration(self) -> CycleConfiguration:
@@ -127,10 +141,9 @@ class WisprSource(BaseSource):
         fingerprint = hashlib.sha256(
             json.dumps(
                 {
-                    "version": 2,
+                    "version": 3,
                     "account": auth.connected_account_id,
-                    "inventory": "meeting_listing",
-                    "body": "meeting",
+                    "kinds": cls.canonical_record_types,
                     "policy": "discovery_only",
                     "listing_limit": 200,
                 },
@@ -141,7 +154,10 @@ class WisprSource(BaseSource):
             fingerprint=fingerprint,
             record_types=cls.canonical_record_types,
             container_parents=cls.canonical_container_parents,
-            completion_policies={"meeting_listing": "discovery_only"},
+            completion_policies={
+                "meeting_listing": "discovery_only",
+                "scratchpad_listing": "discovery_only",
+            },
         )
         return instance
 
@@ -194,15 +210,18 @@ class WisprSource(BaseSource):
         return result.data
 
     async def validate(self) -> None:
-        """Verify the bound session can actually read meetings."""
+        """Verify the bound session can discover both supported Wispr inventories."""
         MeetingPage.model_validate(
             await self._execute("WISPR_FLOW_MCP_SEARCH_MEETINGS", {"limit": 1})
+        )
+        ScratchpadPage.model_validate(
+            await self._execute("WISPR_FLOW_MCP_SEARCH_SCRATCHPAD_NOTES", {"limit": 1})
         )
 
     @staticmethod
     def _next_offset(text: JsonValue, field: str) -> int | None:
         if not isinstance(text, str):
-            raise ValueError("Wispr meeting text is not a string")
+            raise ValueError("Wispr requested text is not a string")
         matches = list(
             re.finditer(
                 rf"\(\.\.\.truncated, \d+ chars remaining; continue with "
@@ -215,24 +234,38 @@ class WisprSource(BaseSource):
             raise ValueError("Wispr returned ambiguous continuation markers")
         return int(matches[0].group(1)) if matches else None
 
-    async def _meeting(self, identity: str) -> dict[str, JsonValue]:
-        offsets = {"content": 0, "transcript": 0}
+    async def _body(
+        self, kind: Literal["meeting", "scratchpad_note"], identity: str
+    ) -> dict[str, JsonValue]:
+        """Retain complete returned ranges for the two concrete Wispr body tools."""
+        if kind == "meeting":
+            slug, id_field, offsets = (
+                "WISPR_FLOW_MCP_GET_MEETING",
+                "meeting_id",
+                {"content": 0, "transcript": 0},
+            )
+        else:
+            slug, id_field, offsets = (
+                "WISPR_FLOW_MCP_GET_SCRATCHPAD_NOTE",
+                "note_id",
+                {"content": 0},
+            )
         responses: list[JsonValue] = []
         for _ in range(100):
             arguments = {
-                "meeting_id": identity,
+                id_field: identity,
                 **{
                     "view_" + field: {"char_limit": 40000, "start_char": offset}
                     for field, offset in offsets.items()
                 },
             }
-            response = await self._execute("WISPR_FLOW_MCP_GET_MEETING", arguments)
+            response = await self._execute(slug, arguments)
             if response.get("id") != identity:
-                raise ValueError("Wispr returned a different meeting identity")
+                raise ValueError("Wispr returned a different body identity")
             if responses and response.get("modified_at") != responses[0]["response"].get(
                 "modified_at"
             ):
-                raise ValueError("Wispr meeting changed during paginated capture")
+                raise ValueError("Wispr body changed during paginated capture")
             responses.append({"requested_ranges": arguments, "response": response})
             following = {}
             for field, offset in offsets.items():
@@ -245,14 +278,14 @@ class WisprSource(BaseSource):
                 return {"responses": responses}
             # Request only continuing ranges; complete ranges already remain in responses.
             offsets = following
-        raise ValueError("Wispr meeting exceeds the bounded capture page limit")
+        raise ValueError("Wispr body exceeds the bounded capture page limit")
 
     def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
         """Keep each body attached to its exact native listing observation."""
-        if parent.identity.record_type != "meeting_listing" or record_type != "meeting":
+        if self.canonical_container_parents.get(record_type) != parent.identity.record_type:
             raise ValueError("Unsupported Wispr child scope")
         # Preserve existing provider-global body identity, including null container.
-        return CompletedScope(record_type="meeting", parent=parent.identity)
+        return CompletedScope(record_type=record_type, parent=parent.identity)
 
     async def confirm_absent(self, record: SourceRecord) -> None:
         """Wispr supplies no audited absence or revocation proof."""
@@ -271,12 +304,18 @@ class WisprSource(BaseSource):
         Completed bodies remain observed state in this cycle even if a later attempt
         refreshes listing metadata. The next cycle refreshes them; this is no snapshot.
         """
-        if scope.record_type == "meeting_listing" and scope.parent is None and parent is None:
-            return await self._listing_page(continuation)
+        kind = scope.record_type
         if (
-            scope.record_type != "meeting"
+            kind in {"meeting_listing", "scratchpad_listing"}
+            and scope.parent is None
+            and parent is None
+            and scope.container_id is None
+        ):
+            return await self._listing_page(kind, continuation)
+        if (
+            kind not in {"meeting", "scratchpad_note"}
             or parent is None
-            or parent.identity.record_type != "meeting_listing"
+            or self.canonical_container_parents.get(kind) != parent.identity.record_type
             or scope.parent != parent.identity
             or scope.container_id is not None
             or continuation.value
@@ -285,13 +324,13 @@ class WisprSource(BaseSource):
         identity = _Listing.model_validate(parent.payload).id
         if identity != parent.identity.native_id:
             raise ValueError("Wispr listing identity does not match its scope")
-        payload = await self._meeting(identity)
+        payload = await self._body(kind, identity)
         payload["listing"] = parent.payload
-        modified = _MeetingVersion.model_validate(payload["responses"][0]["response"]).modified_at
+        modified = _Version.model_validate(payload["responses"][0]["response"]).modified_at
         return CapturePage(
             records=(
                 CaptureRecord(
-                    identity=RecordIdentity(record_type="meeting", native_id=identity),
+                    identity=RecordIdentity(record_type=kind, native_id=identity),
                     parent=parent.identity,
                     payload=payload,
                     completeness="partial",
@@ -303,7 +342,9 @@ class WisprSource(BaseSource):
             final=True,
         )
 
-    async def _listing_page(self, continuation: ScanContinuation) -> CapturePage:
+    async def _listing_page(
+        self, kind: Literal["meeting_listing", "scratchpad_listing"], continuation: ScanContinuation
+    ) -> CapturePage:
         progress = _Progress.model_validate(continuation.value)
         arguments: dict[str, JsonValue] = {"limit": 200}
         if progress.cursor:
@@ -312,18 +353,52 @@ class WisprSource(BaseSource):
             arguments["since"] = progress.window.since.isoformat()
         if progress.window.until:
             arguments["until"] = progress.window.until.isoformat()
-        page = MeetingPage.model_validate(
-            await self._execute("WISPR_FLOW_MCP_SEARCH_MEETINGS", arguments)
+        if kind == "meeting_listing":
+            page = MeetingPage.model_validate(
+                await self._execute("WISPR_FLOW_MCP_SEARCH_MEETINGS", arguments)
+            )
+            rows = page.meetings
+            dates = [_MeetingStart.model_validate(row).start for row in rows]
+        else:
+            page = ScratchpadPage.model_validate(
+                await self._execute("WISPR_FLOW_MCP_SEARCH_SCRATCHPAD_NOTES", arguments)
+            )
+            rows = page.notes
+            dates = [_Version.model_validate(row).modified_at for row in rows]
+        next_progress, final = self._advance_listing(progress, page, dates)
+        identities = [_Listing.model_validate(row).id for row in rows]
+        if len(identities) != len(set(identities)):
+            raise ValueError("Wispr listing page repeats a native identity")
+        records = tuple(
+            CaptureRecord(
+                identity=RecordIdentity(record_type=kind, native_id=identity),
+                payload=row,
+                completeness="metadata_only",
+                observed_at=datetime.now(timezone.utc),
+            )
+            for identity, row in zip(identities, rows, strict=True)
         )
-        count = progress.count + len(page.meetings)
+        return CapturePage(
+            records=records,
+            continuation=ScanContinuation(value=next_progress.model_dump(mode="json")),
+            final=final,
+        )
+
+    def _advance_listing(
+        self,
+        progress: _Progress,
+        page: MeetingPage | ScratchpadPage,
+        dates: list[datetime | None],
+    ) -> tuple[_Progress, bool]:
+        """Advance native cursors and capped date windows without a completeness claim."""
+        count = progress.count + len(dates)
         following = page.next_cursor if page.has_more else None
-        starts = [_MeetingStart.model_validate(row).start for row in page.meetings]
-        dates_complete = progress.dates_complete and all(value is not None for value in starts)
-        known_starts = [value for value in starts if value is not None] + [
+        dates_complete = progress.dates_complete and all(value is not None for value in dates)
+        known_dates = [value for value in dates if value is not None] + [
             d for d in (progress.earliest, progress.latest) if d is not None
         ]
-        earliest = min(known_starts) if known_starts else None
-        latest = max(known_starts) if known_starts else None
+        earliest = min(known_dates) if known_dates else None
+        latest = max(known_dates) if known_dates else None
         capped = page.truncated or count > 1000 or (page.has_more and count >= 1000)
         if capped:
             if not dates_complete:
@@ -354,23 +429,7 @@ class WisprSource(BaseSource):
         else:
             next_progress = _Progress()
             final = True
-        identities = [_Listing.model_validate(row).id for row in page.meetings]
-        if len(identities) != len(set(identities)):
-            raise ValueError("Wispr listing page repeats a meeting identity")
-        records = tuple(
-            CaptureRecord(
-                identity=RecordIdentity(record_type="meeting_listing", native_id=identity),
-                payload=row,
-                completeness="metadata_only",
-                observed_at=datetime.now(timezone.utc),
-            )
-            for identity, row in zip(identities, page.meetings, strict=True)
-        )
-        return CapturePage(
-            records=records,
-            continuation=ScanContinuation(value=next_progress.model_dump(mode="json")),
-            final=final,
-        )
+        return next_progress, final
 
     @staticmethod
     def _partition(

@@ -27,6 +27,8 @@ async def connector(rows, body_calls, *, fail_at=None, failure=None):
     )
 
     async def execute(slug, arguments):
+        if slug == "WISPR_FLOW_MCP_SEARCH_SCRATCHPAD_NOTES":
+            return {"notes": [], "has_more": False}
         if slug == "WISPR_FLOW_MCP_SEARCH_MEETINGS":
             return {"meetings": rows, "has_more": False}
         native = arguments["meeting_id"]
@@ -144,3 +146,133 @@ async def test_old_parentless_body_requires_explicit_migration(database, source)
         )
         assert body.source_payload == {"prior": True}
         assert body.parent_record_type is None
+
+
+async def test_scratchpad_failure_resumes_failed_body_without_replaying_completed_notes(
+    database, source
+):
+    service, fence = source
+    listings = [
+        {"id": "same-id", "title": "First", "modified_at": "2026-09-30T00:00:00Z"},
+        {"id": "n2", "title": "Second", "modified_at": "2026-09-30T00:00:00Z"},
+    ]
+    calls = []
+    failing = True
+    completed: set[str] = set()
+    failed_native: str | None = None
+
+    async def execute(slug, arguments):
+        nonlocal failed_native
+        if slug == "WISPR_FLOW_MCP_SEARCH_MEETINGS":
+            # Native IDs may collide between resource kinds without aliasing storage.
+            return {"meetings": [{"id": "same-id"}], "has_more": False}
+        if slug == "WISPR_FLOW_MCP_SEARCH_SCRATCHPAD_NOTES":
+            return {"notes": listings, "has_more": False}
+        if slug == "WISPR_FLOW_MCP_GET_MEETING":
+            return {"id": "same-id", "content": "meeting", "transcript": "verbatim"}
+        assert slug == "WISPR_FLOW_MCP_GET_SCRATCHPAD_NOTE"
+        native = arguments["note_id"]
+        offset = arguments["view_content"]["start_char"]
+        calls.append((native, offset))
+        if failing and len(completed) == 1 and offset == 3:
+            failed_native = native
+            raise SourceServerError("Synthetic Wispr rate signal", source_short_name="wispr")
+        if offset == 3:
+            completed.add(native)
+        return {
+            "id": native,
+            "modified_at": "2026-09-30T00:00:00Z",
+            "content": (
+                "abc\n(...truncated, 3 chars remaining; continue with view_content.start_char=3...)"
+            )
+            if offset == 0
+            else "def",
+        }
+
+    first = await connector([], [])
+    first._execute = execute
+    with pytest.raises(SourceServerError):
+        await driver(service, database, fence, first).run()
+    async with database() as db:
+        notes = list(
+            (
+                await db.scalars(
+                    select(Entity).where(Entity.entity_definition_short_name == "scratchpad_note")
+                )
+            ).all()
+        )
+        assert len(notes) == 1 and notes[0].native_id in completed
+        assert notes[0].record_revision == 1
+        before = await service.read_cycle(db, fence)
+    async with database() as db:
+        newer = await service.activate_writer(
+            db,
+            fence.organization_id,
+            fence.sync_id,
+            fence.job_id,
+            attempt_id=uuid4(),
+            attempt_number=2,
+        )
+    failing = False
+    calls.clear()
+    second = await connector([], [])
+    second._execute = execute
+    after = await driver(service, database, newer, second).run()
+    assert before.version.cycle_id == after.version.cycle_id
+    assert calls == [
+        ("n2", 0),
+        ("n2", 3),
+    ]  # Bodies commit atomically, ranges do not checkpoint separately.
+    async with database() as db:
+        rows = list(
+            (
+                await db.scalars(
+                    select(Entity).where(
+                        Entity.entity_definition_short_name.in_(["meeting", "scratchpad_note"])
+                    )
+                )
+            ).all()
+        )
+        assert len(rows) == 3 and all(
+            row.deleted_at is None and row.record_revision == 1 for row in rows
+        )
+        notes = [row for row in rows if row.entity_definition_short_name == "scratchpad_note"]
+        assert all(len(row.source_payload["responses"]) == 2 for row in notes)
+        assert all(row.completeness == "partial" for row in notes)
+
+
+async def test_active_meeting_only_cycle_requires_explicit_restart_for_scratchpad(database, source):
+    import hashlib
+    import json
+
+    from airweave.domains.entities.canonical.cycle_models import BeginCycle, CycleConfiguration
+    from airweave.domains.entities.canonical.cycle_store import CycleConflict
+
+    service, fence = source
+    old_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "version": 2,
+                "account": "fixture",
+                "inventory": "meeting_listing",
+                "body": "meeting",
+                "policy": "discovery_only",
+                "listing_limit": 200,
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    old = CycleConfiguration.from_source(
+        fingerprint=old_fingerprint,
+        record_types=("meeting_listing", "meeting"),
+        container_parents={"meeting": "meeting_listing"},
+        completion_policies={"meeting_listing": "discovery_only"},
+    )
+    async with database() as db:
+        before = await service.begin_cycle(db, BeginCycle(fence=fence, configuration=old))
+    current = await connector([], [])
+    with pytest.raises(CycleConflict, match="configuration changed"):
+        await driver(service, database, fence, current).run()
+    async with database() as db:
+        after = await service.read_cycle(db, fence)
+        assert after == before
