@@ -401,3 +401,69 @@ Parent independently verified zero live schemas and private-live directories and
 removed the immutable code archive. The earlier20-request failed batch remains
 historical evidence; this successful trial had its own20-request cap. Safe results:
 [evidence](evidence/wispr-recovery-20260930.json), committed `78e7f37`.
+
+## Retained browser evaluation (explicit opt-in)
+
+`evaluation.py capture --directory /absolute/new/private/directory` retains a
+bounded Gmail + Drive sample for the local UI. It reuses `provider_lifecycle.child` and its production durable-page driver,
+the production projector/converters, real local MiniLM/BM25 embeddings, and Vespa.
+The default `canonical_capture.py` still always removes its schema/files. This
+separate evaluation command requires the same private `sync_tests` Unix socket,
+provider environment, and additionally `LIVE_DRIVE_PERMISSION_ID`. Each provider
+trial is bounded to 180 requests, 250 records, 180 seconds and 50 MiB of blob writes;
+one file is bounded to 10 MiB. Gmail uses `newer_than:1d smaller:100K`. Committed
+pages remain searchable if a later page hits a bound; interrupted capture is explicit
+in the printed lifecycle evidence and must not be represented as a complete sync.
+
+Run from `backend` with `PYTHONPATH=.`. The named directory must not already exist;
+it is created mode0700 with a mode0600 `manifest.json`. This contains service keys
+and source identities and must never be committed or copied into public logs.
+Failed evaluations also retain their explicitly requested directory/schema for
+inspection and cleanup. API keys expire after one day. Native identity verification
+happens before retained binding metadata is created.
+
+Local dependencies are isolated Vespa on `127.0.0.1:8081/19071`, the repository's
+MiniLM inference image on `127.0.0.1:9878`, and Redis on `127.0.0.1:16379`. Deploy
+`vespa/app` with dimension384 before capture. Model inference is real; no model API
+key or paid model call is necessary. PDF text extraction uses the existing local
+extractor; scanned PDFs needing OCR are not claimed covered without an OCR service.
+
+`evaluation.py serve --directory SAME_DIRECTORY` serves the actual Airweave API
+router on `127.0.0.1:18081`, with its production container and persisted encrypted
+organization API keys. It does not override authentication. Only DB session ownership
+is redirected to the explicit isolated schema. No Temporal schedules or worker are
+started. This is a bounded capture/search/read evaluation, **not full synchronization
+or automatic Connect qualification**. Almanac must use its own disposable database,
+explicit development actor, real source bindings and existing hosted HTTP proxy.
+Development-token authentication is not proof of WorkOS login.
+
+Cleanup after stopping the API: delete each evaluation sync's Vespa documents
+through `VespaDestination.delete_by_sync_id`, drop only the manifest's validated
+`canonical_eval_<32 hex>` schema from the explicitly private `sync_tests` database,
+and remove the exact private evaluation directory and provider-environment file.
+The disposable evaluation containers can then be removed by their exact names;
+never run global Docker pruning or alter the product database. PostgreSQL WAL and
+Docker filesystem blocks may retain deleted bytes until those disposable resources
+are destroyed. The private corpus remains on this machine until that cleanup.
+
+
+Verified local evaluation, 2026-09-30 (before subsequent extraction repairs):
+
+- Real MiniLM 384-dimensional and BM25 inference passed; Vespa schema was deployed.
+- Actual API-key middleware denied absent keys (401), invalid keys (403), and
+  admitted the persisted organization keys (200). No context override was used.
+- Gmail: 50 originals from the explicit one-day/100 KiB filter, 47 published text
+  representations, 6 original blobs verified by HTTP SHA256. Three projections
+  remain pending: two native MIME size discrepancies and one image-conversion failure.
+- Drive: 4 committed originals before a file exceeded the 10 MiB trial limit;
+  3 published representations, 5 original blobs verified by HTTP SHA256. Content
+  includes native Google Doc data and DOCX/PPTX/XLSX; no PDF was present in this sample.
+- Exact record reads and keyword search returned actual retained records for both
+  providers. This does not establish full-account coverage, scheduling recovery,
+  WorkOS login, cloud deployment, or overall search quality.
+
+Use `evaluation.py project --directory SAME_DIRECTORY` to process pending stored
+records without provider access. It traverses all pending pages once; failures stay
+pending and are reported, rather than being silently marked indexed. The service
+reads current SQL publication state, so reprojection becomes visible without an API
+restart.
