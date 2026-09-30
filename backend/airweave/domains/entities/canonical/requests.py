@@ -99,6 +99,7 @@ class ReconcileScope(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     fence: WriterFence
     scope: CompletedScope
+    removal_reason: Literal["absent", "scope_removed"] = "absent"
     observed_at: AwareDatetime
     limit: int = Field(default=250, ge=1, le=500)
 

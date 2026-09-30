@@ -216,6 +216,13 @@ class CanonicalCapturePipeline:
                         ReconcileScope(
                             fence=self._writer(),
                             scope=scope,
+                            # Missing containers withdraw content scope; absence does
+                            # not prove provider deletion or credential revocation.
+                            removal_reason=(
+                                "scope_removed"
+                                if scope.record_type in self._container_parents.values()
+                                else "absent"
+                            ),
                             observed_at=datetime.now(timezone.utc),
                         ),
                     )

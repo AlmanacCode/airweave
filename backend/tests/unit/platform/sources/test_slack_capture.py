@@ -45,7 +45,8 @@ async def test_channel_pagination_threads_and_native_payload(monkeypatch):
     assert records[0].payload["unknown_native_field"] == "kept"
     assert any(x.identity.native_id == "1.1" and x.payload["thread_ts"] == "1" for x in records)
     assert records[-1].completeness == "partial"
-    assert observations[-1] == CompletedScope(record_type="message", container_id="C1")
+    assert CompletedScope(record_type="message", container_id="C1") in observations
+    assert observations[-1] == CompletedScope(record_type="channel")
     assert calls[0][1]["types"] == "public_channel,private_channel,im,mpim"
 
 
@@ -98,9 +99,9 @@ async def test_prior_channel_loss_requires_explicit_provider_confirmation(monkey
         AsyncMock(side_effect=[{"channels": []}, SlackApiError("channel_not_found")]),
     )
     observations = [x async for x in connector.generate_observations(cursor=cursor)]
-    assert observations[0].kind == "delete"
-    assert observations[0].removal_reason == "access_revoked"
-    assert isinstance(observations[1], RemovedScope)
+    assert observations[1].kind == "delete"
+    assert observations[1].removal_reason == "access_revoked"
+    assert isinstance(observations[2], RemovedScope)
     assert cursor.get()["channel_ids"] == []
 
 

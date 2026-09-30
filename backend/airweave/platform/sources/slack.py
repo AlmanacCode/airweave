@@ -217,6 +217,7 @@ class SlackSource(BaseSource):
         if node_selections:
             raise ValueError("Slack capture does not yet support selected conversation scopes")
         seen_channels: set[str] = set()
+        yield StartedScope(record_type="channel")
         async with aclosing(
             self._capture_pages(
                 "conversations.list",
@@ -269,6 +270,8 @@ class SlackSource(BaseSource):
                 removal_reason="access_revoked",
                 observed_at=observed_at,
             )
+        # Reconcile parents even if an earlier partial run saved no channel checkpoint.
+        yield CompletedScope(record_type="channel")
         if cursor is not None:
             cursor.update(channel_ids=sorted(seen_channels))
 

@@ -344,7 +344,7 @@ class CanonicalRecordStore:
                 payload=entity.source_payload,
                 payload_schema_version=entity.payload_schema_version,
                 kind="delete",
-                removal_reason="absent",
+                removal_reason=request.removal_reason,
                 completeness=entity.completeness,
                 content_hash=entity.content_hash,
                 source_created_at=entity.source_created_at,
