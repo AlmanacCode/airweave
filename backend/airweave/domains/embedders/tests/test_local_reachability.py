@@ -16,19 +16,19 @@ from airweave.domains.embedders.types import DenseEmbedderEntry
 
 def _make_entry(embedder_class: type, **overrides) -> DenseEmbedderEntry:
     """Build a minimal DenseEmbedderEntry for testing."""
-    defaults = dict(
-        short_name="test",
-        name="Test",
-        description="test entry",
-        class_name=embedder_class.__name__,
-        provider="local",
-        api_model_name="test-model",
-        max_dimensions=384,
-        max_tokens=512,
-        supports_matryoshka=False,
-        embedder_class_ref=embedder_class,
-        required_setting="TEXT2VEC_INFERENCE_URL",
-    )
+    defaults = {
+        "short_name": "test",
+        "name": "Test",
+        "description": "test entry",
+        "class_name": embedder_class.__name__,
+        "provider": "local",
+        "api_model_name": "test-model",
+        "max_dimensions": 384,
+        "max_tokens": 512,
+        "supports_matryoshka": False,
+        "embedder_class_ref": embedder_class,
+        "required_setting": "TEXT2VEC_INFERENCE_URL",
+    }
     defaults.update(overrides)
     return DenseEmbedderEntry(**defaults)
 
