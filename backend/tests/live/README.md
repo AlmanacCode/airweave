@@ -180,9 +180,12 @@ check found zero remaining `canonical_live_*` schemas. No provider writes occurr
 
 Drive mode: `LIVE_LIFECYCLE_PROVIDER=google_drive` with `LIVE_DRIVE_ACCOUNT_ID`
 uses the source's entire accessible `allDrives` corpus; no query, path selection,
-or hidden sampling filter is inserted. Per process: 2,000 observations,
-250 provider requests, 128 MiB total retained blob writes, 10 MiB per blob and
-300 seconds. A successful initial run must exhaust enumeration plus changes
+or hidden sampling filter is inserted. The initial verification budget was
+2,000 observations, 250 provider requests, 128 MiB total retained blob writes,
+10 MiB per blob and 300 seconds. The approved follow-up budget uses the source
+production limit of 200 MiB per blob and 512 MiB total; record/request/time
+limits stay unchanged. Drive checks for at least 2 GiB free disk before each
+process starts. A successful initial run must exhaust enumeration plus changes
 replay and commit its canonical page token. A second fresh process must actually
 request `/changes` with that saved token and emit no full-rescan markers; an
 expired token/reset is not reported as successful incremental proof. Failure
@@ -197,3 +200,16 @@ unchanged. No second incremental process was started. This proves the bounded
 abort path, not complete Drive synchronization. Both attempts removed their
 private schema/files. Thirteen Drive source/content tests passed; a synthetic
 storage-budget check also rejected an over-budget write before retaining it.
+
+The approved production-size Drive retry completed on 2026-09-30. Initial run:
+85 provider requests, 55 observed/stored records, three not content-complete,
+207,597,309 retained blob bytes, one completed full scope and a saved checkpoint.
+A fresh second process made two requests, including `/changes` with the actual
+saved page token, observed zero changes and saved its new attempt checkpoint.
+Change sequence stayed 55 and payload/revision digests were identical. Both jobs
+completed. Free disk before the run was 9,525,235,712 bytes; private schema/files
+were removed and independently checked absent. This verifies the current
+accessible Drive scope and a quiet real delta run; it does not prove the three
+incomplete bodies, a hosted consumer, or live induced deletions/revocations.
+The earlier smaller-budget failure evidence remains unchanged. Sanitized result:
+`evidence/drive-lifecycle-production-limit-20260930.json`.

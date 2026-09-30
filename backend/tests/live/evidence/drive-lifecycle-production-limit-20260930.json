@@ -1,0 +1,16 @@
+{
+  "date": "2026-09-30",
+  "scope": "full accessible allDrives corpus; no hidden filter",
+  "provider_writes": false,
+  "limits": {"records": 2000, "provider_requests": 250, "total_blob_bytes": 536870912, "per_blob_bytes": 209715200, "seconds": 300, "minimum_free_disk_bytes": 2147483648},
+  "free_disk_bytes_before": 9525235712,
+  "runs": [
+    {"mode": "drive_initial", "provider_requests": 85, "records_observed": 55, "stored_records": 55, "not_content_complete_records": 3, "blob_bytes_written": 207597309, "started": 1, "completed": 1, "checkpoint_saved": true, "observed_change_sequence": 55, "loaded_durable_checkpoint": false, "job_status": "completed", "payload_revision_digest": "5e6c392143053de4d41a79b229ea1eab2b884b98be72b28c4ce6cb9cdb4aa938"},
+    {"mode": "drive_incremental", "provider_requests": 2, "records_observed": 0, "stored_records": 55, "not_content_complete_records": 3, "blob_bytes_written": 0, "started": 0, "completed": 0, "resumed_changes_requests": 1, "checkpoint_saved": true, "observed_change_sequence": 55, "loaded_durable_checkpoint": true, "job_status": "completed", "payload_revision_digest": "5e6c392143053de4d41a79b229ea1eab2b884b98be72b28c4ce6cb9cdb4aa938"}
+  ],
+  "identical_second_read": true,
+  "cleanup": {"schema_removed": true, "blob_directory_removed": true},
+  "verified": ["real local orchestrator", "real job state transitions", "durable canonical checkpoint", "fresh-process native changes-token resume", "free disk reserve boundaries"],
+  "not_verified": ["content completeness for three explicitly incomplete records", "hosted auth or real product binding", "Temporal worker or hosted factory", "Drive product HTTP consumer", "live induced deletion/revocation", "search quality"],
+  "earlier_smaller_budget_failure": "drive-lifecycle-20260930.json"
+}

@@ -67,11 +67,12 @@ async def rest_source(
     gmail_query="newer_than:7d smaller:5M",
     request_hook=None,
     calendar_config=None,
+    max_file_bytes=10 * 1024 * 1024,
 ):
     host = {"gmail": "gmail.googleapis.com", "slack": "slack.com"}.get(name, "www.googleapis.com")
     auth = ManagedAuthProvider(api_key=key, connected_account_id=account, allowed_hosts={host})
     transport = ComposioTransport(api_key=key, connected_account_id=account, allowed_hosts={host})
-    transport.MAX_BINARY_BYTES = 10 * 1024 * 1024
+    transport.MAX_BINARY_BYTES = max_file_bytes
     hooks = {"request": [request_hook]} if request_hook is not None else {}
     async with httpx.AsyncClient(transport=transport, timeout=180, event_hooks=hooks) as client:
         wrapped = AirweaveHttpClient(

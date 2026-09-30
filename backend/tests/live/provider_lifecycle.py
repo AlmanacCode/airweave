@@ -10,12 +10,13 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import time
 from contextlib import aclosing, asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
@@ -190,7 +191,7 @@ async def child(manifest):
         loaded = cursor.loaded_from_db
         storage = BoundedStorage(Path(manifest["root"]) / "blobs", manifest["blob_byte_limit"])
         files = FileService(job_id, storage, sync_id=sync_id)
-        files.MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
+        files.MAX_FILE_SIZE_BYTES = manifest["file_byte_limit"]
         fence = SimpleNamespace(organization_id=organization_id, sync_id=sync_id, job_id=job_id)
         async with (
             asyncio.timeout(manifest["timeout"]),
@@ -211,6 +212,7 @@ async def child(manifest):
                 if is_calendar
                 else None,
                 request_hook=request_hook,
+                max_file_bytes=manifest["file_byte_limit"],
             ) as (source, _),
         ):
             bus = FakeEventBus()
@@ -361,10 +363,19 @@ async def child(manifest):
     return 1 if result["failed"] else 0
 
 
+def check_free_disk(provider):
+    """Keep the explicitly approved local-disk reserve before each Drive process."""
+    available = shutil.disk_usage(gettempdir()).free
+    if provider == "google_drive" and available < 2 * 1024**3:
+        raise BudgetExceeded("free_disk")
+    return available
+
+
 async def main():
     name = os.environ.get("LIVE_LIFECYCLE_PROVIDER", "gmail")
     if name not in {"gmail", "google_calendar", "google_drive"}:
         raise ValueError("Unsupported lifecycle provider")
+    free_disk_bytes = check_free_disk(name)
     url = harness.test_database_url()
     schema = "canonical_live_" + uuid4().hex
     admin = create_async_engine(url)
@@ -408,7 +419,10 @@ async def main():
                     name
                 ],
                 "timeout": {"gmail": 600, "google_calendar": 180, "google_drive": 300}[name],
-                "blob_byte_limit": (128 if name == "google_drive" else 256) * 1024 * 1024,
+                "blob_byte_limit": (512 if name == "google_drive" else 256) * 1024 * 1024,
+                "file_byte_limit": FileService.MAX_FILE_SIZE_BYTES
+                if name == "google_drive"
+                else 10 * 1024 * 1024,
                 "schema": schema,
                 "root": str(root),
                 "organization_id": str(organization_id),
@@ -427,6 +441,7 @@ async def main():
             path = root / "manifest.json"
             path.write_text(json.dumps(manifest))
             for _ in range(2):
+                check_free_disk(name)
                 process = await asyncio.create_subprocess_exec(
                     sys.executable,
                     str(Path(__file__).absolute()),
@@ -464,6 +479,7 @@ async def main():
         json.dumps(
             {
                 "runs": len(results),
+                "free_disk_bytes_before": free_disk_bytes,
                 "schema_removed": True,
                 "blob_directory_removed": True,
                 "identical_second_read": len(results) == 2
