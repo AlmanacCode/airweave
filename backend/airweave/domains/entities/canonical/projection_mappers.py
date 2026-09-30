@@ -225,6 +225,10 @@ async def map_record(
             from airweave.domains.entities.canonical.gmail_projection import map_gmail
 
             entities = await map_gmail(record, storage, directory)
+        elif source_name == "linear":
+            from airweave.domains.entities.canonical.linear_projection import map_linear
+
+            entities = await map_linear(record, storage, directory)
         elif source_name == "google_drive":
             entities = await _drive(record, storage, directory)
         elif source_name == "google_calendar":

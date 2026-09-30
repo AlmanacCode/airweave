@@ -6,12 +6,15 @@ import hashlib
 import json
 import time
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
+import httpx
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, StrictBool
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
@@ -33,6 +36,7 @@ from airweave.domains.sources.token_providers.protocol import (
     authorization_headers,
 )
 from airweave.domains.storage.file_service import FileService
+from airweave.domains.storage.limits import MAX_FILE_SIZE_BYTES
 from airweave.domains.syncs.cursors.cursor import SyncCursor
 from airweave.platform.configs.config import LinearConfig
 from airweave.platform.decorators import source
@@ -50,7 +54,7 @@ _URL = "https://api.linear.app/graphql"
 _QUERIES = Path(__file__).with_name("linear_queries")
 _QUERY_NAMES = ("identity", "teams", "issues", "comments", "attachments", "issue-membership")
 QUERIES = {name: (_QUERIES / f"{name}.graphql").read_text() for name in _QUERY_NAMES}
-FIELD_SET_VERSION = 1
+FIELD_SET_VERSION = 2
 
 
 class _Model(BaseModel):
@@ -240,7 +244,7 @@ class LinearSource(BaseSource):
         return issue
 
     async def capture_page(
-        self, scope: CompletedScope, continuation: ScanContinuation
+        self, scope: CompletedScope, continuation: ScanContinuation, *, files: FileService
     ) -> CapturePage:
         """Fetch exactly one whole-scope page; engine commits it and its continuation."""
         progress = _Progress.model_validate(continuation.value)
@@ -272,10 +276,72 @@ class LinearSource(BaseSource):
             raise ValueError("Unsupported Linear scope")
         following = self._following(page, progress.after)
         return CapturePage(
-            records=tuple(self._capture(scope, node) for node in page.nodes),
+            records=tuple([await self._retain(scope, node, files) for node in page.nodes]),
             continuation=ScanContinuation(value=_Progress(after=following).model_dump()),
             final=following is None,
         )
+
+    async def _retain(
+        self,
+        scope: CompletedScope,
+        payload: dict[str, JsonValue],
+        files: FileService,
+    ) -> CaptureRecord:
+        record = self._capture(scope, payload)
+        if scope.record_type != "attachment":
+            return record
+        url = payload.get("url")
+        if not isinstance(url, str) or not self._is_upload(url):
+            return record
+        headers = await authorization_headers(self.auth)
+        async with self.http_client.stream(
+            "GET",
+            url,
+            headers=headers,
+            follow_redirects=False,
+            timeout=httpx.Timeout(180.0, read=540.0),
+        ) as response:
+            # Redirects are errors, never permission to forward auth to another destination.
+            raise_for_status(
+                response, source_short_name="linear", token_provider_kind=self.auth.provider_kind
+            )
+            length = response.headers.get("Content-Length")
+            if length is not None and int(length) > MAX_FILE_SIZE_BYTES:
+                return record
+            content = bytearray()
+            async with aclosing(response.aiter_bytes()) as chunks:
+                async for chunk in chunks:
+                    if len(content) + len(chunk) > MAX_FILE_SIZE_BYTES:
+                        return record
+                    content.extend(chunk)
+            media_type = (
+                response.headers.get("Content-Type", "application/octet-stream")
+                .split(";", 1)[0]
+                .strip()
+            )
+        ref = await files.store_canonical_blob(bytes(content), media_type=media_type)
+        return record.model_copy(
+            update={
+                "blobs": (ref.model_copy(update={"source_path": "/url"}),),
+                "completeness": "complete",
+            }
+        )
+
+    @staticmethod
+    def _is_upload(url: str) -> bool:
+        try:
+            parsed = urlsplit(url)
+            return (
+                parsed.scheme == "https"
+                and parsed.hostname == "uploads.linear.app"
+                and parsed.port in {None, 443}
+                and parsed.username is None
+                and parsed.password is None
+                and bool(parsed.path.strip("/"))
+                and not parsed.fragment
+            )
+        except ValueError:
+            return False
 
     @staticmethod
     def _capture(scope: CompletedScope, payload: dict[str, JsonValue]) -> CaptureRecord:

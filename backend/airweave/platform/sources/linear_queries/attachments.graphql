@@ -2,7 +2,7 @@ query OwnedLinearIssueAttachments($issueId: String!, $first: Int!, $after: Strin
   issue(id: $issueId) {
     id team { id }
     attachments(first: $first, after: $after, includeArchived: true, orderBy: createdAt) {
-      nodes { id title url metadata createdAt updatedAt archivedAt issue { id } }
+      nodes { id title url metadata createdAt updatedAt archivedAt issue { id identifier title url team { id name } project { id name } } }
       pageInfo { hasNextPage endCursor }
     }
   }

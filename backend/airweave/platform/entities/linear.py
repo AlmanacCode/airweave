@@ -555,3 +555,26 @@ class LinearAttachmentEntity(FileEntity):
     def web_url(self) -> str:
         """Browser URL for the attachment (falls back to download URL)."""
         return self.web_url_value or self.url
+
+
+class LinearLinkedAttachmentEntity(BaseEntity):
+    """Searchable link metadata; never represents retained file content."""
+
+    attachment_id: str = AirweaveField(
+        ..., description="Native attachment identity", is_entity_id=True
+    )
+    title: str = AirweaveField(
+        ..., description="Native attachment title", is_name=True, embeddable=True
+    )
+    issue_identifier: str = AirweaveField(
+        ..., description="Parent issue identifier", embeddable=True
+    )
+    target_url: str = AirweaveField(..., description="Original linked resource", embeddable=False)
+    content_coverage: str = AirweaveField(
+        ..., description="Available content coverage", embeddable=True
+    )
+
+    @computed_field(return_type=str)
+    def web_url(self) -> str:
+        """Return the original link without pretending its content was fetched."""
+        return self.target_url
