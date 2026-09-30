@@ -10,6 +10,7 @@ from airweave.domains.entities.canonical.blob_materializer import BlobIntegrityE
 from airweave.domains.entities.canonical.coverage import capture_coverage
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query_models import (
+    DocumentRead,
     MailThreadCursor,
     MailThreadPage,
     RecordChangePage,
@@ -19,6 +20,7 @@ from airweave.domains.entities.canonical.query_models import (
 )
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.canonical.store import CanonicalRecordStore, CanonicalStoreError
+from airweave.domains.entities.canonical.workspace_docs import read_document
 from airweave.domains.storage.exceptions import StorageException
 from airweave.domains.storage.protocols import StorageBackend
 
@@ -51,6 +53,18 @@ class BlobUnavailable(CanonicalStoreError):
     """Committed bytes are missing or fail integrity verification."""
 
     code = "blob_unavailable"
+
+
+class DocumentUnavailable(CanonicalStoreError):
+    """This record has no valid retained native document representation."""
+
+    code = "document_unavailable"
+
+
+class DocumentIncomplete(CanonicalStoreError):
+    """Retained native document fields do not cover the requested document."""
+
+    code = "document_incomplete"
 
 
 class CanonicalQueryService:
@@ -213,6 +227,45 @@ class CanonicalQueryService:
             )
         return MailThreadPage(
             thread_id=thread_id, messages=messages, next_cursor=next_cursor, has_more=more
+        )
+
+    async def document(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        sync_id: UUID,
+        record_id: UUID,
+        revision: int,
+        storage: StorageBackend,
+    ) -> DocumentRead:
+        """Read verified stored Docs bytes under current record and ancestor authority."""
+        record = await self.read(db, organization_id, sync_id, record_id)
+        self._check_blob_record(record, revision)
+        try:
+            captured = await read_document(record, storage)
+        except (StorageException, BlobIntegrityError) as exc:
+            raise BlobUnavailable("Committed document bytes are unavailable; retry later") from exc
+        except ValueError as exc:
+            raise DocumentUnavailable(
+                "No valid stored Google document is available; refresh this source and reread."
+            ) from exc
+        db.expire_all()
+        current = await self.read(db, organization_id, sync_id, record_id)
+        self._check_blob_record(current, revision)
+        if record.blobs != current.blobs:
+            raise StaleRecordRevision("Document changed; reread before requesting its content")
+        if captured.manifest.native.status != "complete":
+            raise DocumentIncomplete(
+                "Stored document content is incomplete; refresh this source and reread."
+            )
+        return DocumentRead(
+            id=current.id,
+            identity=current.identity,
+            revision=current.revision,
+            observed_at=current.observed_at,
+            completeness=current.completeness,
+            manifest=captured.manifest,
+            document=captured.document,
         )
 
     async def blob(

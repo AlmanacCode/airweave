@@ -16,6 +16,7 @@ from airweave.domains.entities.canonical.calendar_query import CalendarRangeNotC
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.query_models import (
+    DocumentRead,
     MailThreadPage,
     RecordChangePage,
     RecordFilters,
@@ -47,6 +48,8 @@ async def record_error_response(request: Request, error: CanonicalStoreError) ->
         "blob_not_found": 404,
         "stale_record_revision": 409,
         "blob_unavailable": 503,
+        "document_unavailable": 409,
+        "document_incomplete": 409,
         "calendar_changed_restart": 409,
         "calendar_read_incomplete": 409,
         "calendar_range_not_captured": 409,
@@ -101,6 +104,26 @@ async def read_record(
 ) -> SourceRecord:
     """Read current committed provider state, including tombstones and completeness."""
     return await service.read(db, ctx.organization.id, sync_id, record_id)
+
+
+@router.get("/{sync_id}/records/{record_id}/document", response_model=DocumentRead)
+async def read_stored_document(
+    sync_id: UUID,
+    record_id: UUID,
+    response: Response,
+    revision: int = Query(ge=1),
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+    container: Container = Depends(deps.get_container),
+) -> DocumentRead:
+    """Read exact retained native Docs content; never fetch or fall back to a provider."""
+    result = await service.document(
+        db, ctx.organization.id, sync_id, record_id, revision, container.storage_backend
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return result
 
 
 @router.get("/{sync_id}/mail/threads/{thread_id}", response_model=MailThreadPage)

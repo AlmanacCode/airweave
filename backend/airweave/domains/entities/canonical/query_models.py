@@ -4,10 +4,25 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
 
 from airweave.domains.entities.canonical.coverage import CaptureCoverage
 from airweave.domains.entities.canonical.models import ObservedChange, SourceRecord
+from airweave.domains.entities.canonical.requests import RecordIdentity
+from airweave.platform.sources.records.workspace_manifest import WorkspaceManifestV1
+
+
+class DocumentRead(BaseModel):
+    """One authorized stored revision's native document and representation coverage."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    identity: RecordIdentity
+    revision: int = Field(ge=1)
+    observed_at: AwareDatetime
+    completeness: Literal["complete", "partial", "metadata_only"]
+    manifest: WorkspaceManifestV1
+    document: dict[str, JsonValue]
 
 
 class RecordFilters(BaseModel):
