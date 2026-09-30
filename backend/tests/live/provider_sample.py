@@ -83,6 +83,15 @@ async def rest_source(
         wrapped = AirweaveHttpClient(
             client, fence.organization_id, name, feature_flag_enabled=False
         )
+        if name == "google_calendar":
+            calendar_config = calendar_config or GoogleCalendarConfig()
+            if calendar_config.expected_primary_calendar_id is None:
+                calendar_config = GoogleCalendarConfig.model_validate(
+                    {
+                        **calendar_config.model_dump(),
+                        "expected_primary_calendar_id": os.environ["LIVE_CALENDAR_PRIMARY_ID"],
+                    }
+                )
         source_type, config = {
             "gmail": (
                 GmailSource,
@@ -97,17 +106,29 @@ async def rest_source(
                 if gmail_unfiltered
                 else GmailConfig(gmail_query=gmail_query, expected_mailbox=expected_email),
             ),
-            "google_drive": (GoogleDriveSource, GoogleDriveConfig()),
-            "google_calendar": (GoogleCalendarSource, calendar_config or GoogleCalendarConfig()),
+            "google_drive": (
+                GoogleDriveSource,
+                GoogleDriveConfig(expected_permission_id=os.environ["LIVE_DRIVE_PERMISSION_ID"])
+                if name == "google_drive"
+                else GoogleDriveConfig(),
+            ),
+            "google_calendar": (
+                GoogleCalendarSource,
+                calendar_config or GoogleCalendarConfig(),
+            ),
             "slack": (SlackSource, SlackConfig()),
         }[name]
         source = await source_type.create(
             auth=auth, logger=logging.getLogger("probe"), http_client=wrapped, config=config
         )
-        # Gmail create attests this selected mailbox using its native profile.
-        if name != "gmail":
+        # Google sources attest their explicitly pinned native identity during create.
+        if name not in {"gmail", "google_calendar", "google_drive"}:
             await verify_rest_identity(name, source, expected_email)
-        yield source, "provider_email"
+        identity_kind = {
+            "google_drive": "provider_permission_id",
+            "google_calendar": "provider_primary_calendar_id",
+        }.get(name, "provider_email")
+        yield source, identity_kind
 
 
 @asynccontextmanager

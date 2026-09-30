@@ -330,6 +330,13 @@ class CalendarOccurrenceWindow(BaseConfig):
 class GoogleCalendarConfig(SourceConfig):
     """Rolling expanded capture, or an explicit window through source configuration."""
 
+    expected_primary_calendar_id: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"^\S+$",
+        description="Trusted primary calendar ID; required for owned capture.",
+    )
+
     calendar_ids: tuple[str, ...] | None = Field(default=None, max_length=250)
 
     @field_validator("calendar_ids")
@@ -374,6 +381,13 @@ class GoogleDocsConfig(SourceConfig):
 
 class GoogleDriveConfig(SourceConfig):
     """Google Drive configuration schema."""
+
+    expected_permission_id: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"^\S+$",
+        description="Trusted native Drive permission ID; required for owned canonical capture.",
+    )
 
     include_patterns: list[str] = Field(
         default=[],
