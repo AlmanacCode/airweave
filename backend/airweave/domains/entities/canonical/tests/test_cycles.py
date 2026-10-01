@@ -13,7 +13,11 @@ from airweave.domains.entities.canonical.cycle_models import (
     CompleteCycle,
     CycleConfiguration,
 )
-from airweave.domains.entities.canonical.cycle_store import CycleConflict, complete_cycle
+from airweave.domains.entities.canonical.cycle_store import (
+    CycleConflict,
+    complete_cycle,
+    scope_owner,
+)
 from airweave.domains.entities.canonical.requests import (
     CaptureRecord,
     CompletedScope,
@@ -57,6 +61,8 @@ async def cycle(database, service, fence, **kwargs):
 
 async def scan(database, service, fence, active, scope=ROOT, **kwargs):
     async with database() as db:
+        parent = await scope_owner(db, fence, active, scope)
+        kwargs.setdefault("expected_parent_epoch", parent.visibility_epoch if parent else None)
         return await service.begin_scan(
             db,
             BeginScan(

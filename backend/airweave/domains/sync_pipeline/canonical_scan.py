@@ -300,7 +300,7 @@ class CanonicalScanDriver:
                     restart=restart,
                     continuation=initial,
                     plan=plan,
-                    expected_parent_epoch=parent_epoch if cycle.mode == "mixed" else None,
+                    expected_parent_epoch=parent_epoch,
                     expected_parent_revision=parent.revision
                     if parent and cycle.mode == "mixed"
                     else None,
@@ -338,9 +338,7 @@ class CanonicalScanDriver:
                     restart=True,
                     continuation=initial,
                     plan=plan,
-                    expected_parent_epoch=state.parent_visibility_epoch
-                    if cycle.mode == "mixed"
-                    else None,
+                    expected_parent_epoch=state.parent_visibility_epoch,
                     expected_parent_revision=parent.revision
                     if parent and cycle.mode == "mixed"
                     else None,

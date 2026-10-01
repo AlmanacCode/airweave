@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from airweave.domains.entities.canonical.cycle_models import BeginCycle, CycleConfiguration
+from airweave.domains.entities.canonical.cycle_store import scope_owner
 from airweave.domains.entities.canonical.requests import CompletedScope, RecordIdentity
 from airweave.domains.entities.canonical.scan_models import (
     BeginScan,
@@ -27,6 +28,7 @@ def original(kind, native):
 
 async def begin(database, service, fence, cycle, scope):
     async with database() as db:
+        parent = await scope_owner(db, fence, cycle, scope)
         return await service.begin_scan(
             db,
             BeginScan(
@@ -34,6 +36,7 @@ async def begin(database, service, fence, cycle, scope):
                 cycle_id=cycle.version.cycle_id,
                 scope=scope,
                 fingerprint=cycle.configuration.fingerprint,
+                expected_parent_epoch=parent.visibility_epoch if parent else None,
             ),
         )
 

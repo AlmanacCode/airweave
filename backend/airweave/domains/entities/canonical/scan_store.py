@@ -207,9 +207,9 @@ def validate_scope_changes(
 
 def attest_planned_owner(cycle: CaptureCycle, request: BeginScan, parent: Entity | None) -> None:
     """The post-I/O plan must still describe the captured owner used to select it."""
-    if cycle.mode == "mixed" and (
-        request.expected_parent_epoch != (parent.visibility_epoch if parent else None)
-        or request.expected_parent_revision != (parent.record_revision if parent else None)
+    if request.expected_parent_epoch != (parent.visibility_epoch if parent else None) or (
+        cycle.mode == "mixed"
+        and request.expected_parent_revision != (parent.record_revision if parent else None)
     ):
         raise ScanConflict("Scope owner changed during plan selection")
 
