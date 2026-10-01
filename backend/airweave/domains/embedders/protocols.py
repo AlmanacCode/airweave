@@ -6,6 +6,7 @@ from airweave.core.protocols.registry import RegistryProtocol
 from airweave.domains.embedders.types import (
     DenseEmbedderEntry,
     DenseEmbedding,
+    EmbeddingPurpose,
     SparseEmbedderEntry,
     SparseEmbedding,
 )
@@ -32,8 +33,10 @@ class DenseEmbedderProtocol(Protocol):
         """Embed a single text into a dense vector."""
         ...
 
-    async def embed_many(self, texts: list[str]) -> list[DenseEmbedding]:
-        """Embed a batch of texts into dense vectors."""
+    async def embed_many(
+        self, texts: list[str], *, purpose: EmbeddingPurpose = "document"
+    ) -> list[DenseEmbedding]:
+        """Embed ordered texts; asymmetric models distinguish queries from documents."""
         ...
 
     async def close(self) -> None:

@@ -803,11 +803,19 @@ def _create_dense_embedder(
     Uses the domain config constants (DENSE_EMBEDDER, EMBEDDING_DIMENSIONS)
     and the registry to look up the spec and construct the correct embedder.
     """
+    from airweave.domains.embedders.dense.cohere import CohereDenseEmbedder
     from airweave.domains.embedders.dense.local import LocalDenseEmbedder
     from airweave.domains.embedders.dense.mistral import MistralDenseEmbedder
     from airweave.domains.embedders.dense.openai import OpenAIDenseEmbedder
 
     spec = registry.get(DENSE_EMBEDDER)
+
+    if spec.embedder_class_ref is CohereDenseEmbedder:
+        return CohereDenseEmbedder(
+            api_key=settings.COHERE_API_KEY,
+            model=spec.api_model_name,
+            dimensions=EMBEDDING_DIMENSIONS,
+        )
 
     if spec.embedder_class_ref is OpenAIDenseEmbedder:
         return OpenAIDenseEmbedder(

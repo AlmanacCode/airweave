@@ -200,7 +200,7 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
             RetrievalStrategy.HYBRID,
         ):
             texts = [plan.query.primary] + list(plan.query.variations)
-            dense_embeddings = await self._dense_embedder.embed_many(texts)
+            dense_embeddings = await self._dense_embedder.embed_many(texts, purpose="query")
 
         if plan.retrieval_strategy in (
             RetrievalStrategy.KEYWORD,

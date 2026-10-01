@@ -6,6 +6,7 @@ Add new models here — the domain registry reads this at startup.
 
 from dataclasses import dataclass
 
+from airweave.domains.embedders.dense.cohere import CohereDenseEmbedder
 from airweave.domains.embedders.dense.local import LocalDenseEmbedder
 from airweave.domains.embedders.dense.mistral import MistralDenseEmbedder
 from airweave.domains.embedders.dense.openai import OpenAIDenseEmbedder
@@ -91,6 +92,27 @@ DENSE_EMBEDDERS: list[DenseEmbedderSpec] = [
         required_setting="TEXT2VEC_INFERENCE_URL",
     ),
 ]
+
+# Text-only registrations; image processing requires a separate qualified input path.
+DENSE_EMBEDDERS.extend(
+    DenseEmbedderSpec(
+        short_name=short_name,
+        name=f"Cohere {model}",
+        description="Multilingual embeddings with explicit query/document purpose",
+        provider="cohere",
+        api_model_name=model,
+        max_dimensions=dimensions,
+        max_tokens=128000,
+        supports_matryoshka=True,
+        embedder_class=CohereDenseEmbedder,
+        required_setting="COHERE_API_KEY",
+    )
+    for short_name, model, dimensions in (
+        ("cohere_embed_v4", "embed-v4.0", 1536),
+        ("cohere_embed_v5_pro", "embed-v5.0-pro", 2048),
+        ("cohere_embed_v5_fast", "embed-v5.0-fast", 2048),
+    )
+)
 
 SPARSE_EMBEDDERS: list[SparseEmbedderSpec] = [
     SparseEmbedderSpec(

@@ -1,8 +1,12 @@
 """Types for the embedders domain."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from airweave.core.protocols.registry import BaseRegistryEntry
+
+EmbeddingPurpose = Literal["document", "query"]
 
 # ---------------------------------------------------------------------------
 # Embedding value types

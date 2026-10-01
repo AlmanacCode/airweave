@@ -21,7 +21,7 @@ from airweave.domains.embedders.exceptions import (
     EmbedderTimeoutError,
 )
 from airweave.domains.embedders.protocols import DenseEmbedderProtocol
-from airweave.domains.embedders.types import DenseEmbedding
+from airweave.domains.embedders.types import DenseEmbedding, EmbeddingPurpose
 
 _PROVIDER = "openai"
 
@@ -84,7 +84,9 @@ class OpenAIDenseEmbedder(DenseEmbedderProtocol):
         results = await self.embed_many([text])
         return results[0]
 
-    async def embed_many(self, texts: list[str]) -> list[DenseEmbedding]:
+    async def embed_many(
+        self, texts: list[str], *, purpose: EmbeddingPurpose = "document"
+    ) -> list[DenseEmbedding]:
         """Embed a batch of texts into dense vectors."""
         if not texts:
             return []

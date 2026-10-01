@@ -1256,6 +1256,10 @@ async def test_prepared_query_reuses_only_embeddings_across_collection_scopes(mo
         )
         assert result.results == []
     assert executor._dense_embedder.embed_many.await_count == dense_calls
+    if dense_calls:
+        executor._dense_embedder.embed_many.assert_awaited_once_with(
+            ["meeting", "discussion"], purpose="query"
+        )
     executor._sparse_embedder.embed.assert_awaited_once_with("meeting")
     calls = executor._vector_db.compile_query.await_args_list
     assert [call.kwargs["collection_id"] for call in calls] == ["first", "second"]
