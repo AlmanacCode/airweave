@@ -216,6 +216,10 @@ class Settings(BaseSettings):
     # in-code default in domains/search/config.py.
     LLM_FALLBACK_CHAIN: Optional[str] = None
 
+    # Optional local OCR; models are provisioned at build/setup time, never during inference.
+    LOCAL_OCR_TESSDATA_PATH: Optional[str] = None
+    LOCAL_OCR_LANGUAGES: tuple[str, ...] = ("eng",)
+
     # Docling OCR fallback service (None = disabled)
     DOCLING_BASE_URL: Optional[str] = None
 

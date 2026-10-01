@@ -98,6 +98,8 @@ jobs:
         run: make test-auth
       - name: Verify dependency readiness
         run: make test-health
+      - name: Verify OCR execution boundaries and fallback
+        run: make test-ocr
       - name: Verify projection recovery and maintenance workflows
         run: make test-worker
       - name: Record tested Vespa image
@@ -121,3 +123,4 @@ jobs:
         run: |
           docker run --rm --entrypoint python almanac-source-store:ci -m compileall -q airweave
           docker run --rm --entrypoint /bin/sh almanac-source-store:ci -n /app/entrypoint.sh
+          docker run --rm --entrypoint python almanac-source-store:ci -m scripts.smoke_local_ocr --tessdata /usr/share/tessdata

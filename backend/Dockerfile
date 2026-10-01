@@ -28,6 +28,13 @@ COPY pyproject.toml poetry.lock ./
 RUN --mount=type=cache,target=/opt/poetry-cache \
     poetry install --only=main --no-interaction --no-ansi --no-root
 
+# Optional local OCR models: pinned upstream artifacts, verified by BuildKit.
+# Inference never downloads weights. Enable explicitly with LOCAL_OCR_TESSDATA_PATH.
+ADD --chmod=644 --checksum=sha256:7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2 https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/eng.traineddata /usr/share/tessdata/eng.traineddata
+ADD --chmod=644 --checksum=sha256:4c73ffc59d497c186b19d1e90f5d721d678ea6b2e277b719bee4e2af12271825 https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/hin.traineddata /usr/share/tessdata/hin.traineddata
+
+ADD --chmod=644 --checksum=sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30 https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/LICENSE /usr/share/tessdata/LICENSE
+
 # Copy entrypoint script with proper permissions
 COPY --chmod=755 entrypoint.sh /app/entrypoint.sh
 

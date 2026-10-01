@@ -103,6 +103,7 @@ from airweave.domains.oauth.repository import (
 )
 from airweave.domains.ocr.docling import DoclingOcrAdapter
 from airweave.domains.ocr.fallback import FallbackOcrProvider
+from airweave.domains.ocr.local import LocalOcrProvider
 from airweave.domains.ocr.mistral.converter import MistralOCR
 from airweave.domains.ocr.protocols import OcrProvider
 from airweave.domains.organizations.protocols import UserOrganizationRepositoryProtocol
@@ -769,18 +770,28 @@ def _create_ocr_provider(
 ) -> Optional[OcrProvider]:
     """Create OCR provider with fallback chain.
 
-    Chain order: Mistral (cloud) -> Docling (local service, if configured).
+    Chain order: local Tesseract (if configured) -> Mistral -> Docling.
     Docling is only added when DOCLING_BASE_URL is set.
 
     Returns None with a warning when no providers are available.
     """
+    providers = []
+    if settings.LOCAL_OCR_TESSDATA_PATH:
+        providers.append(
+            (
+                "local-tesseract",
+                LocalOcrProvider(
+                    tessdata_path=settings.LOCAL_OCR_TESSDATA_PATH,
+                    languages=settings.LOCAL_OCR_LANGUAGES,
+                ),
+            )
+        )
     try:
-        mistral_ocr = MistralOCR()
+        mistral_ocr = MistralOCR() if settings.MISTRAL_API_KEY else None
     except Exception as e:
         logger.error(f"Error creating Mistral OCR adapter: {e}")
         mistral_ocr = None
 
-    providers = []
     if mistral_ocr:
         providers.append(("mistral-ocr", mistral_ocr))
 
@@ -795,7 +806,7 @@ def _create_ocr_provider(
     if not providers:
         logger.warning(
             "No OCR providers available — document processing will be disabled. "
-            "Set MISTRAL_API_KEY or DOCLING_BASE_URL to enable OCR."
+            "Set LOCAL_OCR_TESSDATA_PATH, MISTRAL_API_KEY or DOCLING_BASE_URL to enable OCR."
         )
         return None
 
