@@ -17,8 +17,9 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.parametrize("listing_fails", [False, True])
+@pytest.mark.parametrize("capture_files", [False, True])
 async def test_first_completed_membership_hides_prior_partial_channel(
-    database, source, listing_fails
+    database, source, listing_fails, capture_files
 ):
     service, fence = source
     parent = RecordIdentity(record_type="channel", native_id="lost-channel")
@@ -40,7 +41,9 @@ async def test_first_completed_membership_hides_prior_partial_channel(
     connector = SlackSource(
         auth=StaticTokenProvider("fixture"), logger=MagicMock(), http_client=MagicMock()
     )
-    connector.slack_config = SlackConfig(expected_team_id="T1", expected_user_id="U1")
+    connector.slack_config = SlackConfig(
+        expected_team_id="T1", expected_user_id="U1", capture_files=capture_files
+    )
     connector._get = AsyncMock(return_value={"ok": True, "team_id": "T1", "user_id": "U1"})
     await connector.validate()
     connector._get = AsyncMock(
@@ -54,9 +57,9 @@ async def test_first_completed_membership_hides_prior_partial_channel(
         service,
         database,
         bus,
-        SlackSource.canonical_record_types,
+        connector.canonical_record_types,
         CaptureAttempt(id=fence.attempt_id, number=fence.attempt_number),
-        SlackSource.canonical_container_parents,
+        connector.canonical_container_parents,
         page_source=connector,
         files=MagicMock(),
     )
