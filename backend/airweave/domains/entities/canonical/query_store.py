@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query_models import RecordFilters
+from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.entities.canonical.store import (
     SourceNotFound,
     content_is_available,
@@ -51,6 +52,7 @@ class CanonicalQueryStore:
         *,
         after_id: UUID | None,
         limit: int,
+        parent: RecordIdentity | None = None,
     ) -> tuple[SourceRecord, ...]:
         """Fetch one extra row so continuation does not require a count query."""
         scope = await db.scalar(
@@ -64,6 +66,14 @@ class CanonicalQueryStore:
             Entity.record_revision > 0,
             parent_is_visible(),
         )
+        if filters.parent_record_id is not None and parent is None:
+            raise ValueError("Parent filter requires an authorized parent identity")
+        if parent is not None:
+            statement = statement.where(
+                Entity.parent_record_type == parent.record_type,
+                Entity.parent_native_id == parent.native_id,
+                Entity.parent_container_id.is_not_distinct_from(parent.container_id),
+            )
         if filters.record_type is not None:
             statement = statement.where(Entity.entity_definition_short_name == filters.record_type)
         if filters.container_id is not None:

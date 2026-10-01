@@ -92,6 +92,7 @@ async def list_records(
     sync_id: UUID,
     record_type: str | None = None,
     container_id: str | None = None,
+    parent_record_id: UUID | None = None,
     state: Literal["active", "deleted", "all"] = "active",
     cursor: str | None = None,
     limit: int = Query(100, ge=1, le=500),
@@ -101,7 +102,12 @@ async def list_records(
 ) -> RecordPage:
     """List exact stored records in stable ID order; continuation is a live traversal."""
     query = RecordListQuery(
-        filters=RecordFilters(record_type=record_type, container_id=container_id, state=state),
+        filters=RecordFilters(
+            record_type=record_type,
+            container_id=container_id,
+            parent_record_id=parent_record_id,
+            state=state,
+        ),
         cursor=cursor,
         limit=limit,
     )

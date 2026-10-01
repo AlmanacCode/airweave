@@ -124,8 +124,19 @@ class CanonicalQueryService:
             if cursor.filters != query.filters:
                 raise InvalidRecordCursor("Preserve the original filters when continuing a list")
             after_id = cursor.after_id
+        parent = None
+        if query.filters.parent_record_id is not None:
+            parent = await self.read(db, organization_id, sync_id, query.filters.parent_record_id)
+            if parent.deleted_at is not None or parent.content_access != "available":
+                raise RecordNotFound("Record not found in this source")
         rows = await self.queries.list_records(
-            db, organization_id, sync_id, query.filters, after_id=after_id, limit=query.limit
+            db,
+            organization_id,
+            sync_id,
+            query.filters,
+            after_id=after_id,
+            limit=query.limit,
+            parent=parent.identity if parent else None,
         )
         more = len(rows) > query.limit
         page = rows[: query.limit]

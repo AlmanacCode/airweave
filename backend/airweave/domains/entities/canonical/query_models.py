@@ -60,6 +60,7 @@ class RecordFilters(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     record_type: str | None = None
     container_id: str | None = None
+    parent_record_id: UUID | None = None
     state: Literal["active", "deleted", "all"] = "active"
 
 

@@ -120,3 +120,106 @@ async def test_deleted_record_is_readable_but_not_in_active_list(database, sourc
     assert record.deleted_at is not None
     assert not active.records
     assert [row.id for row in deleted.records] == [record_id]
+
+
+async def test_parent_filter_is_exact_visible_and_bound_to_continuation(database, source):
+    from airweave.domains.entities.canonical.query import RecordNotFound
+    from airweave.domains.entities.canonical.requests import RecordIdentity
+    from airweave.domains.entities.canonical.tests.helpers import capture as store
+
+    capture, fence = source
+    parent = observation(
+        identity=RecordIdentity(record_type="message", native_id="parent", container_id="C1")
+    ).model_copy(
+        update={"payload": {"files": ["F1", "F2"]}, "descendant_visibility_fields": ("files",)}
+    )
+    other = observation(
+        identity=RecordIdentity(record_type="message", native_id="parent", container_id="C2")
+    )
+    children = tuple(
+        observation(
+            identity=RecordIdentity(record_type="file", native_id=name, container_id="owned"),
+            parent=parent.identity,
+        )
+        for name in ("F1", "F2")
+    )
+    unrelated = observation(
+        identity=RecordIdentity(record_type="file", native_id="F3", container_id="other"),
+        parent=other.identity,
+    )
+    saved = await store(database, capture, fence, parent, other, *children, unrelated)
+    ids = {change.record.identity: change.record.id for change in saved.changes}
+    service = query_service()
+    filters = RecordFilters(parent_record_id=ids[parent.identity])
+    # Exercise the actual query-string boundary with explicit fixture authentication.
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from airweave.api import deps
+    from airweave.api.v1.endpoints.records import router
+    from airweave.db.session import get_db
+
+    app = FastAPI()
+    app.include_router(router, prefix="/sync")
+
+    async def session():
+        async with database() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = session
+    app.dependency_overrides[deps.get_context] = lambda: SimpleNamespace(
+        organization=SimpleNamespace(id=fence.organization_id)
+    )
+    app.dependency_overrides[deps.get_canonical_query_service] = lambda: service
+    async with AsyncClient(transport=ASGITransport(app), base_url="http://fixture") as client:
+        response = await client.get(
+            f"/sync/{fence.sync_id}/records", params={"parent_record_id": str(ids[parent.identity])}
+        )
+    assert response.status_code == 200
+    assert {item["id"] for item in response.json()["records"]} == {
+        str(ids[child.identity]) for child in children
+    }
+    async with database() as db:
+        first = await service.list_records(
+            db, fence.organization_id, fence.sync_id, RecordListQuery(filters=filters, limit=1)
+        )
+        assert first.has_more and first.records[0].parent == parent.identity
+        with pytest.raises(InvalidRecordCursor):
+            await service.list_records(
+                db,
+                fence.organization_id,
+                fence.sync_id,
+                RecordListQuery(
+                    filters=RecordFilters(parent_record_id=ids[other.identity]),
+                    cursor=first.next_cursor,
+                ),
+            )
+        for organization, sync in ((uuid4(), fence.sync_id), (fence.organization_id, uuid4())):
+            with pytest.raises(RecordNotFound):
+                await service.list_records(db, organization, sync, RecordListQuery(filters=filters))
+    # Attachment inventory changes hide previously attested children on the next page.
+    await store(database, capture, fence, parent.model_copy(update={"payload": {"files": []}}))
+    async with database() as db:
+        page = await service.list_records(
+            db,
+            fence.organization_id,
+            fence.sync_id,
+            RecordListQuery(filters=filters, cursor=first.next_cursor),
+        )
+        assert not page.records
+    await store(
+        database,
+        capture,
+        fence,
+        parent.model_copy(update={"kind": "delete", "removal_reason": "access_revoked"}),
+    )
+    async with database() as db:
+        with pytest.raises(RecordNotFound):
+            await service.list_records(
+                db,
+                fence.organization_id,
+                fence.sync_id,
+                RecordListQuery(filters=filters, cursor=first.next_cursor),
+            )
