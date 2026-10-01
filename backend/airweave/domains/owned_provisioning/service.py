@@ -132,6 +132,9 @@ class OwnedProvisioningService:
                 sync.status = "active"
                 source.is_authenticated = True
                 row.verified_at = utc_now_naive()
+                # Admission reloads Sync with populate_existing; production disables
+                # autoflush. Keep readiness and admission in this same transaction.
+                await db.flush()
                 if row.initial_job_id is None:
                     job = await self.jobs.create(db, SyncJobCreate(sync_id=sync.id), ctx, uow=uow)
                     await db.flush()

@@ -513,3 +513,59 @@ async def test_outlook_fresh_source_retry_and_principal_cannot_downgrade_owned_c
         assert (await db.get(Sync, first.sync_id)).writer_epoch == original_epoch
     lifecycle.create.assert_awaited_once()
     workflows.run_source_connection_workflow.assert_awaited_once()
+
+
+async def test_verified_source_job_admission_without_autoflush(database, setup):
+    """Production sessions must persist readiness before admission reloads the Sync."""
+    ctx, service, request, account, lifecycle, schedules, workflows = setup
+    async with database(autoflush=False) as db:
+        result = await service.ensure(db, ctx, account, request)
+        assert result.state == "ready"
+    async with database(autoflush=False) as db:
+        sync = await db.get(Sync, result.sync_id)
+        source = await db.get(SourceConnection, result.source_connection_id)
+        row = await db.scalar(
+            select(OwnedProvisioning).where(OwnedProvisioning.account_id == account)
+        )
+        job = await db.get(SyncJob, row.initial_job_id)
+        assert sync.provisioning_ready_generation == request.generation
+        assert sync.status == "active" and source.is_authenticated
+        assert row.verified_at is not None
+        assert job.provisioning_generation == request.generation
+        assert (await service.ensure(db, ctx, account, request)) == result
+        assert await db.scalar(select(func.count()).select_from(SyncJob)) == 1
+    lifecycle.create.assert_awaited_once()
+    workflows.run_source_connection_workflow.assert_awaited_once()
+
+
+async def test_job_admission_failure_rolls_back_verified_readiness(database, setup, monkeypatch):
+    """Flushed verification and a real admitted job remain in the same transaction."""
+    ctx, service, request, account, lifecycle, schedules, workflows = setup
+    create_job = service.jobs.create
+
+    async def fail_after_admission(db, obj_in, ctx, uow=None):
+        job = await create_job(db, obj_in, ctx, uow=uow)
+        await db.flush()
+        assert job.provisioning_generation == request.generation
+        raise RuntimeError("Synthetic failure after real job admission")
+
+    monkeypatch.setattr(service.jobs, "create", fail_after_admission)
+    async with database(autoflush=False) as db:
+        with pytest.raises(RuntimeError, match="Synthetic failure after real job admission"):
+            await service.ensure(db, ctx, account, request)
+    async with database(autoflush=False) as db:
+        row = await db.scalar(
+            select(OwnedProvisioning).where(OwnedProvisioning.account_id == account)
+        )
+        sync = await db.get(Sync, row.sync_id)
+        source = await db.get(SourceConnection, row.source_connection_id)
+        assert row.verified_at is None and row.initial_job_id is None
+        assert sync.provisioning_ready_generation != request.generation
+        assert sync.status != "active" and not source.is_authenticated
+        assert await db.scalar(select(func.count()).select_from(SyncJob)) == 0
+        assert (await service.get(db, ctx, account)).state == "pending"
+    schedules.create_or_update_schedule.assert_not_awaited()
+    workflows.run_source_connection_workflow.assert_not_awaited()
+    monkeypatch.setattr(service.jobs, "create", create_job)
+    async with database(autoflush=False) as db:
+        assert (await service.ensure(db, ctx, account, request)).state == "ready"
