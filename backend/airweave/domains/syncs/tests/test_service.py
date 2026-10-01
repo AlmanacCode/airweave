@@ -1079,6 +1079,18 @@ async def test_create_no_cron_no_run_immediately():
         ("gmail", None, 2),
         ("slack", None, 2),
         ("outlook_mail", None, 1),
+        ("stripe", None, 1),
+        (
+            "stripe",
+            {
+                "original_capture": {
+                    "expected_account_id": "acct_selected",
+                    "livemode": False,
+                    "api_version": "2025-06-30.basil",
+                }
+            },
+            2,
+        ),
         ("outlook_mail", {"capture_originals": True, "expected_principal_id": "native-owner"}, 2),
     ],
 )
@@ -1108,6 +1120,7 @@ async def test_create_with_cron_calls_temporal_schedule(
     from airweave.platform.sources.gmail import GmailSource
     from airweave.platform.sources.outlook_mail import OutlookMailSource
     from airweave.platform.sources.slack import SlackSource
+    from airweave.platform.sources.stripe import StripeSource
 
     source_entry = _mock_source_entry(short_name=source_kind)
     source_entry.source_class_ref = {
@@ -1115,6 +1128,7 @@ async def test_create_with_cron_calls_temporal_schedule(
         "gmail": GmailSource,
         "slack": SlackSource,
         "outlook_mail": OutlookMailSource,
+        "stripe": StripeSource,
     }[source_kind]
     result = await svc.create(
         AsyncMock(),

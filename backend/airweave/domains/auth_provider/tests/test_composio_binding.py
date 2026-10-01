@@ -65,6 +65,7 @@ async def test_managed_binding_rejects_wrong_or_missing_identity(
 @pytest.mark.parametrize(
     "source,user_id",
     [
+        ("stripe", "owner"),
         ("notion", None),
         ("notion", "owner"),
         ("wispr", "owner"),

@@ -31,7 +31,7 @@ from airweave.domains.syncs.protocols import SyncRepositoryProtocol, SyncService
 from airweave.domains.syncs.types import InvalidSyncTransitionError, OptimisticLockError
 from airweave.domains.temporal.protocols import TemporalScheduleServiceProtocol
 from airweave.models.source_connection import SourceConnection
-from airweave.platform.configs.config import OutlookMailConfig
+from airweave.platform.configs.config import OutlookMailConfig, StripeConfig
 from airweave.schemas.source_connection import (
     AuthenticationMethod,
     ScheduleConfig,
@@ -60,6 +60,19 @@ def _validate_outlook_capture_mode(source: SourceConnection, config: dict[str, A
         raise HTTPException(
             status_code=400,
             detail="Create a new source to change the Outlook original capture principal",
+        )
+
+
+def _validate_stripe_capture_binding(source: SourceConnection, config: dict[str, Any]) -> None:
+    """Account, API version, mode and capture representation require fresh identities."""
+    if source.short_name != "stripe":
+        return
+    previous = StripeConfig.model_validate(source.config_fields or {})
+    proposed = StripeConfig.model_validate(config)
+    if previous.original_capture != proposed.original_capture:
+        raise HTTPException(
+            status_code=400,
+            detail="Create a new source to change Stripe original capture binding",
         )
 
 
@@ -138,6 +151,7 @@ class SourceConnectionUpdateService(SourceConnectionUpdateServiceProtocol):
                     source_conn.short_name, update_data["config"], ctx
                 )
                 _validate_outlook_capture_mode(source_conn, validated_config)
+                _validate_stripe_capture_binding(source_conn, validated_config)
                 update_data["config_fields"] = validated_config
                 del update_data["config"]
 

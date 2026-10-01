@@ -148,6 +148,7 @@ class ComposioAuthProvider(BaseAuthProvider):
             "github": frozenset({"api.github.com"}),
             "notion": frozenset({"api.notion.com"}),
             "attio": frozenset({"api.attio.com"}),
+            "stripe": frozenset({"api.stripe.com"}),
         }
         if source_short_name not in hosts and source_short_name != "wispr":
             raise AuthProviderConfigError(

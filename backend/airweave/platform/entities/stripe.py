@@ -163,8 +163,8 @@ class StripeChargeEntity(BaseEntity):
     created_time: datetime = AirweaveField(
         ..., description="When the charge was created.", is_created_at=True
     )
-    updated_time: datetime = AirweaveField(
-        ..., description="Last activity timestamp for the charge.", is_updated_at=True
+    updated_time: Optional[datetime] = AirweaveField(
+        None, description="Last activity timestamp for the charge.", is_updated_at=True
     )
     web_url_value: Optional[str] = AirweaveField(
         None,
@@ -180,12 +180,14 @@ class StripeChargeEntity(BaseEntity):
     currency: Optional[str] = AirweaveField(
         None, description="Three-letter ISO currency code", embeddable=True
     )
-    captured: bool = AirweaveField(
-        False, description="Whether the charge was captured", embeddable=True
+    captured: Optional[bool] = AirweaveField(
+        None, description="Whether the charge was captured", embeddable=True
     )
-    paid: bool = AirweaveField(False, description="Whether the charge was paid", embeddable=True)
-    refunded: bool = AirweaveField(
-        False, description="Whether the charge was refunded", embeddable=True
+    paid: Optional[bool] = AirweaveField(
+        None, description="Whether the charge was paid", embeddable=True
+    )
+    refunded: Optional[bool] = AirweaveField(
+        None, description="Whether the charge was refunded", embeddable=True
     )
     description: Optional[str] = AirweaveField(
         None, description="Arbitrary description of the charge", embeddable=True
@@ -270,8 +272,8 @@ class StripeCustomerEntity(BaseEntity):
     created_time: datetime = AirweaveField(
         ..., description="When the customer was created.", is_created_at=True
     )
-    updated_time: datetime = AirweaveField(
-        ..., description="Timestamp of the latest update.", is_updated_at=True
+    updated_time: Optional[datetime] = AirweaveField(
+        None, description="Timestamp of the latest update.", is_updated_at=True
     )
     web_url_value: Optional[str] = AirweaveField(
         None,
@@ -300,8 +302,8 @@ class StripeCustomerEntity(BaseEntity):
         description="ID of the default payment source (e.g. card) attached to this customer",
         embeddable=False,
     )
-    delinquent: bool = AirweaveField(
-        False, description="Whether the customer has any unpaid/overdue invoices", embeddable=True
+    delinquent: Optional[bool] = AirweaveField(
+        None, description="Whether the customer has any unpaid/overdue invoices", embeddable=True
     )
     invoice_prefix: Optional[str] = AirweaveField(
         None, description="Prefix for the customer's invoices", embeddable=False
@@ -383,8 +385,8 @@ class StripeInvoiceEntity(BaseEntity):
     created_time: datetime = AirweaveField(
         ..., description="When the invoice was created.", is_created_at=True
     )
-    updated_time: datetime = AirweaveField(
-        ..., description="When the invoice was last updated.", is_updated_at=True
+    updated_time: Optional[datetime] = AirweaveField(
+        None, description="When the invoice was last updated.", is_updated_at=True
     )
     web_url_value: Optional[str] = AirweaveField(
         None,
@@ -417,8 +419,8 @@ class StripeInvoiceEntity(BaseEntity):
     due_date: Optional[datetime] = AirweaveField(
         None, description="Date on which payment is due (if applicable)", embeddable=True
     )
-    paid: bool = AirweaveField(
-        False, description="Whether the invoice has been fully paid", embeddable=True
+    paid: Optional[bool] = AirweaveField(
+        None, description="Whether the invoice has been fully paid", embeddable=True
     )
     currency: Optional[str] = AirweaveField(
         None, description="Three-letter ISO currency code (e.g. 'usd')", embeddable=True
@@ -497,8 +499,8 @@ class StripePaymentIntentEntity(BaseEntity):
     created_time: datetime = AirweaveField(
         ..., description="When the payment intent was created.", is_created_at=True
     )
-    updated_time: datetime = AirweaveField(
-        ..., description="Last update timestamp for the payment intent.", is_updated_at=True
+    updated_time: Optional[datetime] = AirweaveField(
+        None, description="Last update timestamp for the payment intent.", is_updated_at=True
     )
     web_url_value: Optional[str] = AirweaveField(
         None,
@@ -689,8 +691,8 @@ class StripePayoutEntity(BaseEntity):
     created_time: datetime = AirweaveField(
         ..., description="When the payout was created.", is_created_at=True
     )
-    updated_time: datetime = AirweaveField(
-        ..., description="Last update timestamp for the payout.", is_updated_at=True
+    updated_time: Optional[datetime] = AirweaveField(
+        None, description="Last update timestamp for the payout.", is_updated_at=True
     )
     web_url_value: Optional[str] = AirweaveField(
         None,
@@ -852,8 +854,8 @@ class StripeSubscriptionEntity(BaseEntity):
     created_time: datetime = AirweaveField(
         ..., description="When the subscription was created.", is_created_at=True
     )
-    updated_time: datetime = AirweaveField(
-        ..., description="Last update timestamp for the subscription.", is_updated_at=True
+    updated_time: Optional[datetime] = AirweaveField(
+        None, description="Last update timestamp for the subscription.", is_updated_at=True
     )
     web_url_value: Optional[str] = AirweaveField(
         None,
@@ -881,8 +883,8 @@ class StripeSubscriptionEntity(BaseEntity):
         description="End of the current billing period for this subscription",
         embeddable=True,
     )
-    cancel_at_period_end: bool = AirweaveField(
-        False,
+    cancel_at_period_end: Optional[bool] = AirweaveField(
+        None,
         description="Whether the subscription will cancel at the end of the current period",
         embeddable=True,
     )

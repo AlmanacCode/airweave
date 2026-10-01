@@ -149,22 +149,43 @@ async def test_resumed_mailbox_page_preserves_original_and_updates_move_in_place
         assert projected.parts[-1].entity is None
 
 
-async def test_factory_rejects_mode_conflict_before_auth_or_cursor_reset(database, source):
+@pytest.mark.parametrize(
+    "provider,original_config",
+    [
+        ("outlook_mail", {"capture_originals": True, "expected_principal_id": "mailbox"}),
+        (
+            "stripe",
+            {
+                "original_capture": {
+                    "expected_account_id": "acct_selected",
+                    "livemode": False,
+                    "api_version": "2025-06-30.basil",
+                }
+            },
+        ),
+    ],
+)
+async def test_factory_rejects_mode_conflict_before_auth_or_cursor_reset(
+    database, source, provider, original_config
+):
     """A full sync or skip-load cannot reinterpret a persisted Outlook cursor."""
     from airweave.domains.sync_pipeline.config import SyncConfig
     from airweave.domains.sync_pipeline.factory import SyncFactory
     from airweave.models.sync_cursor import SyncCursor
     from airweave.platform.sources.outlook_mail import OutlookMailSource
+    from airweave.platform.sources.stripe import StripeSource
 
     _, fence = source
     factory = object.__new__(SyncFactory)
     factory._source_lifecycle_service = MagicMock(create=AsyncMock())
     factory._source_registry = MagicMock()
-    factory._source_registry.get.return_value.source_class_ref = OutlookMailSource
+    factory._source_registry.get.return_value.source_class_ref = (
+        OutlookMailSource if provider == "outlook_mail" else StripeSource
+    )
     factory._build_arf_replay_source = AsyncMock(return_value="offline legacy replay")
     ctx = MagicMock()
     ctx.organization.id = fence.organization_id
-    sc = MagicMock(short_name="outlook_mail", config_fields={})
+    sc = MagicMock(short_name=provider, config_fields={})
     sync = MagicMock(id=fence.sync_id)
     job = MagicMock(id=fence.job_id)
     replay = SyncConfig.model_validate({"behavior": {"replay_from_arf": True}})
@@ -177,11 +198,12 @@ async def test_factory_rejects_mode_conflict_before_auth_or_cursor_reset(databas
             db.add(cursor)
         cursor.cursor_data = {}
         await db.flush()
-        assert await factory._build_source(
-            db, sync, job, ctx, MagicMock(), sc, False, replay
-        ) == "offline legacy replay"
+        assert (
+            await factory._build_source(db, sync, job, ctx, MagicMock(), sc, False, replay)
+            == "offline legacy replay"
+        )
         factory._build_arf_replay_source.reset_mock()
-        sc.config_fields = {"capture_originals": True, "expected_principal_id": "mailbox"}
+        sc.config_fields = original_config
         with pytest.raises(ValueError, match="not mutable ARF"):
             await factory._build_source(db, sync, job, ctx, MagicMock(), sc, False, replay)
         cursor.cursor_data = {"delta_link": "legacy continuation"}

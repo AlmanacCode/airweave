@@ -744,3 +744,34 @@ async def test_native_update_cannot_rebind_identity():
     assert error.value.status_code == 409
     db.commit.assert_not_awaited()
     db.scalar.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        None,
+        {"livemode": True},
+        {"expected_account_id": "acct_other"},
+        {"api_version": "2026-01-28.clover"},
+    ],
+)
+async def test_stripe_capture_binding_cannot_change_in_place(change):
+    binding = {
+        "expected_account_id": "acct_selected",
+        "livemode": False,
+        "api_version": "2025-06-30.basil",
+    }
+    sc = _make_sc(short_name="stripe")
+    sc.config_fields = {"original_capture": binding}
+    sc_repo = FakeSourceConnectionRepository()
+    sc_repo.seed(sc.id, sc)
+    config = {"original_capture": None if change is None else {**binding, **change}}
+    validation = FakeSourceValidationService()
+    validation.seed_config_result("stripe", config)
+    svc = _build_service(sc_repo=sc_repo, source_validation=validation)
+    with pytest.raises(HTTPException, match="Create a new source"):
+        await svc.update(
+            _unmanaged_db(), id=sc.id, obj_in=SourceConnectionUpdate(config=config), ctx=_make_ctx()
+        )
+    assert sc.config_fields == {"original_capture": binding}
+    assert not any(call[0] == "update" for call in sc_repo._calls)

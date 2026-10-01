@@ -72,7 +72,7 @@ from airweave.models.capture_scan import CaptureScan
 from airweave.models.entity import Entity
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync_cursor import SyncCursor as StoredSyncCursor
-from airweave.platform.configs.config import OutlookMailConfig
+from airweave.platform.configs.config import OutlookMailConfig, StripeConfig
 from airweave.platform.sources._base import BaseSource
 
 from .entity.pipeline import EntityPipeline
@@ -400,15 +400,21 @@ class SyncFactory(SyncFactoryProtocol):
         access_token: Optional[str] = None,
     ) -> SourceBuildResult:
         """Build source instance, cursor, file service, and node selections."""
-        outlook_capture = False
+        composed_capture = False
         if source_connection.short_name == "outlook_mail":
-            outlook_capture = OutlookMailConfig.model_validate(
+            composed_capture = OutlookMailConfig.model_validate(
                 source_connection.config_fields or {}
             ).capture_originals
-            await self._validate_outlook_capture_mode(db, sync.id, ctx, outlook_capture)
+        elif source_connection.short_name == "stripe":
+            composed_capture = (
+                StripeConfig.model_validate(source_connection.config_fields or {}).original_capture
+                is not None
+            )
+        if source_connection.short_name in {"outlook_mail", "stripe"}:
+            await self._validate_composed_capture_mode(db, sync.id, ctx, composed_capture)
         if execution_config and execution_config.behavior.replay_from_arf:
             source_class = self._source_registry.get(source_connection.short_name).source_class_ref
-            if outlook_capture or isinstance(source_class, (CanonicalSource, CanonicalPageSource)):
+            if composed_capture or isinstance(source_class, (CanonicalSource, CanonicalPageSource)):
                 raise ValueError(
                     "Canonical records must be reindexed from Postgres, not mutable ARF"
                 )
@@ -447,10 +453,10 @@ class SyncFactory(SyncFactoryProtocol):
             source=source, cursor=cursor, files=files, node_selections=node_selections
         )
 
-    async def _validate_outlook_capture_mode(
+    async def _validate_composed_capture_mode(
         self, db: AsyncSession, sync_id: UUID, ctx: BaseContext, capture_originals: bool
     ) -> None:
-        """Never reinterpret persisted IDs or cursors when selecting an Outlook adapter."""
+        """Never reinterpret persisted IDs or cursors when selecting an original capture adapter."""
         scope = (Entity.sync_id == sync_id, Entity.organization_id == ctx.organization.id)
         legacy, canonical, scanned = (
             await db.execute(
@@ -484,7 +490,7 @@ class SyncFactory(SyncFactoryProtocol):
             not capture_originals and (canonical or scanned or has_canonical_cursor)
         ):
             raise ValueError(
-                "Outlook capture mode differs from retained state; create a new source"
+                "Original capture mode differs from retained state; create a new source"
             )
 
     async def _build_arf_replay_source(

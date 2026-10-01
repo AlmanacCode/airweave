@@ -4,7 +4,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 
 from airweave.platform.configs._base import BaseConfig, RequiredTemplateConfig
 from airweave.platform.utils.ssrf import validate_host, validate_url
@@ -859,10 +867,20 @@ class SQliteConfig(SourceConfig):
     pass
 
 
-class StripeConfig(SourceConfig):
-    """Stripe configuration schema."""
+class StripeCaptureConfig(BaseModel):
+    """Trusted immutable source identity; different accounts/modes need fresh sources."""
 
-    pass
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    expected_account_id: str = Field(pattern=r"^acct_[A-Za-z0-9]+$")
+    livemode: StrictBool
+    api_version: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}(?:\.[a-z]+)?$")
+    connected_account_id: str | None = Field(default=None, pattern=r"^acct_[A-Za-z0-9]+$")
+
+
+class StripeConfig(SourceConfig):
+    """Legacy entity ingestion, or explicitly bound original capture on a fresh source."""
+
+    original_capture: StripeCaptureConfig | None = None
 
 
 class PipedriveConfig(SourceConfig):

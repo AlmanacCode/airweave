@@ -464,6 +464,10 @@ async def _map_entities(
         from airweave.domains.entities.canonical.attio_projection import map_attio
 
         entities = map_attio(record)
+    elif source_name == "stripe":
+        from airweave.domains.entities.canonical.stripe_projection import map_stripe
+
+        entities = map_stripe(record)
     elif source_name == "notion":
         from airweave.domains.entities.canonical.notion_projection import map_notion
 
