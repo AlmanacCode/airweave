@@ -1,5 +1,7 @@
 """Original-record indexed retrieval using the existing executor and SQL authority."""
 
+import asyncio
+import math
 import re
 from collections import defaultdict
 from uuid import UUID
@@ -10,6 +12,8 @@ from sqlalchemy import and_, case, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from airweave.api.context import ApiContext
+from airweave.core.protocols.reranker import RerankerProtocol, RerankerResult
+from airweave.core.protocols.tokenizer import TokenizerProtocol
 from airweave.domains.entities.canonical.coverage import capture_coverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
@@ -22,6 +26,7 @@ from airweave.domains.entities.canonical.search_metadata import (
 from airweave.domains.entities.canonical.source import indexed_record_types
 from airweave.domains.entities.canonical.store import content_is_available
 from airweave.domains.search.owned_models import (
+    OwnedRanking,
     OwnedSearchCoverage,
     OwnedSearchHit,
     OwnedSearchRequest,
@@ -70,12 +75,21 @@ class _EnrichmentRecord(BaseModel):
 
 
 class OwnedSearchService:
-    """No provider lifecycle, planner, answer generator or reranker dependency."""
+    """Canonical retrieval and optional shared ranking, without source provider calls."""
 
-    def __init__(self, executor: SearchPlanExecutorProtocol, registry: SourceRegistryProtocol):
+    def __init__(
+        self,
+        executor: SearchPlanExecutorProtocol,
+        registry: SourceRegistryProtocol,
+        *,
+        reranker: RerankerProtocol | None = None,
+        tokenizer: TokenizerProtocol | None = None,
+    ):
         """Reuse the executor and registry without another retrieval stack."""
         self._executor = executor
         self._registry = registry
+        self._reranker = reranker
+        self._tokenizer = tokenizer
 
     async def search(
         self,
@@ -98,7 +112,7 @@ class OwnedSearchService:
                 },
             )
         scope_snapshot = self._scope_identity(scopes)
-        hits, scores, exclusions, postfiltered = {}, {}, 0, 0
+        hits, scores, matched_text, exclusions, postfiltered = {}, {}, {}, 0, 0
         engine_partial, full = False, False
         plan = SearchPlan(
             query=SearchQuery(primary=request.query),
@@ -121,7 +135,7 @@ class OwnedSearchService:
                     collection_readable_id=readable_id,
                     indexed_only=True,
                 )
-                group_hits, group_scores, rejected, filtered = await self._enrich(
+                group_hits, group_scores, group_text, rejected, filtered = await self._enrich(
                     db, ctx, request, sync_ids, scopes, results
                 )
             engine_partial |= results.engine_partial
@@ -129,24 +143,39 @@ class OwnedSearchService:
             full |= len(results.results) + results.excluded_candidates >= 200
             hits.update(group_hits)
             scores.update(group_scores)
+            matched_text.update(group_text)
             exclusions += rejected
             postfiltered += filtered
+        # Revalidate the whole union before any remote text disclosure: earlier
+        # collections may have changed while later collections were retrieved.
         async with sessions() as db:
-            sources = await self._coverage(db, ctx, request)
             fresh_scopes, _ = await self._resolve_scopes(db, ctx, request)
             if self._scope_identity(fresh_scopes) != scope_snapshot:
                 raise HTTPException(404, "Requested indexed sources changed during retrieval")
             eligible = await self._final_publications(db, ctx, request, scores, scope_snapshot)
         exclusions += len(hits.keys() - eligible)
-        ranked = sorted(hits.keys() & eligible, key=lambda key: (-scores[key][0], str(key)))
+        candidates = sorted(hits.keys() & eligible, key=lambda key: (-scores[key][0], str(key)))
+        ranked, ranking = await self._rank(request.query, candidates, hits, matched_text)
+        # No SQL connection is held across the reranker await. No network I/O
+        # follows this final authorization/publication read boundary.
+        async with sessions() as db:
+            sources = await self._coverage(db, ctx, request)
+            fresh_scopes, _ = await self._resolve_scopes(db, ctx, request)
+            if self._scope_identity(fresh_scopes) != scope_snapshot:
+                raise HTTPException(404, "Requested indexed sources changed during retrieval")
+            final = await self._final_publications(db, ctx, request, scores, scope_snapshot)
+        exclusions += len(set(candidates) - final)
+        ranked = [key for key in ranked if key in final]
         return OwnedSearchResponse(
             items=tuple(hits[key] for key in ranked[: request.limit]),
+            ranking=ranking,
             sources=sources,
             candidate_window_full=full,
             engine_partial=engine_partial,
             excluded_candidates=exclusions,
             postfilter_excluded=postfiltered,
-            retrieval_incomplete=engine_partial
+            retrieval_incomplete=ranking.shortlist_truncated
+            or engine_partial
             or full
             or exclusions > 0
             or postfiltered > 0
@@ -159,6 +188,82 @@ class OwnedSearchService:
                 for row in sources
             ),
         )
+
+    async def _rank(
+        self,
+        query: str,
+        candidates: list[UUID],
+        hits: dict[UUID, OwnedSearchHit],
+        matched_text: dict[UUID, str],
+    ) -> tuple[list[UUID], OwnedRanking]:
+        """One model call over a bounded mixed shortlist; failures keep retrieval order."""
+        shortlist = candidates[:200]
+        ranking = OwnedRanking(
+            candidates_considered=len(candidates),
+            shortlisted_candidates=len(shortlist),
+            shortlist_truncated=len(candidates) > len(shortlist),
+        )
+        if not shortlist:
+            return [], ranking.model_copy(update={"fallback_reason": None})
+        if self._reranker is None or self._tokenizer is None:
+            return shortlist, ranking
+        documents, truncated = [], 0
+        for key in shortlist:
+            title = hits[key].title[:256]
+            text = f"{title}\n\n{matched_text[key]}"
+            document = self._bounded_document(text)
+            documents.append(document)
+            truncated += int(document != text or title != hits[key].title)
+        ranking = ranking.model_copy(update={"input_truncated_documents": truncated})
+        try:
+            async with asyncio.timeout(10):
+                results = await self._reranker.rerank(query, documents, top_n=len(documents))
+        except TimeoutError:
+            return shortlist, ranking.model_copy(update={"fallback_reason": "timeout"})
+        except Exception:
+            # Never log provider errors: SDK messages can contain submitted text.
+            return shortlist, ranking.model_copy(update={"fallback_reason": "provider_error"})
+        try:
+            invalid = (
+                not isinstance(results, list)
+                or len(results) != len(shortlist)
+                or any(
+                    not isinstance(result, RerankerResult)
+                    or type(result.index) is not int
+                    or not 0 <= result.index < len(shortlist)
+                    or type(result.relevance_score) not in (int, float)
+                    or not math.isfinite(result.relevance_score)
+                    for result in results
+                )
+                or {result.index for result in results} != set(range(len(shortlist)))
+            )
+        except (TypeError, ValueError, OverflowError):
+            invalid = True
+        if invalid:
+            return shortlist, ranking.model_copy(update={"fallback_reason": "invalid_output"})
+        ordered = sorted(results, key=lambda result: (-result.relevance_score, result.index))
+        return [shortlist[result.index] for result in ordered], ranking.model_copy(
+            update={
+                "method": "shared_rerank",
+                "fallback_reason": None,
+                "candidates_reranked": len(shortlist),
+            }
+        )
+
+    def _bounded_document(self, text: str) -> str:
+        """Bound local tokenizer counts; provider tokenization and billing may differ."""
+        if self._tokenizer.count_tokens(text) <= 2048:
+            return text
+        accepted, rejected = 0, len(text)
+        while rejected - accepted > 1:
+            midpoint = (accepted + rejected) // 2
+            if self._tokenizer.count_tokens(text[:midpoint]) <= 2048:
+                accepted = midpoint
+            else:
+                rejected = midpoint
+        # Token count need not be monotonic in characters. The accepted prefix
+        # was measured explicitly, so this remains a safe bound, not a max-length claim.
+        return text[:accepted]
 
     @staticmethod
     def _filtered(request: OwnedSearchRequest) -> bool:
@@ -276,11 +381,17 @@ class OwnedSearchService:
         sync_ids: list[UUID],
         scopes: dict[UUID, _SourceScope],
         results: SearchResults,
-    ) -> tuple[dict[UUID, OwnedSearchHit], dict[UUID, tuple[float, ProjectionLocator]], int, int]:
+    ) -> tuple[
+        dict[UUID, OwnedSearchHit],
+        dict[UUID, tuple[float, ProjectionLocator]],
+        dict[UUID, str],
+        int,
+        int,
+    ]:
         locators = [value for result in results.results if (value := self._locator(result))]
         if not locators:
-            return {}, {}, len(results.results), 0
-        hits, scores, exclusions, postfiltered = {}, {}, 0, 0
+            return {}, {}, {}, len(results.results), 0
+        hits, scores, matched_text, exclusions, postfiltered = {}, {}, {}, 0, 0
         # Recheck current publication while obtaining native identity. Never enrich
         # from an unvalidated cached hit after a concurrent capture/permission change.
         rows = await db.execute(
@@ -376,11 +487,12 @@ class OwnedSearchService:
                     ),
                 )
                 scores[row.id] = (1 / (60 + rank), locator)
+                matched_text[row.id] = result.textual_representation
             excerpt = result.textual_representation[:2000]
             current = hits[row.id]
             if excerpt and excerpt not in current.excerpts and len(current.excerpts) < 3:
                 hits[row.id] = current.model_copy(update={"excerpts": (*current.excerpts, excerpt)})
-        return hits, scores, exclusions, postfiltered
+        return hits, scores, matched_text, exclusions, postfiltered
 
     @staticmethod
     def _scope_identity(scopes: dict[UUID, _SourceScope]) -> set[tuple]:

@@ -1406,7 +1406,9 @@ def _create_search_services(
     )
 
     return {
-        "owned_search": OwnedSearchService(executor, source_registry),
+        "owned_search": OwnedSearchService(
+            executor, source_registry, reranker=reranker, tokenizer=tokenizer
+        ),
         "instant_search": instant_search,
         "classic_search": classic_search,
         "agentic_search": agentic_search,

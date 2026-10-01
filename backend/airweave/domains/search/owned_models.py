@@ -72,10 +72,30 @@ class OwnedSearchCoverage(BaseModel):
     extraction_unknown_records: int = 0
 
 
+class OwnedRanking(BaseModel):
+    """Ranking applies only to this request's bounded canonical-source candidates."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    method: Literal["shared_rerank", "retrieval_rank"] = "retrieval_rank"
+    fallback_reason: (
+        Literal["unconfigured", "timeout", "provider_error", "invalid_output"] | None
+    ) = "unconfigured"
+    candidates_considered: int = Field(default=0, ge=0)
+    candidates_reranked: int = Field(default=0, ge=0)
+    shortlisted_candidates: int = Field(default=0, ge=0, le=200)
+    shortlist_limit: Literal[200] = 200
+    document_token_limit: Literal[2048] = 2048
+    token_count_basis: Literal["local_tokenizer"] = "local_tokenizer"
+    timeout_seconds: Literal[10] = 10
+    input_truncated_documents: int = Field(default=0, ge=0)
+    shortlist_truncated: bool = False
+
+
 class OwnedSearchResponse(BaseModel):
     """Top results from bounded live candidate windows, without traversal promises."""
 
     items: tuple[OwnedSearchHit, ...]
+    ranking: OwnedRanking = Field(default_factory=OwnedRanking)
     sources: tuple[OwnedSearchCoverage, ...]
     consistency: Literal["live"] = "live"
     order: Literal["relevance"] = "relevance"
