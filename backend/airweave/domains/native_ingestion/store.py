@@ -1,7 +1,7 @@
 """Native admission composed with the existing canonical writer transaction."""
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.models import CaptureResult
@@ -55,26 +55,22 @@ def _admit(entity: Entity, snapshot: NativeSnapshot) -> bool:
     return True
 
 
-async def _validate_message_parent(
-    db: AsyncSession, request: IngestNativeBatch, snapshot: NativeSnapshot
+def _validate_message_parent(
+    snapshot: NativeSnapshot,
+    submitted: dict[tuple[str, str], NativeSnapshot],
+    retained: dict[tuple[str, str], Entity],
 ) -> None:
     """A late transcript page cannot join a newer session snapshot."""
     if snapshot.identity.record_type != "message":
         return
     parent = snapshot.parent
     assert parent is not None  # NativeSnapshot validates message identity before admission.
-    attested = next((item for item in request.snapshots if item.identity == parent), None)
+    key = (parent.record_type, parent.entity_key)
+    attested = submitted.get(key)
     if attested is None:
-        payload = await db.scalar(
-            select(Entity.source_payload).where(
-                Entity.organization_id == request.fence.organization_id,
-                Entity.sync_id == request.fence.sync_id,
-                Entity.entity_definition_short_name == parent.record_type,
-                Entity.entity_id == parent.entity_key,
-            )
-        )
+        entity = retained.get(key)
         try:
-            attested = NativeSnapshot.model_validate(payload)
+            attested = NativeSnapshot.model_validate(entity.source_payload if entity else None)
         except ValidationError as error:
             raise NativeAdmissionError("Message requires an attested native session") from error
     if (
@@ -118,26 +114,39 @@ class NativeIngestionStore:
             binding = NativeSourceBinding.model_validate(source.config_fields)
         except ValidationError as error:
             raise NativeAdmissionError("Native source binding is malformed") from error
+        submitted = {
+            (item.identity.record_type, item.identity.entity_key): item
+            for item in request.snapshots
+        }
+        keys = set(submitted)
+        keys.update(
+            (item.parent.record_type, item.parent.entity_key)
+            for item in request.snapshots
+            if item.parent is not None
+        )
+        # The sync writer lock already serializes mutations. Fetch exact identities
+        # and parent attestations once rather than adding a round trip per record.
+        rows = await db.scalars(
+            select(Entity)
+            .where(
+                Entity.organization_id == request.fence.organization_id,
+                Entity.sync_id == sync.id,
+                tuple_(Entity.entity_definition_short_name, Entity.entity_id).in_(sorted(keys)),
+            )
+            .execution_options(populate_existing=True)
+        )
+        retained = {(row.entity_definition_short_name, row.entity_id): row for row in rows}
         accepted = []
         unchanged = 0
         for snapshot in request.snapshots:
             dataset = "knowledge" if snapshot.identity.record_type == "knowledge" else "sessions"
             if snapshot.owner_id != binding.owner_id or dataset != binding.dataset:
                 raise NativeAdmissionError("Snapshot does not belong to the bound native source")
-            entity = await db.scalar(
-                select(Entity)
-                .where(
-                    Entity.organization_id == request.fence.organization_id,
-                    Entity.sync_id == sync.id,
-                    Entity.entity_definition_short_name == snapshot.identity.record_type,
-                    Entity.entity_id == snapshot.identity.entity_key,
-                )
-                .execution_options(populate_existing=True)
-            )
+            entity = retained.get((snapshot.identity.record_type, snapshot.identity.entity_key))
             if entity is not None and not _admit(entity, snapshot):
                 unchanged += 1
                 continue
-            await _validate_message_parent(db, request, snapshot)
+            _validate_message_parent(snapshot, submitted, retained)
             accepted.append(
                 CaptureRecord(
                     identity=snapshot.identity,

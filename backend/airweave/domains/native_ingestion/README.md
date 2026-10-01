@@ -18,6 +18,10 @@ the internal command itself is not an authorization credential.
 the only locking/capture dependencies. No table, independent journal, or
 alternate revision allocator is introduced.
 
+Admission loads the batch's exact record identities and parent attestations in
+one query under that writer lock. Canonical capture still owns its per-record
+writes; batching admission does not bypass its revision or visibility checks.
+
 Retained payloads explicitly identify their authority and snapshot provenance,
 contain the unchanged original JSON, and retain the authoritative version even
 for tombstones. Knowledge versions are scalar record revisions. Session and
