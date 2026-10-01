@@ -171,6 +171,78 @@ async def test_slack_pdf_publication_records_partial_extraction(database, source
         ]
         assert coverage.parts[1].key == "file:F1"
         assert row.completeness == "partial"
+        old_revision = row.record_revision
+
+    # Switch one retained inline original to explicit child ownership. The parent
+    # revision invalidates its previous PDF publication before children publish.
+    from airweave.domains.entities.canonical.requests import parent_container_key
+    from airweave.domains.entities.canonical.slack_files import SlackFileManifest, SlackFileOutcome
+
+    parent = item.identity
+    children = []
+    for index, native in enumerate(item.payload["files"]):
+        manifest = SlackFileManifest(
+            files=(
+                SlackFileOutcome(
+                    index=0,
+                    native_id=native["id"],
+                    outcome="captured" if index == 0 else "unavailable",
+                    reason=None if index == 0 else "access_denied",
+                ),
+            )
+        )
+        evidence = await files.store_canonical_blob(
+            manifest.model_dump_json().encode(), media_type="application/json"
+        )
+        refs = (evidence.model_copy(update={"role": "representation_manifest"}),)
+        if index == 0:
+            refs += (retained.model_copy(update={"source_path": ""}),)
+        children.append(
+            observation(
+                identity=RecordIdentity(
+                    record_type="file",
+                    native_id=native["id"],
+                    container_id=parent_container_key(parent),
+                ),
+                parent=parent,
+                payload=native,
+                completeness="complete" if index == 0 else "partial",
+                blobs=refs,
+            )
+        )
+    await capture(
+        database,
+        service,
+        fence,
+        item.model_copy(
+            update={
+                "payload_schema_version": 2,
+                "blobs": (),
+                "completeness": "complete",
+                "descendant_visibility_fields": ("files",),
+            }
+        ),
+        *children,
+    )
+    async with database() as db:
+        parent_row = await db.scalar(select(Entity).where(Entity.native_id == parent.native_id))
+        assert parent_row.record_revision > old_revision
+        assert parent_row.indexed_revision != parent_row.record_revision
+    result = await projector(database, storage).batch(
+        fence.organization_id, fence.sync_id, "slack", destination(), logger
+    )
+    assert result.published == 3 and result.failed == 0
+    async with database() as db:
+        rows = (await db.scalars(select(Entity).where(Entity.sync_id == fence.sync_id))).all()
+        coverage_by_id = {
+            row.native_id: await current_extraction(
+                db, fence.organization_id, fence.sync_id, row.id, row.record_revision
+            )
+            for row in rows
+        }
+        assert [part.key for part in coverage_by_id[parent.native_id].parts] == ["body"]
+        assert [part.outcome for part in coverage_by_id["F1"].parts] == ["indexed"]
+        assert [part.outcome for part in coverage_by_id["F2"].parts] == ["unavailable_original"]
 
 
 @pytest.mark.asyncio
@@ -220,3 +292,83 @@ async def test_manifest_enrichment_requires_exact_native_identity_and_blob_evide
     payload["files"][1]["native_id"] = "F3"
     with pytest.raises(ValueError, match="native message identities"):
         await run(payload)
+
+
+@pytest.mark.asyncio
+async def test_child_owned_message_never_indexes_inline_attachments():
+    source = message([{"id": "F1", "name": "one.pdf"}]).model_copy(
+        update={"payload_schema_version": 2, "completeness": "complete"}
+    )
+    storage = AsyncMock()
+    async with map_record(source, "slack", storage) as mapped:
+        assert [part.part.key for part in mapped.parts] == ["body"]
+    storage.read_file.assert_not_called()
+    with pytest.raises(ValueError, match="cannot retain inline"):
+        async with map_record(
+            source.model_copy(update={"blobs": (blob(source, b"x", 0),)}), "slack", storage
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_child_file_retained_and_unavailable_have_one_extraction_owner():
+    import json
+
+    from airweave.domains.entities.canonical.requests import parent_container_key
+
+    parent = message([]).identity
+    source = message([]).model_copy(
+        update={
+            "identity": RecordIdentity(
+                record_type="file", native_id="F1", container_id=parent_container_key(parent)
+            ),
+            "parent": parent,
+            "payload": {"id": "F1", "name": "one.pdf", "mimetype": "application/pdf"},
+        }
+    )
+    storage = AsyncMock()
+    for captured in (True, False):
+        content = b"fixture PDF bytes"
+        original = blob(source, content, 0).model_copy(update={"source_path": ""})
+        data = json.dumps(
+            {
+                "version": 1,
+                "files": [
+                    {
+                        "index": 0,
+                        "native_id": "F1",
+                        "outcome": "captured" if captured else "unavailable",
+                        "reason": None if captured else "access_denied",
+                    }
+                ],
+            }
+        ).encode()
+        manifest = blob(source, data, 0).model_copy(
+            update={"source_path": None, "role": "representation_manifest"}
+        )
+        current = source.model_copy(
+            update={"blobs": (manifest, original) if captured else (manifest,)}
+        )
+        contents = {manifest.key: data, original.key: content}
+        storage.read_file.side_effect = lambda key, contents=contents, **_: contents[key]
+        async with map_record(current, "slack", storage) as mapped:
+            assert len(mapped.parts) == 1 and mapped.parts[0].part.key == "file:F1"
+            assert (mapped.parts[0].entity is not None) == captured
+        with pytest.raises(ValueError, match="exact message parent"):
+            async with map_record(current.model_copy(update={"parent": None}), "slack", storage):
+                pass
+        if captured:
+            with pytest.raises(ValueError, match="root original"):
+                async with map_record(
+                    current.model_copy(
+                        update={
+                            "blobs": (
+                                manifest,
+                                original.model_copy(update={"source_path": "/files/0"}),
+                            )
+                        }
+                    ),
+                    "slack",
+                    storage,
+                ):
+                    pass

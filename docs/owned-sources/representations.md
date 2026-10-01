@@ -149,3 +149,28 @@ file denial remain partial acquisition evidence; missing OAuth scope fails the
 configured capture. Downloaded byte-count mismatch fails the page. Capture still
 commits whole provider pages: aggregate page download/retry cost has not been
 qualified live, even though individual files and metadata counts are bounded.
+
+### Durable Slack file children
+
+The child-owned topology is explicit: message payload schema **2** projects only
+its body and must contain no inline file blobs. Its unchanged native `files` list
+is inventory, not evidence that downloads completed. Schema **1** messages retain
+the legacy inline behavior described above; missing blobs never select topology.
+Unknown message schemas fail projection.
+
+A child `file` record must have its exact message parent, the canonical full-parent
+container key, and the matching native file ID in its original payload. The one
+original blob uses the empty JSON Pointer (`source_path=""`) because that record's
+payload is the native file object itself. A singleton acquisition manifest supplies
+captured/unavailable evidence and optional native metadata enrichment. Only the
+child owns that file's extraction part. Generic ancestry continues to authorize
+its reads, downloads and search; a locator never grants independent file access.
+
+Switching requires recapture under the new source fingerprint, schema-2 parent
+revisions and child acquisition. Parent revision validation hides the old inline
+publication before the replacement body-only generation and child generations
+publish. No blob is copied back to the parent and no global pipeline version is
+changed. Deployment and product reader migration remain separate activation gates.
+Tests exercise a real retained PDF transitioning from an inline publication to one
+body-only parent, one indexed file child and one unavailable child. Provider HTTP,
+real embeddings and live Vespa are not part of this synthetic SQL proof.
