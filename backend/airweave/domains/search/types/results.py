@@ -106,7 +106,7 @@ class SearchResult(BaseModel):
 
     web_url: str = Field(
         ...,
-        description="URL to view the entity in its source application (e.g., Notion, Asana).",
+        description="Source application URL, or empty when the record uses a canonical locator.",
     )
 
     url: Optional[str] = Field(

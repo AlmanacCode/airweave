@@ -461,7 +461,9 @@ class VespaVectorDB:
                 ),
                 airweave_system_metadata=self._extract_system_metadata(fields, entity_id),
                 access=self._extract_access_control(fields),
-                web_url=self._get_required_field(raw_source_fields, "web_url", entity_id),
+                # Native snapshots can be opened by canonical record ID without
+                # a provider web URL. Absence is valid, not a malformed index hit.
+                web_url=str(raw_source_fields.get("web_url") or ""),
                 url=fields.get("url"),
                 raw_source_fields=raw_source_fields,
             )
