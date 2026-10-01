@@ -19,7 +19,7 @@ from airweave.core.logging import logger
 from airweave.db.session import get_db
 from airweave.domains.converters.registry import ConverterRegistry
 from airweave.domains.embedders.fakes.embedder import FakeDenseEmbedder, FakeSparseEmbedder
-from airweave.domains.embedders.types import DenseEmbedding, SparseEmbedding
+from airweave.domains.embedders.types import DenseEmbedding, EmbeddingPurpose, SparseEmbedding
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.projector import CanonicalProjector
 from airweave.domains.entities.canonical.requests import BlobReference, RecordIdentity
@@ -46,7 +46,9 @@ pytestmark = pytest.mark.skipif(
 class FixedDense(FakeDenseEmbedder):
     """Only model inference is substituted; all processing stays production code."""
 
-    async def embed_many(self, texts):
+    async def embed_many(
+        self, texts: list[str], *, purpose: EmbeddingPurpose = "document"
+    ) -> list[DenseEmbedding]:
         return [DenseEmbedding(vector=[1.0] + [0.0] * 383) for _ in texts]
 
 
