@@ -31,8 +31,7 @@ from airweave.domains.native_ingestion.import_models import (
     NativeImportSummary,
     StartNativeImport,
 )
-from airweave.domains.native_ingestion.source_models import LockedNativeSource
-from airweave.domains.native_ingestion.source_store import NativeSourceStore
+from airweave.domains.native_ingestion.source_store import LockedNativeSource, NativeSourceStore
 from airweave.models.capture_scan import CaptureScan
 from airweave.models.sync_job import SyncJob
 

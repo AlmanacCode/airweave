@@ -3,7 +3,7 @@
 from uuid import UUID
 
 from fastapi import HTTPException
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,13 +11,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from airweave.domains.native_ingestion.models import NativeSourceBinding
 from airweave.domains.native_ingestion.source_models import (
     EnsureNativeSource,
-    LockedNativeSource,
+    NativeSource,
     native_source_id,
     native_sync_id,
 )
 from airweave.models.collection import Collection
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
+
+
+class LockedNativeSource(BaseModel):
+    """Internal ORM state held under Sync then SourceConnection row locks."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid", frozen=True)
+    sync: Sync
+    source: SourceConnection
+    binding: NativeSourceBinding
+
+    def response(self) -> NativeSource:
+        """Expose only stable identifiers and typed binding, not ORM/auth data."""
+        return NativeSource(
+            source_connection_id=self.source.id,
+            sync_id=self.sync.id,
+            organization_id=self.sync.organization_id,
+            binding=self.binding,
+            collection=self.source.readable_collection_id,
+            available=self.source.is_authenticated,
+        )
 
 
 class NativeSourceStore:

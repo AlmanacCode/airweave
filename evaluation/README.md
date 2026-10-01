@@ -125,3 +125,38 @@ returned terminal summary certifies bounded capture, not search publication.
 
 Tests live in the backend native-ingestion suite and require disposable PostgreSQL.
 The standalone retrieval-metrics test environment does not import this helper.
+
+### Operator command
+
+From the repository root, using the backend Python environment:
+
+```sh
+PYTHONPATH=backend:. backend/.venv/bin/python -m evaluation.native_import_cli \
+  --url http://127.0.0.1:18086/api/v1/ \
+  --input staged-knowledge.json --owner OWNER_ID --dataset knowledge \
+  --collection COLLECTION_ID --request-key stable-import-key
+```
+
+Supply `AIRWEAVE_API_KEY` through the process environment (for example a secret
+manager); there is no key argument or dotenv loading. No server database/settings
+credentials are needed. Use the backend API key authorized to attest this owner.
+The file is a UTF-8 JSON array of `NativeSnapshot` values, at most **32 MiB**.
+Use `--dataset sessions` for staged session roots and their original messages.
+This command publishes the supplied bounded set, not an account-wide backfill;
+it does not infer deletions from records omitted from the file.
+
+External URLs must use HTTPS; HTTP is allowed only for loopback IPs or localhost.
+URL credentials, queries and fragments are rejected. Redirects and environment
+proxies are disabled. Each HTTP operation has a 10-second connect timeout and
+60-second read/write/pool timeout, not a whole-import deadline. No automatic
+retry occurs. Keep the exact staged file and request key on failure; repeat the
+same command to recover durable progress. Do not change the file under that key.
+
+Success writes one JSON capture summary to stdout, including
+`capture_complete: true`, `coverage: "bounded"`, and `indexing: "not_verified"`.
+Search publication must be verified separately. Errors use stderr without raw
+payloads, keys, file paths or destination URLs. Exit codes: 0 completed capture;
+2 invalid configuration/input; 3 unknown network outcome; 4 destination rejection
+or inconsistent import progress (including cross-record preflight rejection);
+130 interrupted; 1 unexpected failure. Failed commands may have committed earlier
+pages: a nonzero exit is not evidence of rollback.

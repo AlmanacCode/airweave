@@ -3,11 +3,9 @@
 import json
 from uuid import UUID, uuid5
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from airweave.domains.native_ingestion.models import NativeModel, NativeSourceBinding
-from airweave.models.source_connection import SourceConnection
-from airweave.models.sync import Sync
 
 # Versioned protocol constants: changing these would create duplicate source identities.
 _SOURCE_NAMESPACE_V1 = UUID("b13e2720-64ab-4ac5-9a0f-6264e2fb783f")
@@ -48,23 +46,3 @@ class NativeSource(NativeModel):
     binding: NativeSourceBinding
     collection: str
     available: bool
-
-
-class LockedNativeSource(BaseModel):
-    """Internal ORM state held under Sync then SourceConnection row locks."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid", frozen=True)
-    sync: Sync
-    source: SourceConnection
-    binding: NativeSourceBinding
-
-    def response(self) -> NativeSource:
-        """Expose only stable identifiers and typed binding, not ORM/auth data."""
-        return NativeSource(
-            source_connection_id=self.source.id,
-            sync_id=self.sync.id,
-            organization_id=self.sync.organization_id,
-            binding=self.binding,
-            collection=self.source.readable_collection_id,
-            available=self.source.is_authenticated,
-        )
