@@ -13,6 +13,7 @@ from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
 from airweave.db.session import get_db
 from airweave.domains.entities.canonical.store import CanonicalStoreError, WriterBusy
+from airweave.domains.native_ingestion.access_models import NativeAccessChange, NativeRecordAccess
 from airweave.domains.native_ingestion.errors import NativeAdmissionError, NativeImportNotFound
 from airweave.domains.native_ingestion.import_models import NativeImportState, StartNativeImport
 from airweave.domains.native_ingestion.page_models import CommitNativePage, NativePageAck
@@ -173,6 +174,53 @@ async def cancel_native_import(
     try:
         return await container.native_imports.finish(
             db, ctx.organization.id, source_id, request_key, cancel=True
+        )
+    except NativeImportNotFound as error:
+        raise HTTPException(404, {"code": error.code, "message": str(error)}) from error
+    except CanonicalStoreError as error:
+        raise HTTPException(409, {"code": error.code, "message": str(error)}) from error
+
+
+@router.get(
+    "/{source_id}/imports/{request_key}/records/{record_id}/access",
+    response_model=NativeRecordAccess,
+)
+async def read_access(
+    source_id: UUID,
+    request_key: RequestKey,
+    record_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(backend_actor),
+    container: Container = Depends(deps.get_container),
+) -> NativeRecordAccess:
+    """Read access metadata under the authenticated native source binding."""
+    try:
+        return await container.native_imports.read_access(
+            db, ctx.organization.id, source_id, request_key, record_id
+        )
+    except NativeImportNotFound as error:
+        raise HTTPException(404, {"code": error.code, "message": str(error)}) from error
+    except CanonicalStoreError as error:
+        raise HTTPException(409, {"code": error.code, "message": str(error)}) from error
+
+
+@router.post(
+    "/{source_id}/imports/{request_key}/records/{record_id}/access",
+    response_model=NativeRecordAccess,
+)
+async def change_access(
+    source_id: UUID,
+    request_key: RequestKey,
+    record_id: UUID,
+    request: NativeAccessChange,
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(backend_actor),
+    container: Container = Depends(deps.get_container),
+) -> NativeRecordAccess:
+    """Accept explicit fresh source evidence; never restore from an old page retry."""
+    try:
+        return await container.native_imports.change_access(
+            db, ctx.organization.id, source_id, request_key, record_id, request
         )
     except NativeImportNotFound as error:
         raise HTTPException(404, {"code": error.code, "message": str(error)}) from error

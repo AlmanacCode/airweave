@@ -35,8 +35,8 @@ An equal version is accepted only for an identical snapshot; retries do not
 restore withdrawn visibility. Lower versions, conflicting equal versions and
 malformed retained state fail closed. Local scope withdrawal already preserves
 the canonical payload, so it also preserves native version state. Higher versions
-cannot reopen locally withdrawn records; explicit renewal needs a separately
-designed access-authority operation. Parent access gates remain canonical-owned.
+cannot reopen locally withdrawn records; use the explicit access observation
+operation below. Parent access gates remain canonical-owned.
 
 This is record admission, not proof of a complete session transcript or complete
 dataset. Pagination, final snapshot completion, deletion discovery, authoritative
@@ -66,8 +66,8 @@ reconciliation phase, and source completion remains a separate cycle barrier.
 Admission, capture, sightings and continuation either commit together or roll back.
 
 HTTP authentication, receipts, provisioning and completion/cancellation are
-implemented below. Explicit access renewal and authoritative publisher
-completeness remain pending. Native jobs cannot be cancelled through the generic
+implemented below, including explicit record access renewal. Authoritative
+publisher completeness and automatic source revalidation remain pending. Native jobs cannot be cancelled through the generic
 provider route: the guard checks the actual job's sync identity.
 
 ## Native search projection
@@ -115,8 +115,9 @@ remain until the subsequent declared scans reconcile them.
 Publisher-declared bounded snapshots use discovery-only completion policies;
 complete dataset snapshots use exhaustive policies. This declaration does not
 itself certify completeness. The HTTP lifecycle verifies final scopes and
-receipts; the publisher must establish stable export boundaries. Explicit access
-renewal remains a separate unfinished capability.
+receipts; the publisher must establish stable export boundaries. Explicit record
+access renewal is available under an active import as described below; source-wide
+credential renewal and automatic source revalidation remain separate.
 
 ## Import HTTP and page receipts
 
@@ -172,3 +173,42 @@ that import's cycle ID; once reused, the API reports unavailable/superseded inst
 of showing another import's progress. The import's terminal summary remains durable.
 Request keys are opaque, nonsecret identifiers: application diagnostics redact them,
 but deployment access logs require their own policy.
+
+
+## Explicit record access observations
+
+Backend-only GET/POST
+`/native/sources/{source_id}/imports/{request_key}/records/{record_id}/access`
+read or change current access. GET returns identity, retained revision, current parent
+visibility epoch, availability and removal reason, never original content. It works for a terminal import, but is
+a current-state read, not historical state at that import. Availability includes
+source authentication, active sync, record deletion and ancestor visibility.
+
+POST requires an active server-held writer and `expected_revision` from the retained
+record. Renewal of a message also requires `expected_parent_epoch` from the access
+read. Parent withdrawal/restoration invalidates old child evidence even if the child
+revision did not change. Roots use a null parent epoch. `action: withdraw` takes a
+confirmed `access_revoked` or `scope_removed` reason. It preserves original native payload/version and blob references while
+journaling withdrawal through canonical capture. A search miss or incomplete scan
+is not valid evidence. An ambiguous source404 requires provider/source interpretation.
+
+`action: renew` supplies a freshly read, owner-attested active NativeSnapshot for
+the exact record. Native owner, identity, version ordering and parent-version checks
+still apply. Equal native version requires identical content; it can now explicitly
+renew access at the expected local revision. Ordinary imports/page retries cannot.
+Newer ordinary child updates also cannot restore inherited unavailability; they require the same explicit renewal path.
+Restore parents first, then freshly attest children; restoration advances parent
+visibility so previous child attestations remain hidden until individually renewed.
+Source-wide authentication is not changed by this operation.
+
+Read retained revision *before* obtaining fresh source evidence. If another mutation
+wins meanwhile, CAS fails. After a lost response, GET current state; do not blindly
+change the expected revision and resend old evidence. This operation uses ordinary
+CAS recovery rather than a second idempotency journal. An already-active unchanged
+renewal may be a no-op. Access observations do not mark records seen in inventory;
+normal page capture still owns scan progress/completeness.
+
+No new table, migration, scheduler or source credential exists here. NativeImports
+owns the transaction; NativeAccessStore composes native admission and shared
+canonical revision/journal/visibility machinery. The trusted publisher remains
+responsible for obtaining actual source evidence and scheduling revalidation.

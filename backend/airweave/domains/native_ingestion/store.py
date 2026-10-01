@@ -41,7 +41,7 @@ def compare_versions(previous: NativeVersion, incoming: NativeVersion) -> int:
     return -1 if lower else 1 if higher else 0
 
 
-def _admit(entity: Entity, snapshot: NativeSnapshot) -> bool:
+def _admit(entity: Entity, snapshot: NativeSnapshot, *, renew: bool = False) -> bool:
     """Validate retained version state; False acknowledges an exact retained retry."""
     try:
         previous = NativeSnapshot.model_validate(entity.source_payload)
@@ -55,9 +55,9 @@ def _admit(entity: Entity, snapshot: NativeSnapshot) -> bool:
     if comparison == 0:
         if previous != snapshot:
             raise NativeAdmissionError("Native snapshot version has conflicting content")
-        # A retry acknowledges retention, never restores local visibility.
-        return False
-    if entity.removal_reason in ("access_revoked", "scope_removed", "absent"):
+        # Ordinary retries acknowledge retention. Only explicit access CAS renews.
+        return renew
+    if not renew and entity.removal_reason in ("access_revoked", "scope_removed", "absent"):
         raise NativeAdmissionError("Native source visibility requires explicit renewal")
     return True
 
@@ -110,6 +110,7 @@ def _admit_snapshots(
     request: IngestNativeBatch,
     *,
     sightings: bool,
+    revalidated_ids: tuple[UUID, ...] = (),
 ) -> NativeAdmission:
     """Apply version and membership rules to one preloaded bounded batch."""
     accepted = []
@@ -121,7 +122,7 @@ def _admit_snapshots(
         if snapshot.owner_id != binding.owner_id or dataset != binding.dataset:
             raise NativeAdmissionError("Snapshot does not belong to the bound native source")
         entity = retained.get((snapshot.identity.record_type, snapshot.identity.entity_key))
-        if entity is not None and not _admit(entity, snapshot):
+        if entity is not None and not _admit(entity, snapshot, renew=entity.id in revalidated_ids):
             if sightings:
                 _validate_message_parent(snapshot, submitted, retained)
                 if entity.deleted_at is not None:
@@ -157,7 +158,13 @@ class NativeIngestionStore:
         )
 
     async def admit_locked(
-        self, db: AsyncSession, sync: Sync, request: IngestNativeBatch, *, sightings: bool = False
+        self,
+        db: AsyncSession,
+        sync: Sync,
+        request: IngestNativeBatch,
+        *,
+        sightings: bool = False,
+        revalidated_ids: tuple[UUID, ...] = (),
     ) -> NativeAdmission:
         """Caller must hold the canonical writer lock through capture and commit."""
         if (
@@ -205,8 +212,32 @@ class NativeIngestionStore:
         )
         retained = {(row.entity_definition_short_name, row.entity_id): row for row in rows}
         admitted = _admit_snapshots(
-            request.snapshots, binding, submitted, retained, request, sightings=sightings
+            request.snapshots,
+            binding,
+            submitted,
+            retained,
+            request,
+            sightings=sightings,
+            revalidated_ids=revalidated_ids,
         )
+        # A newer original cannot silently rebind a retained child after ancestor
+        # withdrawal. Explicit renewal attests both its local revision and parent epoch.
+        protected = tuple(
+            row.id
+            for item in admitted.records
+            if item.kind == "upsert"
+            and (row := retained.get((item.identity.record_type, item.identity.entity_key)))
+            is not None
+            and row.id not in revalidated_ids
+        )
+        if protected:
+            visible = set(
+                await db.scalars(
+                    select(Entity.id).where(Entity.id.in_(protected), content_is_available())
+                )
+            )
+            if visible != set(protected):
+                raise NativeAdmissionError("Native source visibility requires explicit renewal")
         unchanged = admitted.unchanged_ids
         if sightings and unchanged:
             available = set(

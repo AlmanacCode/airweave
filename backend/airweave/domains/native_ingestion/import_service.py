@@ -5,6 +5,8 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
+from airweave.domains.native_ingestion.access_models import NativeAccessChange, NativeRecordAccess
+from airweave.domains.native_ingestion.access_store import NativeAccessStore
 from airweave.domains.native_ingestion.import_models import NativeImportState, StartNativeImport
 from airweave.domains.native_ingestion.import_store import NativeImportStore
 from airweave.domains.native_ingestion.page_models import CommitNativePage, NativePageAck
@@ -25,6 +27,7 @@ class NativeImports:
     def __init__(self, store: NativeImportStore):
         """Inject the native import persistence boundary."""
         self.store = store
+        self.access = NativeAccessStore(store)
         self.scopes = NativeScopeStore(store)
         self.pages = NativePageStore(store, NativeIngestionStore(store.canonical))
 
@@ -108,4 +111,31 @@ class NativeImports:
         async with UnitOfWork(db):
             return await self.store.finish(
                 db, organization_id, source_id, request_key, cancel=cancel
+            )
+
+    async def read_access(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        source_id: UUID,
+        request_key: str,
+        record_id: UUID,
+    ) -> NativeRecordAccess:
+        """Read retained revision and current availability without disclosing original content."""
+        async with UnitOfWork(db):
+            return await self.access.read(db, organization_id, source_id, request_key, record_id)
+
+    async def change_access(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        source_id: UUID,
+        request_key: str,
+        record_id: UUID,
+        request: NativeAccessChange,
+    ) -> NativeRecordAccess:
+        """Commit source access evidence and publication invalidation atomically."""
+        async with UnitOfWork(db):
+            return await self.access.change(
+                db, organization_id, source_id, request_key, record_id, request
             )
