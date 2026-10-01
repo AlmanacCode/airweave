@@ -31,7 +31,7 @@ class SourceValidationService(SourceValidationServiceProtocol):
     def validate_config(
         self, short_name: str, config_fields: Mapping[str, Any] | None, ctx: ApiContext
     ) -> dict[str, Any]:
-        """Validate configuration fields against source schema, returning a plain dict.
+        """Validate source configuration and return JSON-compatible persistence fields.
 
         Also strips fields that have feature flags not enabled for the organization.
         """
@@ -48,7 +48,7 @@ class SourceValidationService(SourceValidationServiceProtocol):
 
         try:
             model = config_class.model_validate(payload)
-            return model.model_dump()
+            return model.model_dump(mode="json")
         except ValidationError as e:
             errors = "; ".join([f"{self._loc(err)}: {err.get('msg')}" for err in e.errors()])
             raise HTTPException(status_code=422, detail=f"Invalid config fields: {errors}") from e

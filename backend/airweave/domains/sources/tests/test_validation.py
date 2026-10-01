@@ -65,3 +65,31 @@ def test_validate_config_passthrough_when_no_schema():
     svc = SourceValidationService(source_registry=registry)
     payload: dict[str, Any] = {"x": 1}
     assert svc.validate_config("slack", payload, _make_ctx()) == payload
+
+
+def test_calendar_config_is_json_serializable_and_round_trips():
+    """Validated nested dates must survive source connection JSON persistence."""
+    import json
+
+    from airweave.platform.configs.config import GoogleCalendarConfig
+
+    registry = FakeSourceRegistry()
+    registry.seed(
+        _make_entry("google_calendar", "Google Calendar").model_copy(
+            update={"config_ref": GoogleCalendarConfig}
+        )
+    )
+    config = {
+        "calendar_ids": ["owner@example.test"],
+        "occurrence_window": {
+            "start": "2026-10-01T00:00:00+05:30",
+            "end": "2026-10-08T00:00:00+05:30",
+        },
+    }
+    validated = SourceValidationService(registry).validate_config(
+        "google_calendar", config, _make_ctx()
+    )
+    stored = json.loads(json.dumps(validated))
+    assert GoogleCalendarConfig.model_validate(stored) == GoogleCalendarConfig.model_validate(
+        config
+    )
