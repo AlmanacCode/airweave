@@ -260,3 +260,35 @@ async def test_message_omission_reads_exact_native_message_and_never_confirms_em
     connector._get = AsyncMock(side_effect=SlackApiError("channel_not_found"))
     with pytest.raises(SlackApiError):
         await connector.confirm_absent(record)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", [False, True])
+async def test_exact_attachment_owner_refresh_preserves_native_inventory_and_parent(reply):
+    connector = await source()
+    connector.slack_config = SlackConfig(
+        expected_team_id="T1", expected_user_id="U1", capture_files=True
+    )
+    identity = RecordIdentity(record_type="message", native_id="2", container_id="C1")
+    parent = RecordIdentity(record_type="channel", native_id="C1")
+    payload = {"ts": "2", **({"thread_ts": "1"} if reply else {})}
+    record = SourceRecord.model_construct(identity=identity, parent=parent, payload=payload)
+    fresh = {**payload, "files": [{"id": "F2"}], "unknown_native_field": "retained"}
+    connector._get = AsyncMock(return_value={"messages": [fresh]})
+    result = await connector.refresh_known(record, files=MagicMock())
+    assert result.identity == identity and result.parent == parent
+    assert result.payload == fresh and result.payload_schema_version == 2
+    assert result.descendant_visibility_fields == ("files",)
+    assert connector.capture_cycle_configuration.exact_parent_validation == ("message",)
+    operation = "conversations.replies" if reply else "conversations.history"
+    assert connector._get.call_args.args[0].endswith(operation)
+    assert connector._get.call_args.args[1]["oldest"] == "2"
+    assert connector._get.call_args.args[1]["latest"] == "2"
+    for messages, error in [
+        ([], "remains unconfirmed"),
+        ([{**fresh, "thread_ts": "wrong"}], "thread identity"),
+        ([fresh, fresh], "duplicate identities"),
+    ]:
+        connector._get = AsyncMock(return_value={"messages": messages})
+        with pytest.raises(ValueError, match=error):
+            await connector.refresh_known(record, files=MagicMock())

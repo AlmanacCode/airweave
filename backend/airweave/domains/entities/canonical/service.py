@@ -36,6 +36,7 @@ from airweave.domains.entities.canonical.scan_models import (
     CommitOmission,
     CommitScanPage,
     ReconcileScan,
+    ScanAdmission,
     ScanResult,
     ScanState,
 )
@@ -158,6 +159,11 @@ class CanonicalCaptureService:
         """Begin/resume under the same fence as captured records."""
         async with UnitOfWork(db):
             return await self.scans.begin(db, request)
+
+    async def admit_scan(self, db: AsyncSession, request: BeginScan) -> ScanAdmission:
+        """Exact owner capture and child admission commit or roll back together."""
+        async with UnitOfWork(db):
+            return await self.scans.admit(db, request)
 
     async def commit_scan_page(self, db: AsyncSession, request: CommitScanPage) -> ScanResult:
         """Commit original records and their continuation atomically."""

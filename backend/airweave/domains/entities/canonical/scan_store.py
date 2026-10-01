@@ -39,6 +39,7 @@ from airweave.domains.entities.canonical.scan_models import (
     CommitOmission,
     CommitScanPage,
     ReconcileScan,
+    ScanAdmission,
     ScanContinuation,
     ScanResult,
     ScanState,
@@ -52,6 +53,7 @@ from airweave.domains.entities.canonical.scope_execution import (
 from airweave.domains.entities.canonical.store import (
     CanonicalRecordStore,
     CanonicalStoreError,
+    content_is_available,
     source_record,
 )
 from airweave.models.capture_scan import CaptureScan
@@ -102,6 +104,8 @@ def scan_state(row: CaptureScan, parent: Entity | None = None) -> ScanState:
         completed_at=row.completed_at,
         parent_visibility_epoch=row.parent_visibility_epoch,
         membership_attempt_id=row.membership_attempt_id,
+        parent_verified_attempt_id=row.parent_verified_attempt_id,
+        parent_verified_revision=row.parent_verified_revision,
         execution=ScopeExecution.model_validate(row.execution_state)
         if row.execution_state
         else None,
@@ -210,10 +214,26 @@ def validate_scope_changes(
 def attest_planned_owner(cycle: CaptureCycle, request: BeginScan, parent: Entity | None) -> None:
     """The post-I/O plan must still describe the captured owner used to select it."""
     if request.expected_parent_epoch != (parent.visibility_epoch if parent else None) or (
-        cycle.mode == "mixed"
+        (cycle.mode == "mixed" or request.exact_parent_observation is not None)
         and request.expected_parent_revision != (parent.record_revision if parent else None)
     ):
         raise ScanConflict("Scope owner changed during plan selection")
+
+
+def preserve_owner_verification(
+    row: CaptureScan, request: BeginScan, parent: Entity | None
+) -> None:
+    """A cursor restart preserves only a receipt still bound to this exact owner."""
+    keep_verification = bool(
+        parent
+        and row.cycle_id == request.cycle_id
+        and row.parent_visibility_epoch == parent.visibility_epoch
+        and row.parent_verified_attempt_id == request.fence.attempt_id
+        and row.parent_verified_revision == parent.record_revision
+    )
+    if not keep_verification:
+        row.parent_verified_attempt_id = None
+        row.parent_verified_revision = None
 
 
 class LockedPageCapture(Protocol):
@@ -308,14 +328,107 @@ class CanonicalScanStore:
         if row.parent_visibility_epoch != (parent.visibility_epoch if parent else None):
             raise ScanConflict("Scope owner changed; restart its sweep with current CAS")
 
+    async def admit(self, db: AsyncSession, request: BeginScan) -> ScanAdmission:
+        """Commit fresh owner state and its child receipt under the existing writer fence."""
+        sync = await self.records._fenced_sync(db, request.fence)
+        cursor, cycle = await attest_cycle(db, request.fence, request.cycle_id)
+        await attest_scope(
+            db,
+            request.fence,
+            cycle,
+            request.scope,
+            require_owner_receipt=request.exact_parent_observation is None,
+        )
+        parent = await scope_owner(db, request.fence, cycle, request.scope)
+        observation = request.exact_parent_observation
+        empty = CaptureResult(changes=(), sequence=sync.observed_change_sequence, unchanged=0)
+        if observation is None:
+            state = await self._begin(db, request, context=(cursor, cycle, parent))
+            return ScanAdmission(
+                state=state, parent=source_record(parent) if parent else None, capture=empty
+            )
+        if (
+            parent is None
+            or parent.entity_definition_short_name
+            not in cycle.configuration.exact_parent_validation
+        ):
+            raise ScanConflict("Scope does not accept exact parent verification")
+        attest_planned_owner(cycle, request, parent)
+        if request.fingerprint != cycle.configuration.fingerprint:
+            raise CycleConflict("Scan configuration differs from the active cycle")
+        row = await self._row(db, request.fence, request.scope)
+        if row is None:
+            if request.expected is not None:
+                raise ScanConflict("Verification expected an existing scope")
+        elif request.expected is None:
+            raise ScanConflict("Verification requires the current scope version")
+        else:
+            self._expect(row, request.expected, row.cycle_id)
+        previous = source_record(parent)
+        if (
+            observation.identity != previous.identity
+            or observation.parent != previous.parent
+            or observation.allow_reparent
+            or observation.removal_reason == "absent"
+        ):
+            raise ScanConflict("Exact parent observation changed identity or claimed absence")
+        captured = await self.records._capture_locked(
+            db,
+            sync,
+            CaptureBatch(fence=request.fence, records=(observation,)),
+            mark_seen=False,
+        )
+        await db.refresh(parent)
+        available = await db.scalar(select(content_is_available()).where(Entity.id == parent.id))
+        if parent.deleted_at is not None or not available:
+            return ScanAdmission(state=None, parent=source_record(parent), capture=captured)
+        updated = request.model_copy(
+            update={
+                "expected_parent_epoch": parent.visibility_epoch,
+                "expected_parent_revision": parent.record_revision,
+                "restart": request.restart
+                or bool(row and row.parent_visibility_epoch != parent.visibility_epoch),
+            }
+        )
+        await self._begin(db, updated, context=(cursor, cycle, parent))
+        row = await self._row(db, request.fence, request.scope)
+        row.parent_verified_attempt_id = request.fence.attempt_id
+        row.parent_verified_revision = parent.record_revision
+        row.revision += 1
+        await db.flush()
+        return ScanAdmission(
+            state=await self._state(db, row), parent=source_record(parent), capture=captured
+        )
+
     async def begin(self, db: AsyncSession, request: BeginScan) -> ScanState:
-        """Resume unchanged scans; restart and next-cycle transitions require exact CAS."""
+        """Ordinary admission cannot accept uncommitted owner observations."""
+        if request.exact_parent_observation is not None:
+            raise ScanConflict("Exact parent observations require typed scan admission")
+        return await self._begin(db, request)
+
+    async def _begin_context(
+        self,
+        db: AsyncSession,
+        request: BeginScan,
+    ) -> tuple[SyncCursor, CaptureCycle, Entity | None]:
+        """Ordinary entry obtains the same authority checks as exact admission."""
         await self.records._fenced_sync(db, request.fence)
         cursor, cycle = await attest_cycle(db, request.fence, request.cycle_id)
         await attest_scope(db, request.fence, cycle, request.scope)
         parent = await scope_owner(db, request.fence, cycle, request.scope)
+        return cursor, cycle, parent
+
+    async def _begin(
+        self,
+        db: AsyncSession,
+        request: BeginScan,
+        *,
+        context: tuple[SyncCursor, CaptureCycle, Entity | None] | None = None,
+    ) -> ScanState:
+        """Resume unchanged scans; reuse admission checks held under the same writer lock."""
+        cursor, cycle, parent = context or await self._begin_context(db, request)
         attest_planned_owner(cycle, request, parent)
-        inventory = bool(cycle.configuration.children_of(request.scope.record_type))
+        inventory = cycle.configuration.fresh_inventory(request.scope.record_type)
         if request.fingerprint != cycle.configuration.fingerprint:
             raise CycleConflict("Scan configuration differs from the active cycle")
         row = await self._row(db, request.fence, request.scope)
@@ -361,6 +474,7 @@ class CanonicalScanStore:
                 raise ScanConflict("Changed scope configuration requires an explicit restart")
             row.revision += 1
         begin_execution(row, cycle, request, parent.visibility_epoch if parent else None)
+        preserve_owner_verification(row, request, parent)
         row.parent_visibility_epoch = parent.visibility_epoch if parent else None
         row.membership_attempt_id = request.fence.attempt_id if inventory else None
         row.cycle_id = request.cycle_id
@@ -404,7 +518,7 @@ class CanonicalScanStore:
         if row.parent_visibility_epoch != (parent.visibility_epoch if parent else None):
             raise ScanConflict("Scope owner changed; restart from its current epoch")
         if (
-            cycle.configuration.children_of(row.record_type)
+            cycle.configuration.fresh_inventory(row.record_type)
             and row.membership_attempt_id != request.fence.attempt_id
         ):
             raise CycleConflict("Membership belongs to an earlier writer attempt")
@@ -525,7 +639,7 @@ class CanonicalScanStore:
         if (
             row.phase != "reconciling"
             or (
-                cycle.configuration.children_of(row.record_type)
+                cycle.configuration.fresh_inventory(row.record_type)
                 and row.membership_attempt_id != fence.attempt_id
             )
             or row.parent_visibility_epoch != (parent.visibility_epoch if parent else None)
@@ -616,7 +730,7 @@ class CanonicalScanStore:
         if row.parent_visibility_epoch != (parent.visibility_epoch if parent else None):
             raise ScanConflict("Scope owner changed; restart from its current epoch")
         if (
-            cycle.configuration.children_of(row.record_type)
+            cycle.configuration.fresh_inventory(row.record_type)
             and row.membership_attempt_id != request.fence.attempt_id
         ):
             raise CycleConflict("Membership belongs to an earlier writer attempt")
@@ -648,7 +762,7 @@ class CanonicalScanStore:
                 scope=(await self._state(db, row)).scope,
                 removal_reason=(
                     "scope_removed"
-                    if cycle.configuration.children_of(row.record_type)
+                    if cycle.configuration.fresh_inventory(row.record_type)
                     else request.removal_reason
                 ),
                 observed_at=request.observed_at,

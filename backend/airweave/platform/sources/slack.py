@@ -259,6 +259,7 @@ class SlackSource(BaseSource):
             fingerprint=fingerprint,
             record_types=self.canonical_record_types,
             container_parents=self.canonical_container_parents,
+            exact_parent_validation=("message",) if self.slack_config.capture_files else (),
         )
 
     @classmethod
@@ -362,26 +363,40 @@ class SlackSource(BaseSource):
                 return await self._file_page(scope, continuation, files, parent)
             page = await self._validated_capture_page(scope, continuation)
             if self.slack_config.capture_files and scope.record_type == "message":
-                for record in page.records:
-                    self._file_inventory(record.payload)
                 page = page.model_copy(
                     update={
-                        "records": tuple(
-                            record.model_copy(
-                                update={
-                                    "payload_schema_version": 2,
-                                    "descendant_visibility_fields": ("files",),
-                                    "completeness": "complete",
-                                }
-                            )
-                            for record in page.records
-                        )
+                        "records": tuple(self._attachment_owner(record) for record in page.records)
                     }
                 )
             return page
         except ValidationError:
             # Validation diagnostics may contain private provider values.
             raise ValueError("Slack capture returned invalid page or continuation data") from None
+
+    def _attachment_owner(self, record: CaptureRecord) -> CaptureRecord:
+        """Validate the native inventory shared by enumeration and exact owner reads."""
+        self._file_inventory(record.payload)
+        return record.model_copy(
+            update={
+                "payload_schema_version": 2,
+                "descendant_visibility_fields": ("files",),
+                "completeness": "complete",
+            }
+        )
+
+    async def refresh_known(self, record: SourceRecord, *, files: FileService) -> CaptureRecord:
+        """Recheck an attachment owner without treating an ambiguous miss as deletion."""
+        self._require_principal()
+        if not self.slack_config.capture_files or record.identity.record_type != "message":
+            raise ValueError("Slack exact owner refresh requires attachment capture and a message")
+        try:
+            message = await self._read_known_message(record)
+            if message is None:
+                raise ValueError("Slack message access remains unconfirmed; capture is incomplete")
+            captured = self._capture_message(message, record.identity.container_id)
+            return self._attachment_owner(captured).model_copy(update={"parent": record.parent})
+        except ValidationError:
+            raise ValueError("Slack exact message read returned invalid provider data") from None
 
     @staticmethod
     def _file_inventory(payload: dict[str, JsonValue]) -> list[dict[str, JsonValue]]:
@@ -583,6 +598,13 @@ class SlackSource(BaseSource):
 
     async def _confirm_message_omission(self, record: SourceRecord) -> None:
         """An exact read can disprove omission; an empty read does not prove deletion."""
+        message = await self._read_known_message(record)
+        if message is not None:
+            raise ValueError("Slack omitted an accessible prior message; retry enumeration")
+        raise ValueError("Slack message omission remains unconfirmed; capture is incomplete")
+
+    async def _read_known_message(self, record: SourceRecord) -> dict[str, JsonValue] | None:
+        """Use native timestamp bounds and the retained thread route for one exact owner."""
         identity = record.identity
         if (
             identity.container_id is None
@@ -607,9 +629,15 @@ class SlackSource(BaseSource):
             params["ts"] = thread_ts
         payload = await self._get(f"https://slack.com/api/{operation}", params)
         messages = TypeAdapter(list[dict[str, JsonValue]]).validate_python(payload.get("messages"))
-        if any(message.get("ts") == identity.native_id for message in messages):
-            raise ValueError("Slack omitted an accessible prior message; retry enumeration")
-        raise ValueError("Slack message omission remains unconfirmed; capture is incomplete")
+        matches = [message for message in messages if message.get("ts") == identity.native_id]
+        if len(matches) > 1:
+            raise ValueError("Slack exact message read returned duplicate identities")
+        if not matches:
+            return None
+        message = matches[0]
+        if message.get("thread_ts", identity.native_id) != (thread_ts or identity.native_id):
+            raise ValueError("Slack exact message read changed its retained thread identity")
+        return message
 
     # ------------------------------------------------------------------
     # Federated search

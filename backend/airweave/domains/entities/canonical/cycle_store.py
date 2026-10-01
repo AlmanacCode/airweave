@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, exists, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -192,7 +192,24 @@ def inventory_complete(subject, fence: WriterFence, state: CaptureCycle):
             CaptureScan.parent_visibility_epoch.is_not_distinct_from(
                 subject.parent_visibility_epoch
             ),
-            CaptureScan.membership_attempt_id == fence.attempt_id,
+            or_(
+                subject.entity_definition_short_name.in_(
+                    state.configuration.exact_parent_validation
+                ),
+                CaptureScan.membership_attempt_id == fence.attempt_id,
+            ),
+            or_(
+                subject.parent_record_type.is_(None),
+                subject.parent_record_type.not_in(state.configuration.exact_parent_validation),
+                and_(
+                    CaptureScan.parent_verified_attempt_id == fence.attempt_id,
+                    CaptureScan.parent_verified_revision
+                    == select(owner.record_revision)
+                    .where(owner.id == parent_id)
+                    .correlate(subject)
+                    .scalar_subquery(),
+                ),
+            ),
             CaptureScan.phase == "complete",
         )
     )
@@ -222,7 +239,7 @@ async def root_ready(db: AsyncSession, fence: WriterFence, state: CaptureCycle) 
             CaptureScan.cycle_id == state.version.cycle_id,
             CaptureScan.phase == "complete",
         ]
-        if state.configuration.children_of(kind):
+        if state.configuration.fresh_inventory(kind):
             predicates.append(CaptureScan.membership_attempt_id == fence.attempt_id)
         if await db.scalar(select(CaptureScan.id).where(*predicates).limit(1)) is None:
             return False
@@ -267,7 +284,12 @@ async def scope_owner(
 
 
 async def attest_scope(
-    db: AsyncSession, fence: WriterFence, state: CaptureCycle, scope: CompletedScope
+    db: AsyncSession,
+    fence: WriterFence,
+    state: CaptureCycle,
+    scope: CompletedScope,
+    *,
+    require_owner_receipt: bool = True,
 ) -> bool:
     """A scope's full owner chain must be visible and freshly enumerated."""
     parent = await scope_owner(db, fence, state, scope)
@@ -285,6 +307,24 @@ async def attest_scope(
     )
     if ready is None or not await root_ready(db, fence, state):
         raise CycleConflict("Refresh and complete ancestor membership before child work")
+    if (
+        require_owner_receipt
+        and parent.entity_definition_short_name in state.configuration.exact_parent_validation
+    ):
+        verified = await db.scalar(
+            select(CaptureScan.id).where(
+                CaptureScan.organization_id == fence.organization_id,
+                CaptureScan.sync_id == fence.sync_id,
+                CaptureScan.parent_record_id == parent.id,
+                CaptureScan.record_type == scope.record_type,
+                CaptureScan.cycle_id == state.version.cycle_id,
+                CaptureScan.parent_visibility_epoch == parent.visibility_epoch,
+                CaptureScan.parent_verified_attempt_id == fence.attempt_id,
+                CaptureScan.parent_verified_revision == parent.record_revision,
+            )
+        )
+        if verified is None:
+            raise CycleConflict("Scope requires fresh exact parent verification")
     return False
 
 
@@ -299,8 +339,17 @@ def child_scope_complete(fence: WriterFence, state: CaptureCycle, record_type: s
         CaptureScan.cycle_id == state.version.cycle_id,
         CaptureScan.phase == "complete",
     ]
-    if state.configuration.children_of(record_type):
+    if state.configuration.fresh_inventory(record_type):
         predicates.append(CaptureScan.membership_attempt_id == fence.attempt_id)
+    predicates.append(
+        or_(
+            Entity.entity_definition_short_name.not_in(state.configuration.exact_parent_validation),
+            and_(
+                CaptureScan.parent_verified_attempt_id == fence.attempt_id,
+                CaptureScan.parent_verified_revision == Entity.record_revision,
+            ),
+        )
+    )
     return exists(select(CaptureScan.id).where(*predicates))
 
 
@@ -317,7 +366,7 @@ async def next_scope_work(db: AsyncSession, fence: WriterFence, cycle_id: UUID) 
             CaptureScan.cycle_id == cycle_id,
             CaptureScan.phase == "complete",
         ]
-        if state.configuration.children_of(kind):
+        if state.configuration.fresh_inventory(kind):
             predicates.append(CaptureScan.membership_attempt_id == fence.attempt_id)
         if await db.scalar(select(CaptureScan.id).where(*predicates).limit(1)) is None:
             return ScopeWork(record_type=kind)

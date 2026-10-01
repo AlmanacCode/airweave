@@ -47,6 +47,7 @@ class CycleConfiguration(BaseModel):
     completion_policies: dict[RecordKind, CompletionPolicy] = Field(default_factory=dict)
     known_object_validation: tuple[RecordKind, ...] = ()
     scope_changes: tuple[RecordKind, ...] = ()
+    exact_parent_validation: tuple[RecordKind, ...] = ()
     membership: Literal["retained", "observed"] = "retained"
 
     def digest(self) -> str:
@@ -56,6 +57,8 @@ class CycleConfiguration(BaseModel):
             value.pop("membership")  # Preserve existing provider checkpoint digests.
         if not self.known_object_validation:
             value.pop("known_object_validation")  # Preserve existing default configuration digests.
+        if not self.exact_parent_validation:
+            value.pop("exact_parent_validation")
         if not self.scope_changes:
             value.pop("scope_changes")
         value["completion_policies"] = {kind: self.policy(kind) for kind in self.parents}
@@ -75,6 +78,7 @@ class CycleConfiguration(BaseModel):
         completion_policies: dict[RecordKind, CompletionPolicy] | None = None,
         known_object_validation: tuple[RecordKind, ...] = (),
         scope_changes: tuple[RecordKind, ...] = (),
+        exact_parent_validation: tuple[RecordKind, ...] = (),
     ) -> "CycleConfiguration":
         """Snapshot the existing source declaration; no second topology registry."""
         if len(set(record_types)) != len(record_types):
@@ -91,6 +95,7 @@ class CycleConfiguration(BaseModel):
             completion_policies=completion_policies or {},
             known_object_validation=known_object_validation,
             scope_changes=scope_changes,
+            exact_parent_validation=exact_parent_validation,
         )
 
     @model_validator(mode="before")
@@ -146,10 +151,26 @@ class CycleConfiguration(BaseModel):
             raise ValueError("Capture kinds must be reachable from a root")
         return self
 
+    @model_validator(mode="after")
+    def valid_exact_parent_kinds(self) -> "CycleConfiguration":
+        """Root inventories always revalidate discovery before descendant work."""
+        if len(set(self.exact_parent_validation)) != len(self.exact_parent_validation) or any(
+            kind not in self.parents or None in self.parents[kind] or not self.children_of(kind)
+            for kind in self.exact_parent_validation
+        ):
+            raise ValueError("Exact parent validation requires unique nonroot owner kinds")
+        if self.exact_parent_validation and self.scope_changes:
+            raise ValueError("Exact parent validation does not support mixed scope plans")
+        return self
+
     @property
     def root_record_types(self) -> tuple[str, ...]:
         """Kinds permitting records without a parent."""
         return tuple(kind for kind, parents in self.parents.items() if None in parents)
+
+    def fresh_inventory(self, kind: str) -> bool:
+        """Exact owner reads replace attempt-wide inventory freshness only by opt-in."""
+        return bool(self.children_of(kind)) and kind not in self.exact_parent_validation
 
     def children_of(self, kind: str) -> tuple[str, ...]:
         """Scopes required for a visible record of this kind."""

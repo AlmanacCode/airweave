@@ -51,6 +51,7 @@ class BeginScan(BaseModel):
     plan: ScopePlan | None = None
     expected_parent_epoch: int | None = Field(default=None, ge=1)
     expected_parent_revision: int | None = Field(default=None, ge=1)
+    exact_parent_observation: CaptureRecord | None = None
     continuation: ScanContinuation = Field(default_factory=ScanContinuation)
 
 
@@ -67,11 +68,22 @@ class ScanState(BaseModel):
     started_at: AwareDatetime
     completed_at: AwareDatetime | None
     parent_visibility_epoch: int | None = None
+    parent_verified_attempt_id: UUID | None = None
+    parent_verified_revision: int | None = None
     membership_attempt_id: UUID | None = None
     completion_policy: CompletionPolicy = "exhaustive"
     mode: Literal["full", "changes"] = "full"
     provider_checkpoint: ProviderCheckpoint | None = None
     execution: ScopeExecution | None = None
+
+
+class ScanAdmission(BaseModel):
+    """An unavailable refreshed owner is committed without admitting child work."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    state: ScanState | None
+    parent: SourceRecord | None
+    capture: CaptureResult
 
 
 class CommitScanPage(BaseModel):

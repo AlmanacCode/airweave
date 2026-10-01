@@ -31,6 +31,8 @@ class CaptureScan(OrganizationBase):
         ForeignKey("entity.id", ondelete="CASCADE")
     )
     parent_visibility_epoch: Mapped[int | None] = mapped_column(BigInteger)
+    parent_verified_attempt_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    parent_verified_revision: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     membership_attempt_id: Mapped[UUID | None]
     cycle_id: Mapped[UUID]
     sweep_id: Mapped[UUID]

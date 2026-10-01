@@ -46,7 +46,10 @@ async def attempt(
         expected_team_id="T1", expected_user_id="U1", capture_files=True
     )
     connector._verified_principal = SlackPrincipal(ok=True, team_id="T1", user_id="U1")
-    connector._get = AsyncMock(side_effect=responses or [ROOT, {"messages": [MESSAGE]}])
+    # Fresh attempts enumerate history and then revalidate the attachment owner.
+    # A retry reuses completed history and only refreshes the owner.
+    defaults = [ROOT, *([{"messages": [MESSAGE]}] if number == 1 else []), {"messages": [MESSAGE]}]
+    connector._get = AsyncMock(side_effect=responses if responses is not None else defaults)
     if connector_out is not None:
         connector_out.append(connector)
     files = FileService(uuid4(), storage, sync_id=fence.sync_id)

@@ -75,6 +75,7 @@ class CanonicalCapturePipeline:
                 completion_policies=config.completion_policies,
                 known_object_validation=config.known_object_validation,
                 scope_changes=config.scope_changes,
+                exact_parent_validation=config.exact_parent_validation,
             )
             if config != declared:
                 raise ValueError("Page source cycle must match its declared container topology")

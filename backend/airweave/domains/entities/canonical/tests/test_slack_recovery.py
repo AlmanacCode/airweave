@@ -24,14 +24,16 @@ HISTORY = {"messages": [MESSAGE]}
 REPLIES = {"messages": [MESSAGE, {"ts": "1.1", "thread_ts": "1", "text": "Synthetic reply"}]}
 
 
-async def runner(database, source, responses, attempt=1, service=None):
+async def runner(database, source, responses, attempt=1, service=None, *, capture_files=False):
     original_service, fence = source
     service = service or original_service
     ctx, _, runtime, bus = components(database, source)
     connector = SlackSource(
         auth=StaticTokenProvider("fixture"), logger=MagicMock(), http_client=MagicMock()
     )
-    connector.slack_config = SlackConfig(expected_team_id="T1", expected_user_id="U1")
+    connector.slack_config = SlackConfig(
+        expected_team_id="T1", expected_user_id="U1", capture_files=capture_files
+    )
     connector._get = AsyncMock(return_value={"ok": True, "team_id": "T1", "user_id": "U1"})
     await connector.validate()
     connector._get = AsyncMock(side_effect=responses)
@@ -68,10 +70,13 @@ async def saved(database):
         return rows, cursor, scans
 
 
+@pytest.mark.parametrize("capture_files", [False, True])
 async def test_cancel_after_history_resumes_pending_reply_without_repeating_history(
-    database, source
+    database, source, capture_files
 ):
-    first, _, _ = await runner(database, source, [ROOT, HISTORY, asyncio.CancelledError()])
+    first, _, _ = await runner(
+        database, source, [ROOT, HISTORY, asyncio.CancelledError()], capture_files=capture_files
+    )
     with pytest.raises(asyncio.CancelledError):
         await run(first)
     rows, cursor, scans = await saved(database)
@@ -79,12 +84,32 @@ async def test_cancel_after_history_resumes_pending_reply_without_repeating_hist
     assert "canonical_checkpoint" not in cursor
     message_scan = next(scan for scan in scans if scan.record_type == "message")
     assert message_scan.continuation["pending_threads"] == ["1"]
-    second, connector, _ = await runner(database, source, [ROOT, REPLIES], attempt=2)
+    second, connector, _ = await runner(
+        database, source, [ROOT, REPLIES], attempt=2, capture_files=capture_files
+    )
+    if capture_files:
+        initial = iter([ROOT, REPLIES])
+
+        async def respond(url, params):
+            if "oldest" not in params:
+                return next(initial)
+            assert params["oldest"] == params["latest"]
+            return {
+                "messages": [
+                    message for message in REPLIES["messages"] if message["ts"] == params["oldest"]
+                ]
+            }
+
+        connector._get = AsyncMock(side_effect=respond)
     await run(second)
-    assert [call.args[0].split("/")[-1] for call in connector._get.call_args_list] == [
-        "conversations.list",
-        "conversations.replies",
-    ]
+    operations = [call.args[0].split("/")[-1] for call in connector._get.call_args_list]
+    assert operations[:2] == ["conversations.list", "conversations.replies"]
+    assert len(operations) == (4 if capture_files else 2)
+    if capture_files:
+        # Exact owner reads must not become another unbounded history traversal.
+        for call in connector._get.call_args_list[2:]:
+            assert call.args[1]["oldest"] == call.args[1]["latest"]
+            assert call.args[1]["limit"] == 1
     rows, cursor, _ = await saved(database)
     assert {row.native_id for row in rows} == {"C1", "1", "1.1"}
     assert next(row for row in rows if row.native_id == "1").record_revision == 1
@@ -117,7 +142,9 @@ async def test_expired_reply_cursor_restarts_whole_scope_and_never_partial_recon
         "messages": [{"ts": "1.old", "thread_ts": "1"}],
         "response_metadata": {"next_cursor": "expired"},
     }
-    first, _, _ = await runner(database, source, [ROOT, HISTORY, first_reply, asyncio.CancelledError()])
+    first, _, _ = await runner(
+        database, source, [ROOT, HISTORY, first_reply, asyncio.CancelledError()]
+    )
     with pytest.raises(asyncio.CancelledError):
         await run(first)
     rows, _, scans = await saved(database)

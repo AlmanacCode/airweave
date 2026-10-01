@@ -33,6 +33,7 @@ from airweave.domains.entities.canonical.scan_models import (
     CommitOmission,
     CommitScanPage,
     ReconcileScan,
+    ScanAdmission,
     ScanContinuation,
     ScanState,
 )
@@ -207,7 +208,11 @@ class CanonicalScanDriver:
         parent_epoch: int | None = None,
     ) -> None:
         """Only a provider invalid-cursor response permits one explicit sweep restart."""
-        state = await self.begin_scope(cycle, scope, parent, parent_epoch, refresh_membership)
+        admission = await self.begin_scope(cycle, scope, parent, parent_epoch)
+        if admission.state is None:
+            return
+        state = admission.state
+        parent = admission.parent
         restarts = 0
         while state.phase == "collecting":
             await self.check_limits()
@@ -254,8 +259,7 @@ class CanonicalScanDriver:
         scope: CompletedScope,
         parent: SourceRecord | None,
         parent_epoch: int | None,
-        refresh_membership: bool,
-    ) -> ScanState:
+    ) -> ScanAdmission:
         """Select a plan outside SQL, then attest prior version and owner under the fence."""
         async with self.sessions() as db:
             previous = await self.service.read_scan(db, self.fence, scope)
@@ -263,11 +267,16 @@ class CanonicalScanDriver:
             previous
             and previous.cycle_id == cycle.version.cycle_id
             and (
-                (refresh_membership and previous.membership_attempt_id != self.fence.attempt_id)
+                (
+                    cycle.configuration.fresh_inventory(scope.record_type)
+                    and previous.membership_attempt_id != self.fence.attempt_id
+                )
                 or previous.parent_visibility_epoch != parent_epoch
             )
         )
         scoped = isinstance(self.source, ScopedPageSource)
+        if cycle.mode == "mixed" and cycle.configuration.exact_parent_validation:
+            raise CycleConflict("Mixed planning does not support exact parent validation")
         if cycle.mode == "mixed" and not scoped:
             raise CycleConflict("Mixed capture requires source scope planning")
         if scoped and cycle.force_full_scopes and previous and previous.mode == "changes":
@@ -287,9 +296,23 @@ class CanonicalScanDriver:
                     force_full=cycle.force_full_scopes
                     or bool(previous and previous.parent_visibility_epoch != parent_epoch),
                 )
+        observation = None
+        if parent and parent.identity.record_type in cycle.configuration.exact_parent_validation:
+            verified = bool(
+                previous
+                and previous.cycle_id == cycle.version.cycle_id
+                and previous.parent_verified_attempt_id == self.fence.attempt_id
+                and previous.parent_verified_revision == parent.revision
+                and previous.parent_visibility_epoch == parent_epoch
+            )
+            if not verified:
+                if not isinstance(self.source, KnownObjectSource):
+                    raise CycleConflict("Source requires exact owner refresh support")
+                await self.check_limits()
+                observation = await self.source.refresh_known(parent, files=self.files)
         initial = self.scope_initial(scope, cycle, plan)
         async with self.sessions() as db:
-            return await self.service.begin_scan(
+            admission = await self.service.admit_scan(
                 db,
                 BeginScan(
                     fence=self.fence,
@@ -301,11 +324,13 @@ class CanonicalScanDriver:
                     continuation=initial,
                     plan=plan,
                     expected_parent_epoch=parent_epoch,
-                    expected_parent_revision=parent.revision
-                    if parent and cycle.mode == "mixed"
-                    else None,
+                    expected_parent_revision=parent.revision if parent else None,
+                    exact_parent_observation=observation,
                 ),
             )
+
+        await self.progress(admission.capture, (observation,) if observation else ())
+        return admission
 
     async def restart_scope(
         self,
@@ -339,9 +364,7 @@ class CanonicalScanDriver:
                     continuation=initial,
                     plan=plan,
                     expected_parent_epoch=state.parent_visibility_epoch,
-                    expected_parent_revision=parent.revision
-                    if parent and cycle.mode == "mixed"
-                    else None,
+                    expected_parent_revision=parent.revision if parent else None,
                 ),
             )
 
