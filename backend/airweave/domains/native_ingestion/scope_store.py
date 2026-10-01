@@ -85,11 +85,18 @@ class NativeScopeStore:
         request_key: str,
         request: NativeScopeRef,
     ) -> NativeScopeState:
-        """Read current active import progress without starting a missing scope."""
-        imported = await self.imports.active(db, organization_id, source_id, request_key)
-        state = await self.scans.read(db, imported.fence, request.scope)
-        if state is None or state.cycle_id != imported.cycle_id:
-            raise NativeAdmissionError("Scope has not been started for this import")
+        """Read retained scope progress only while its row still belongs to this import."""
+        _, _, imported = await self.imports.load(db, organization_id, source_id, request_key)
+        row = await self.scans._row(db, imported.fence, request.scope)
+        if row is None or row.cycle_id != imported.cycle_id:
+            raise NativeAdmissionError("Scope is unavailable or superseded for this import")
+        state = (await self.scans._state(db, row)).model_copy(
+            update={
+                "completion_policy": "exhaustive"
+                if imported.request.coverage == "complete"
+                else "discovery_only"
+            }
+        )
         return scope_state(state)
 
     async def reconcile(

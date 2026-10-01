@@ -94,3 +94,18 @@ class NativeImports:
         """Authorize and execute page in one transaction."""
         async with UnitOfWork(db):
             return await self.pages.commit(db, organization_id, source_id, request_key, request)
+
+    async def finish(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        source_id: UUID,
+        request_key: str,
+        *,
+        cancel: bool = False,
+    ) -> NativeImportState:
+        """Finalize capture and its durable outcome in one transaction."""
+        async with UnitOfWork(db):
+            return await self.store.finish(
+                db, organization_id, source_id, request_key, cancel=cancel
+            )

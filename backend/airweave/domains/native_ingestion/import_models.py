@@ -3,7 +3,7 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import AwareDatetime, Field, model_validator
 
 from airweave.core.shared_models import SyncJobStatus
 from airweave.domains.entities.canonical.requests import WriterFence
@@ -17,6 +17,26 @@ class StartNativeImport(NativeModel):
     coverage: Literal["bounded", "complete"]
 
 
+class NativeImportSummary(NativeModel):
+    """Durable capture outcome; indexing completion is separately observed."""
+
+    outcome: Literal["completed", "cancelled"]
+    coverage: Literal["bounded", "complete"]
+    finished_at: AwareDatetime
+    sequence: int | None = Field(default=None, ge=0)
+    completed_scopes: int = Field(ge=0)
+    capture_complete: bool
+    indexing: Literal["not_verified"] = "not_verified"
+
+    @model_validator(mode="after")
+    def consistent_outcome(self) -> "NativeImportSummary":
+        """Malformed retained outcomes must not become contradictory public claims."""
+        completed = self.outcome == "completed"
+        if self.capture_complete != completed or (completed and self.sequence is None):
+            raise ValueError("Native terminal summary contradicts its capture outcome")
+        return self
+
+
 class NativeImportReceipt(NativeModel):
     """Server-only job metadata; an identical request never reactivates a writer."""
 
@@ -26,6 +46,14 @@ class NativeImportReceipt(NativeModel):
     request: StartNativeImport
     fence: WriterFence
     cycle_id: UUID
+    summary: NativeImportSummary | None = None
+
+    @model_validator(mode="after")
+    def consistent_coverage(self) -> "NativeImportReceipt":
+        """A terminal result cannot expand the publisher's original scope claim."""
+        if self.summary is not None and self.summary.coverage != self.request.coverage:
+            raise ValueError("Native terminal coverage contradicts import intent")
+        return self
 
 
 class NativeImportState(NativeModel):
@@ -37,3 +65,4 @@ class NativeImportState(NativeModel):
     request: StartNativeImport
     status: SyncJobStatus
     cycle_id: UUID
+    summary: NativeImportSummary | None = None

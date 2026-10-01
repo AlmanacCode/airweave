@@ -154,3 +154,21 @@ Default provider membership and checkpoint digests are unchanged. Bounded scope
 completion never becomes evidence of exhaustive account discovery. Scope reads
 currently require an active import; durable terminal summaries and historical
 scope availability are still part of import finalization work.
+
+### Native import terminal outcomes
+
+The backend-only import API now supports `POST .../imports/{request_key}/complete`
+and `/cancel`. Completion validates all scopes required by the declared capture
+policy under the writer lock, then stores the cycle completion, job status, and a
+bounded terminal summary in one transaction. A bounded import completing does not
+mean the entire account was captured. Summary `indexing: not_verified` explicitly
+separates capture from downstream search publication.
+
+An identical completed retry returns its retained summary even after another import
+starts. Cancelling an already-terminal import preserves its outcome and never
+cancels the newer writer. A cancelled job immediately fails writer-fence checks.
+Terminal scope reads remain available only while the reusable scan row still has
+that import's cycle ID; once reused, the API reports unavailable/superseded instead
+of showing another import's progress. The import's terminal summary remains durable.
+Request keys are opaque, nonsecret identifiers: application diagnostics redact them,
+but deployment access logs require their own policy.

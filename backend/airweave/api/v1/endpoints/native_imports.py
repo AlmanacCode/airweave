@@ -140,3 +140,41 @@ async def page(
         raise HTTPException(404, {"code": error.code, "message": str(error)}) from error
     except CanonicalStoreError as error:
         raise HTTPException(409, {"code": error.code, "message": str(error)}) from error
+
+
+@router.post("/{source_id}/imports/{request_key}/complete", response_model=NativeImportState)
+async def complete_native_import(
+    source_id: UUID,
+    request_key: RequestKey,
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(backend_actor),
+    container: Container = Depends(deps.get_container),
+) -> NativeImportState:
+    """Complete this authorized import; never change another writer."""
+    try:
+        return await container.native_imports.finish(
+            db, ctx.organization.id, source_id, request_key, cancel=False
+        )
+    except NativeImportNotFound as error:
+        raise HTTPException(404, {"code": error.code, "message": str(error)}) from error
+    except CanonicalStoreError as error:
+        raise HTTPException(409, {"code": error.code, "message": str(error)}) from error
+
+
+@router.post("/{source_id}/imports/{request_key}/cancel", response_model=NativeImportState)
+async def cancel_native_import(
+    source_id: UUID,
+    request_key: RequestKey,
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(backend_actor),
+    container: Container = Depends(deps.get_container),
+) -> NativeImportState:
+    """Cancel this authorized import; never change another writer."""
+    try:
+        return await container.native_imports.finish(
+            db, ctx.organization.id, source_id, request_key, cancel=True
+        )
+    except NativeImportNotFound as error:
+        raise HTTPException(404, {"code": error.code, "message": str(error)}) from error
+    except CanonicalStoreError as error:
+        raise HTTPException(409, {"code": error.code, "message": str(error)}) from error

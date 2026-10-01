@@ -6,17 +6,19 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4, uuid5
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.core.shared_models import SyncStatus
 from airweave.domains.entities.canonical.cycle_models import (
     BeginCycle,
+    CompleteCycle,
     CycleConfiguration,
     RestartCycle,
 )
 from airweave.domains.entities.canonical.cycle_store import (
     begin_cycle,
+    complete_cycle,
     cursor_row,
     cycle_state,
     restart_cycle,
@@ -26,9 +28,12 @@ from airweave.domains.native_ingestion.errors import NativeAdmissionError, Nativ
 from airweave.domains.native_ingestion.import_models import (
     NativeImportReceipt,
     NativeImportState,
+    NativeImportSummary,
     StartNativeImport,
 )
+from airweave.domains.native_ingestion.source_models import LockedNativeSource
 from airweave.domains.native_ingestion.source_store import NativeSourceStore
+from airweave.models.capture_scan import CaptureScan
 from airweave.models.sync_job import SyncJob
 
 # Persisted v1 identity: changing this namespace would break retry recovery.
@@ -49,7 +54,15 @@ def receipt(job: SyncJob, source_id: UUID, request_key: str) -> NativeImportRece
     except ValidationError as error:
         raise NativeAdmissionError("Native import receipt is malformed") from error
     if (
-        value.source_id != source_id
+        (
+            value.summary is not None
+            and (
+                value.summary.outcome != job.status
+                or value.summary.coverage != value.request.coverage
+                or value.summary.capture_complete != (job.status == "completed")
+            )
+        )
+        or value.source_id != source_id
         or value.request_key != request_key
         or value.fence.job_id != job.id
         or value.fence.sync_id != job.sync_id
@@ -68,6 +81,7 @@ def import_state(job: SyncJob, value: NativeImportReceipt) -> NativeImportState:
         request=value.request,
         status=job.status,
         cycle_id=value.cycle_id,
+        summary=value.summary,
     )
 
 
@@ -180,17 +194,8 @@ class NativeImportStore:
         request_key: str,
     ) -> NativeImportState:
         """Authorize actual source/job association, including terminal import retries."""
-        bound = await self.sources.require(db, organization_id, source_id)
-        job = await db.scalar(
-            select(SyncJob).where(
-                SyncJob.id == native_import_id(source_id, request_key),
-                SyncJob.sync_id == bound.sync.id,
-                SyncJob.organization_id == organization_id,
-            )
-        )
-        if job is None:
-            raise NativeImportNotFound("Native import does not exist")
-        return import_state(job, receipt(job, source_id, request_key))
+        _, job, saved = await self.load(db, organization_id, source_id, request_key)
+        return import_state(job, saved)
 
     async def active(
         self,
@@ -200,9 +205,17 @@ class NativeImportStore:
         request_key: str,
     ) -> NativeImportReceipt:
         """Resolve stored authority for a mutation, never a publisher-supplied fence."""
-        bound = await self.sources.require(db, organization_id, source_id)
+        bound, _, saved = await self.load(db, organization_id, source_id, request_key)
         if not bound.source.is_authenticated or bound.sync.status != SyncStatus.ACTIVE:
             raise NativeAdmissionError("Native source is unavailable for import")
+        await self.canonical._fenced_sync(db, saved.fence)
+        return saved
+
+    async def load(
+        self, db: AsyncSession, organization_id: UUID, source_id: UUID, request_key: str
+    ) -> tuple[LockedNativeSource, SyncJob, NativeImportReceipt]:
+        """Authorize and lock the actual job, even after its writer became terminal."""
+        bound = await self.sources.require(db, organization_id, source_id)
         job = await db.scalar(
             select(SyncJob)
             .where(
@@ -215,6 +228,63 @@ class NativeImportStore:
         )
         if job is None:
             raise NativeImportNotFound("Native import does not exist")
-        saved = receipt(job, source_id, request_key)
-        await self.canonical._fenced_sync(db, saved.fence)
-        return saved
+        return bound, job, receipt(job, source_id, request_key)
+
+    async def finish(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        source_id: UUID,
+        request_key: str,
+        *,
+        cancel: bool = False,
+    ) -> NativeImportState:
+        """Persist capture completion or cancellation without changing another writer."""
+        bound, job, saved = await self.load(db, organization_id, source_id, request_key)
+        if job.status in ("completed", "cancelled", "failed"):
+            if cancel or (job.status == "completed" and saved.summary is not None):
+                return import_state(job, saved)
+            raise NativeAdmissionError("Import is terminal without successful capture completion")
+        if cancel:
+            # Even an older job may be cancelled; only its status fences its writes.
+            outcome = "cancelled"
+        else:
+            if not bound.source.is_authenticated or bound.sync.status != SyncStatus.ACTIVE:
+                raise NativeAdmissionError("Native source is unavailable for import")
+            await self.canonical._fenced_sync(db, saved.fence)
+            current = cycle_state(await cursor_row(db, saved.fence))
+            if current is None or current.version.cycle_id != saved.cycle_id:
+                raise NativeAdmissionError("Import no longer owns its capture cycle")
+            await complete_cycle(
+                db, bound.sync, CompleteCycle(fence=saved.fence, expected=current.version)
+            )
+            outcome = "completed"
+        finished_at = datetime.now(timezone.utc)
+        count = await db.scalar(
+            select(func.count())
+            .select_from(CaptureScan)
+            .where(
+                CaptureScan.organization_id == organization_id,
+                CaptureScan.sync_id == bound.sync.id,
+                CaptureScan.cycle_id == saved.cycle_id,
+                CaptureScan.phase == "complete",
+            )
+        )
+        # A superseded cancellation must not claim the newer writer's sequence.
+        sequence = (
+            bound.sync.observed_change_sequence if bound.sync.writer_job_id == job.id else None
+        )
+        summary = NativeImportSummary(
+            outcome=outcome,
+            coverage=saved.request.coverage,
+            finished_at=finished_at,
+            sequence=sequence,
+            completed_scopes=count,
+            capture_complete=not cancel,
+        )
+        saved = saved.model_copy(update={"summary": summary})
+        job.sync_metadata = saved.model_dump(mode="json")
+        job.status = outcome
+        job.completed_at = finished_at.replace(tzinfo=None)
+        await db.flush()
+        return import_state(job, saved)
