@@ -4,14 +4,31 @@ from typing import Literal
 from uuid import UUID
 
 from croniter import croniter
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 
 class ManagedSource(BaseModel):
     """Native identity is supplied only by Almanac's verified account authority."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    provider: Literal["gmail", "google_calendar", "google_drive", "slack", "outlook_mail", "stripe"]
+    provider: Literal[
+        "gmail",
+        "google_calendar",
+        "google_drive",
+        "slack",
+        "outlook_mail",
+        "stripe",
+        "linear",
+        "attio",
+    ]
     expected_identity: str = Field(min_length=1, max_length=512)
     expected_user_identity: str | None = Field(default=None, min_length=1, max_length=512)
     collection: str = Field(min_length=1, max_length=255)
@@ -27,9 +44,17 @@ class ManagedSource(BaseModel):
         """Slack workspace membership requires its native user, not broker user_id."""
         if (self.provider == "slack") != (self.expected_user_identity is not None):
             raise ValueError("Only Slack requires an expected native user identity")
-        if self.provider == "stripe":
-            self.source_config()  # Validate mode/version before admission, not during delivery.
+        if self.provider in {"stripe", "linear", "attio"}:
+            self.source_config()  # Validate native scope before admission, not during delivery.
         return self
+
+    @field_validator("expected_identity")
+    @classmethod
+    def workspace_identity(cls, value: str, info: ValidationInfo) -> str:
+        """Workspace UUIDs have one canonical spelling across admission and reconnect."""
+        if info.data.get("provider") in {"linear", "attio"}:
+            return str(UUID(value))
+        return value
 
     @field_validator("cron")
     @classmethod
@@ -41,6 +66,17 @@ class ManagedSource(BaseModel):
 
     def source_config(self) -> dict[str, JsonValue]:
         """Expected identity cannot be overridden inside unstructured provider config."""
+        if self.provider in {"linear", "attio"}:
+            from airweave.platform.configs.config import AttioConfig, LinearConfig
+
+            config_type = LinearConfig if self.provider == "linear" else AttioConfig
+            parsed = config_type.model_validate(
+                {**self.config, "workspace_id": self.expected_identity}
+            )
+            value = parsed.model_dump(mode="json")
+            if self.provider == "linear":
+                value["team_ids"] = sorted(value["team_ids"])
+            return value
         if self.provider == "stripe":
             from airweave.platform.configs.config import StripeCaptureConfig, StripeConfig
 
@@ -109,8 +145,23 @@ class ProvisionedSource(BaseModel):
     expected_user_identity: str | None = None
 
 
+def _workspace_principal(provider: str, config: dict) -> str:
+    """Both workspace sources retain canonical UUIDs in their validated native config."""
+    from airweave.platform.configs.config import AttioConfig, LinearConfig
+
+    schema = LinearConfig if provider == "linear" else AttioConfig
+    return str(schema.model_validate(config).workspace_id)
+
+
 def native_principal(provider: str, config: dict) -> tuple[str, str | None]:
     """Read the original attested principal from the protected source config."""
+    if provider in {"linear", "attio"}:
+        return _workspace_principal(provider, config), None
+    return _account_principal(provider, config)
+
+
+def _account_principal(provider: str, config: dict) -> tuple[str, str | None]:
+    """Validate the established provider-specific account identity contracts."""
     from airweave.platform.configs.config import (
         GmailConfig,
         GoogleCalendarConfig,

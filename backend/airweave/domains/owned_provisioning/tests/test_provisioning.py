@@ -677,3 +677,123 @@ def test_stripe_provisioning_requires_explicit_typed_mode_and_version(config):
             cron="0 * * * *",
             config=config,
         )
+
+
+@pytest.mark.parametrize("provider", ["linear", "attio"])
+async def test_workspace_provisioning_retry_reconnect_and_immutable_scope(
+    database, setup, provider
+):
+    ctx, service, request, account, lifecycle, schedules, workflows = setup
+    workspace, team1, team2 = uuid4(), uuid4(), uuid4()
+    config = {"workspace_id": str(uuid4())}
+    if provider == "linear":
+        config["team_ids"] = [str(team2), str(team1)]
+    spec = ManagedSource.model_validate(
+        {
+            **request.source.model_dump(),
+            "provider": provider,
+            "expected_identity": workspace.hex.upper(),
+            "config": config,
+        }
+    )
+    assert spec.expected_identity == str(workspace)
+    expected = spec.source_config()
+    assert expected["workspace_id"] == str(workspace)
+    assert native_principal(provider, expected) == (str(workspace), None)
+    if provider == "linear":
+        assert expected["team_ids"] == sorted([str(team1), str(team2)])
+    creator = service.store.create
+    creator._source_registry.get.return_value.short_name = provider
+    creator._source_validation.seed_config_result(provider, expected)
+    request = request.model_copy(update={"source": spec})
+    async with database() as db:
+        first = await service.ensure(db, ctx, account, request)
+        epoch = (await db.get(Sync, first.sync_id)).writer_epoch
+    async with database() as db:
+        assert await service.ensure(db, ctx, account, request) == first
+        assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 1
+        assert await db.scalar(select(func.count()).select_from(SyncJob)) == 1
+        assert (
+            await db.get(SourceConnection, first.source_connection_id)
+        ).config_fields == expected
+    changes = [{"expected_identity": str(uuid4())}]
+    if provider == "linear":
+        changes.append({"config": {"team_ids": [str(uuid4())]}})
+    for change in changes:
+        invalid = ManagedSource.model_validate({**spec.model_dump(), **change})
+        async with database() as db:
+            with pytest.raises(HTTPException, match="Reconnect changes"):
+                await service.ensure(
+                    db,
+                    ctx,
+                    account,
+                    request.model_copy(
+                        update={
+                            "generation": 2,
+                            "source": invalid,
+                        }
+                    ),
+                )
+        async with database() as db:
+            unchanged = await service.get(db, ctx, account)
+            assert unchanged == first
+            assert unchanged.observed_generation == first.observed_generation == 1
+            assert (
+                await db.get(SourceConnection, first.source_connection_id)
+            ).config_fields == expected
+            assert (await db.get(Sync, first.sync_id)).writer_epoch == epoch
+            assert await db.scalar(select(func.count()).select_from(SyncJob)) == 1
+    reconnect_config = dict(config)
+    if provider == "linear":
+        reconnect_config["team_ids"] = list(reversed(config["team_ids"]))
+    reconnect = request.model_copy(
+        update={
+            "generation": 2,
+            "source": ManagedSource.model_validate(
+                {
+                    **spec.model_dump(),
+                    "connected_account_id": "ca_reconnected",
+                    "config": reconnect_config,
+                }
+            ),
+        }
+    )
+    async with database() as db:
+        second = await service.ensure(db, ctx, account, reconnect)
+        assert second.state == "ready" and second.generation == 2
+        assert second.source_connection_id == first.source_connection_id
+        assert second.sync_id == first.sync_id
+        assert (await db.get(Sync, first.sync_id)).writer_epoch > epoch
+        original = await db.get(SourceConnection, first.source_connection_id)
+        assert original.config_fields == expected
+        assert original.auth_provider_config["account_id"] == "ca_reconnected"
+    async with database() as db:
+        assert await service.ensure(db, ctx, account, reconnect) == second
+        assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 1
+        assert await db.scalar(select(func.count()).select_from(SyncJob)) == 2
+    assert lifecycle.create.await_count == 2
+
+
+@pytest.mark.parametrize(
+    "provider,identity,config",
+    [
+        ("linear", str(uuid4()), {}),
+        ("linear", str(uuid4()), {"team_ids": []}),
+        ("linear", str(uuid4()), {"team_ids": ["not-a-uuid"]}),
+        ("linear", "not-a-uuid", {"team_ids": [str(uuid4())]}),
+        ("attio", "not-a-uuid", {}),
+    ],
+)
+def test_workspace_provisioning_rejects_invalid_intent(provider, identity, config):
+    with pytest.raises(ValueError):
+        ManagedSource(
+            provider=provider,
+            expected_identity=identity,
+            config=config,
+            collection="owned",
+            auth_provider="composio",
+            connected_account_id="ca_test",
+            auth_config_id="ac_test",
+            user_id="owner",
+            cron="0 * * * *",
+        )

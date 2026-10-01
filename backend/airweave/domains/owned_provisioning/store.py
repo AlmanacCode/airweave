@@ -220,6 +220,16 @@ class ProvisioningStore:
                     detail="Reconnect changes Stripe account mode, context or API version; "
                     "connect a new account",
                 )
+            if spec.provider == "linear":
+                from airweave.platform.configs.config import LinearConfig
+
+                previous_teams = set(LinearConfig.model_validate(source.config_fields).team_ids)
+                current_teams = set(LinearConfig.model_validate(config).team_ids)
+                if previous_teams != current_teams:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Reconnect changes selected Linear teams; connect a new account",
+                    )
             source.config_fields = config
             source.readable_auth_provider_id = spec.auth_provider
             source.auth_provider_config = spec.auth_config()
