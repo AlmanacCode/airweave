@@ -803,6 +803,12 @@ class SlabConfig(SourceConfig):
 class SlackConfig(SourceConfig):
     """Trusted native workspace/user pair for owned Slack capture."""
 
+    capture_files: bool = Field(
+        default=False,
+        description="Opt in to original file acquisition before each complete page commits; "
+        "aggregate page byte and duration budgets remain unqualified.",
+    )
+
     expected_team_id: str | None = Field(default=None, min_length=1, pattern=r"^\S+$")
     expected_user_id: str | None = Field(default=None, min_length=1, pattern=r"^\S+$")
 

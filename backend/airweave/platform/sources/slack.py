@@ -58,6 +58,8 @@ from airweave.platform.http_client.retry_helpers import (
 )
 from airweave.platform.sources._base import BaseSource
 from airweave.platform.sources.http_helpers import _parse_retry_after, raise_for_status
+from airweave.platform.sources.slack_content import capture_slack_files
+from airweave.platform.sources.slack_errors import SlackApiError
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 
 
@@ -123,15 +125,6 @@ def _clean_slack_mrkdwn(text: str) -> str:
     cleaned = cleaned.replace("\ue000", "").replace("\ue001", "")
     # Collapse multiple spaces left by removed markup
     return re.sub(r"  +", " ", cleaned).strip()
-
-
-class SlackApiError(ValueError):
-    """A Slack application error; unlike empty pages it cannot complete a scope."""
-
-    def __init__(self, code: str):
-        """Retain the safe provider code for explicit access-loss handling."""
-        self.code = code
-        super().__init__(f"Slack request failed: {code}")
 
 
 class SlackPrincipal(BaseModel):
@@ -223,9 +216,12 @@ class SlackSource(BaseSource):
     def capture_cycle_configuration(self) -> CycleConfiguration:
         """Existing cycle ownership includes the trusted visibility principal."""
         principal = self._require_principal()
+        material = {"version": 2, "team_id": principal.team_id, "user_id": principal.user_id}
+        if self.slack_config.capture_files:
+            material["capture_files"] = True
         fingerprint = hashlib.sha256(
             json.dumps(
-                {"version": 2, "team_id": principal.team_id, "user_id": principal.user_id},
+                material,
                 sort_keys=True,
             ).encode()
         ).hexdigest()
@@ -295,7 +291,7 @@ class SlackSource(BaseSource):
 
     @staticmethod
     def _capture_message(message: dict, channel_id: str) -> CaptureRecord:
-        """Keep the complete native response; file bytes are explicitly not captured yet."""
+        """Keep native response untouched; opt-in acquisition subsequently adds blob evidence."""
         edited = message.get("edited")
         edited_ts = edited.get("ts") if isinstance(edited, dict) else None
         return CaptureRecord(
@@ -326,7 +322,13 @@ class SlackSource(BaseSource):
         """Fetch one page; record and nested reply progress are committed by the pipeline."""
         self._require_principal()
         try:
-            return await self._validated_capture_page(scope, continuation)
+            page = await self._validated_capture_page(scope, continuation)
+            if self.slack_config.capture_files and scope.record_type == "message":
+                records = tuple(
+                    [await capture_slack_files(self, record, files) for record in page.records]
+                )
+                page = page.model_copy(update={"records": records})
+            return page
         except ValidationError:
             # Validation diagnostics may contain private provider values.
             raise ValueError("Slack capture returned invalid page or continuation data") from None
