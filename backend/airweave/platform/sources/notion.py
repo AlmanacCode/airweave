@@ -35,7 +35,7 @@ from airweave.domains.entities.canonical.requests import (
     RecordIdentity,
 )
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
-from airweave.domains.sources.exceptions import SourceError
+from airweave.domains.sources.exceptions import SourceAuthError, SourceError
 from airweave.domains.sources.token_providers.protocol import (
     SourceAuthProvider,
     authorization_headers,
@@ -103,6 +103,16 @@ class _Database(_Object):
 
 class _Id(_Native):
     id: UUID
+
+
+class _BotWorkspace(_Native):
+    workspace_id: UUID
+
+
+class _Principal(_Id):
+    object: Literal["user"]
+    type: Literal["bot"]
+    bot: _BotWorkspace
 
 
 class _Status(_Native):
@@ -232,8 +242,10 @@ class NotionSource(BaseSource):
     ) -> NotionSource:
         """Build a native managed/direct-auth source without acquiring additional grants."""
         instance = cls(auth=auth, logger=logger, http_client=http_client)
+        instance.config = config
         fingerprint = (
-            f"notion:{API_VERSION}:{FIELD_SET_VERSION}:partial-native-roots-blocks-properties"
+            f"notion:{API_VERSION}:{FIELD_SET_VERSION}:partial-native-roots-blocks-properties:"
+            f"{config.expected_workspace_id}:{config.expected_bot_id}"
         )
         instance._cycle_configuration = CycleConfiguration.from_source(
             fingerprint=hashlib.sha256(fingerprint.encode()).hexdigest(),
@@ -282,7 +294,17 @@ class NotionSource(BaseSource):
     async def validate(self) -> None:
         """Verify identity independently of content discovery capabilities."""
         payload = await self._request("users/me")
-        _Id.model_validate(payload)
+        principal = _Principal.model_validate(payload)
+        if (principal.bot.workspace_id, principal.id) != (
+            self.config.expected_workspace_id,
+            self.config.expected_bot_id,
+        ):
+            raise SourceAuthError(
+                "Notion workspace or connection bot does not match the configured account",
+                source_short_name="notion",
+                status_code=200,
+                token_provider_kind=self.auth.provider_kind,
+            )
 
     async def _retrieve(self, kind: str, native_id: str) -> dict[str, JsonValue] | None:
         native_id = str(UUID(native_id))

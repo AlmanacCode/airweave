@@ -100,7 +100,7 @@ async def runner(database, source, fixture, attempt=1, files=None):
         auth=StaticTokenProvider("fixture"),
         logger=MagicMock(),
         http_client=client,
-        config=NotionConfig(),
+        config=NotionConfig(expected_workspace_id=UUID(int=100), expected_bot_id=UUID(int=101)),
     )
     ctx, _, runtime, bus = components(database, source)
     pipeline = CanonicalCapturePipeline(

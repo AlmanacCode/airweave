@@ -915,3 +915,84 @@ def test_github_provisioning_rejects_invalid_principal_or_missing_selection(iden
             user_id="owner",
             cron="0 * * * *",
         )
+
+
+async def test_notion_reconnect_retains_workspace_and_bot_with_exact_retry(database, setup):
+    ctx, service, request, account, lifecycle, _, _ = setup
+    workspace, bot = uuid4(), uuid4()
+    spec = ManagedSource.model_validate(
+        {
+            **request.source.model_dump(),
+            "provider": "notion",
+            "expected_identity": workspace.hex.upper(),
+            "expected_user_identity": bot.hex.upper(),
+            "config": {"expected_workspace_id": str(uuid4()), "expected_bot_id": str(uuid4())},
+        }
+    )
+    expected = spec.source_config()
+    assert expected == {"expected_workspace_id": str(workspace), "expected_bot_id": str(bot)}
+    assert native_principal("notion", expected) == (str(workspace), str(bot))
+    creator = service.store.create
+    creator._source_registry.get.return_value.short_name = "notion"
+    creator._source_validation.seed_config_result("notion", expected)
+    request = request.model_copy(update={"source": spec})
+    async with database() as db:
+        first = await service.ensure(db, ctx, account, request)
+        epoch = (await db.get(Sync, first.sync_id)).writer_epoch
+    async with database() as db:
+        assert await service.ensure(db, ctx, account, request) == first
+        assert await db.scalar(select(func.count()).select_from(SyncJob)) == 1
+    for identity_field in ("expected_identity", "expected_user_identity"):
+        changed = ManagedSource.model_validate({**spec.model_dump(), identity_field: str(uuid4())})
+        async with database() as db:
+            with pytest.raises(HTTPException, match="Reconnect changes original account identity"):
+                await service.ensure(
+                    db,
+                    ctx,
+                    account,
+                    request.model_copy(update={"generation": 2, "source": changed}),
+                )
+        async with database() as db:
+            assert await service.get(db, ctx, account) == first
+            assert (await db.get(Sync, first.sync_id)).writer_epoch == epoch
+            assert (
+                await db.get(SourceConnection, first.source_connection_id)
+            ).config_fields == expected
+            assert await db.scalar(select(func.count()).select_from(SyncJob)) == 1
+    reconnect = request.model_copy(
+        update={
+            "generation": 2,
+            "source": spec.model_copy(update={"connected_account_id": "ca_reconnected"}),
+        }
+    )
+    async with database() as db:
+        second = await service.ensure(db, ctx, account, reconnect)
+        assert second.source_connection_id == first.source_connection_id
+        assert second.sync_id == first.sync_id and second.observed_generation == 2
+        original = await db.get(SourceConnection, first.source_connection_id)
+        assert original.config_fields == expected
+        assert original.auth_provider_config["account_id"] == "ca_reconnected"
+    async with database() as db:
+        assert await service.ensure(db, ctx, account, reconnect) == second
+        assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 1
+        assert await db.scalar(select(func.count()).select_from(SyncJob)) == 2
+    assert lifecycle.create.await_count == 2
+
+
+@pytest.mark.parametrize(
+    "workspace,bot",
+    [("workspace-name", str(uuid4())), (str(uuid4()), None), (str(uuid4()), "bot-name")],
+)
+def test_notion_provisioning_requires_native_uuid_pair(workspace, bot):
+    with pytest.raises(ValueError):
+        ManagedSource(
+            provider="notion",
+            expected_identity=workspace,
+            expected_user_identity=bot,
+            collection="owned",
+            auth_provider="composio",
+            connected_account_id="ca_test",
+            auth_config_id="ac_test",
+            user_id="owner",
+            cron="0 * * * *",
+        )

@@ -534,9 +534,11 @@ class MySQLConfig(SourceConfig):
 
 
 class NotionConfig(SourceConfig):
-    """Notion configuration schema."""
+    """Verified workspace and connection bot identity for owned Notion capture."""
 
-    pass
+    model_config = ConfigDict(extra="forbid")
+    expected_workspace_id: UUID
+    expected_bot_id: UUID
 
 
 class OneDriveConfig(SourceConfig):

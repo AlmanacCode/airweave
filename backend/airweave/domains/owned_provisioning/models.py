@@ -29,6 +29,7 @@ class ManagedSource(BaseModel):
         "linear",
         "attio",
         "github",
+        "notion",
     ]
     expected_identity: str = Field(min_length=1, max_length=512)
     expected_user_identity: str | None = Field(default=None, min_length=1, max_length=512)
@@ -42,10 +43,10 @@ class ManagedSource(BaseModel):
 
     @model_validator(mode="after")
     def native_principal(self):
-        """Slack workspace membership requires its native user, not broker user_id."""
-        if (self.provider == "slack") != (self.expected_user_identity is not None):
-            raise ValueError("Only Slack requires an expected native user identity")
-        if self.provider in {"stripe", "linear", "attio", "github"}:
+        """Workspace-scoped grants retain the native member or bot, not broker user_id."""
+        if (self.provider in {"slack", "notion"}) != (self.expected_user_identity is not None):
+            raise ValueError("Slack and Notion require an expected native user or bot identity")
+        if self.provider in {"stripe", "linear", "attio", "github", "notion"}:
             self.source_config()  # Validate native scope before admission, not during delivery.
         return self
 
@@ -57,7 +58,15 @@ class ManagedSource(BaseModel):
             if not value.isascii() or not value.isdecimal() or int(value) <= 0:
                 raise ValueError("GitHub identity must be a positive numeric user ID")
             return str(int(value))
-        if info.data.get("provider") in {"linear", "attio"}:
+        if info.data.get("provider") in {"linear", "attio", "notion"}:
+            return str(UUID(value))
+        return value
+
+    @field_validator("expected_user_identity")
+    @classmethod
+    def canonical_member(cls, value: str | None, info: ValidationInfo) -> str | None:
+        """Notion bot UUID is part of the verified native account pair."""
+        if value is not None and info.data.get("provider") == "notion":
             return str(UUID(value))
         return value
 
@@ -71,6 +80,16 @@ class ManagedSource(BaseModel):
 
     def source_config(self) -> dict[str, JsonValue]:
         """Expected identity cannot be overridden inside unstructured provider config."""
+        if self.provider == "notion":
+            from airweave.platform.configs.config import NotionConfig
+
+            return NotionConfig.model_validate(
+                {
+                    **self.config,
+                    "expected_workspace_id": self.expected_identity,
+                    "expected_bot_id": self.expected_user_identity,
+                }
+            ).model_dump(mode="json")
         if self.provider == "github":
             from airweave.platform.configs.config import GitHubConfig
 
@@ -171,6 +190,11 @@ def _workspace_principal(provider: str, config: dict) -> str:
 
 def native_principal(provider: str, config: dict) -> tuple[str, str | None]:
     """Read the original attested principal from the protected source config."""
+    if provider == "notion":
+        from airweave.platform.configs.config import NotionConfig
+
+        notion = NotionConfig.model_validate(config)
+        return str(notion.expected_workspace_id), str(notion.expected_bot_id)
     if provider == "github":
         from airweave.platform.configs.config import GitHubConfig
 

@@ -64,7 +64,7 @@ async def source(*, gets=(), posts=()):
         ),
         logger=MagicMock(),
         http_client=client,
-        config=NotionConfig(),
+        config=NotionConfig(expected_workspace_id=UUID(int=100), expected_bot_id=UUID(int=101)),
     )
     return result, client
 
@@ -550,3 +550,87 @@ async def test_property_archive_roundtrips_unicode_and_empty_value(property_file
     assert archive["responses"] == [value]
     assert record.payload["name"] == 'Notes "日本語"'
     assert archive["property_id"] == "p%25"
+
+
+def principal(**overrides):
+    return {
+        "object": "user",
+        "type": "bot",
+        "id": str(UUID(int=101)),
+        "bot": {"workspace_id": str(UUID(int=100))},
+        **overrides,
+    }
+
+
+@pytest.mark.asyncio
+async def test_validate_exact_workspace_bot_pair_and_fingerprint():
+    connector, client = await source(gets=[principal(name="Editable label")])
+    await connector.validate()
+    assert client.get.call_args.args[0] == "https://api.notion.com/v1/users/me"
+    for field in ("expected_workspace_id", "expected_bot_id"):
+        changed = await NotionSource.create(
+            auth=connector.auth,
+            logger=MagicMock(),
+            http_client=AsyncMock(),
+            config=connector.config.model_copy(update={field: UUID(int=102)}),
+        )
+        assert (
+            changed.capture_cycle_configuration.fingerprint
+            != connector.capture_cycle_configuration.fingerprint
+        )
+    assert set(connector.capture_cycle_configuration.completion_policies.values()) == {
+        "discovery_with_validation"
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [principal(id=str(UUID(int=102))), principal(bot={"workspace_id": str(UUID(int=102))})],
+)
+async def test_validate_rejects_other_workspace_or_bot(payload):
+    from airweave.domains.sources.exceptions import SourceAuthError
+
+    connector, client = await source(gets=[payload])
+    with pytest.raises(SourceAuthError, match="does not match") as caught:
+        await connector.validate()
+    assert caught.value.status_code == 200
+    assert client.get.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        principal(object="page"),
+        principal(type="person"),
+        principal(id="not-a-uuid"),
+        principal(bot={}),
+        principal(bot={"workspace_id": None}),
+        principal(bot={"workspace_id": "name"}),
+    ],
+)
+async def test_validate_rejects_missing_or_malformed_bot_identity(payload):
+    connector, _ = await source(gets=[payload])
+    with pytest.raises(ValidationError):
+        await connector.validate()
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        {"expected_workspace_id": str(UUID(int=100))},
+        {"expected_workspace_id": "workspace name", "expected_bot_id": str(UUID(int=101))},
+        {"expected_workspace_id": str(UUID(int=100)), "expected_bot_id": "bot name"},
+        {
+            "expected_workspace_id": str(UUID(int=100)),
+            "expected_bot_id": str(UUID(int=101)),
+            "extra": True,
+        },
+    ],
+)
+def test_notion_config_requires_only_verified_uuid_pair(config):
+    with pytest.raises(ValidationError):
+        NotionConfig.model_validate(config)
