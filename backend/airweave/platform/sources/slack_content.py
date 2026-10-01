@@ -31,6 +31,7 @@ class SlackFileMetadata(BaseModel):
 
     model_config = ConfigDict(extra="ignore", strict=True)
     id: str = Field(pattern=r"^F[A-Z0-9]+$", max_length=128)
+    name: str | None = None
     size: int | None = Field(default=None, ge=0)
     mimetype: str | None = Field(default=None, max_length=256)
     is_external: bool = False
@@ -146,7 +147,7 @@ async def _download(
         ) from None
     if file.size is not None and blob.size_bytes != file.size:
         raise ValueError("Slack original size changed during capture; retry the page")
-    return blob, None
+    return blob.model_copy(update={"filename": file.name or None}), None
 
 
 async def _enrich(

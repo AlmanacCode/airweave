@@ -65,6 +65,10 @@ class BlobReference(BaseModel):
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     size_bytes: int = Field(ge=0)
     media_type: str | None = None
+    filename: str | None = Field(
+        default=None,
+        description="Provider filename or format-specific export label; never a storage path",
+    )
     source_path: str | None = Field(
         default=None, description="RFC 6901 JSON Pointer into the unchanged native payload"
     )
@@ -82,6 +86,8 @@ class BlobReference(BaseModel):
     def historical_descriptor(self, handler):
         """Preserve historical hashes without dropping unrelated nullable fields."""
         value = handler(self)
+        if self.filename is None:
+            value.pop("filename", None)
         if self.role is None:
             value.pop("role", None)
         return value

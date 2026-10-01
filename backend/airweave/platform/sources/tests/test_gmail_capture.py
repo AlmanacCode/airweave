@@ -177,6 +177,7 @@ async def test_external_mime_bytes_are_stored_before_complete_record_without_pay
             "parts": [
                 {
                     "mimeType": "text/plain",
+                    "filename": "नोट्स.txt",
                     "body": {
                         "attachmentId": "body-id",
                         "size": 3,
@@ -193,6 +194,7 @@ async def test_external_mime_bytes_are_stored_before_complete_record_without_pay
     assert record.completeness == "complete"
     assert record.payload == raw
     assert record.blobs[0].source_path == "/payload/parts/0/body"
+    assert record.blobs[0].filename == "नोट्स.txt"
     assert record.blobs[0].size_bytes == 3
     storage.write_file.assert_awaited_once_with(record.blobs[0].key, b"abc")
 

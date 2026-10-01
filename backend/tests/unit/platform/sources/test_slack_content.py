@@ -81,6 +81,8 @@ async def test_file_enrichment_preserves_raw_child_and_root_blob():
     item = original({"id": "F1"})
     result = await capture_slack_file(source, item, files)
     assert result.payload == {"id": "F1"} and result.completeness == "complete"
+    assert result.blobs[0].filename == "note.txt"
+    assert result.blobs[1].filename is None
     assert [b.source_path for b in result.blobs] == ["", None]
     manifest = SlackFileManifest.model_validate_json(saved[-1])
     assert manifest.files[0].file["name"] == "note.txt"

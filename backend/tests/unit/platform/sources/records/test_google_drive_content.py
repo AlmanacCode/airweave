@@ -35,6 +35,7 @@ async def test_complete_body_keeps_original_metadata_and_blob(inputs):
     )
     result = await capture_file_content(record, **inputs)
     assert result.completeness == "complete" and result.blobs[0].size_bytes == 3
+    assert result.blobs[0].filename == "notes"
     assert result.payload == record.payload and result.content_hash == "a" * 64
     assert "file%2Fid" in inputs["files"].capture_canonical_url.call_args.kwargs["url"]
 
@@ -64,15 +65,18 @@ async def test_storage_failure_is_not_silently_a_partial_success(inputs):
 
 async def test_native_spreadsheet_keeps_existing_export_only_format(inputs):
     record = file_record(
-        {"id": "doc", "mimeType": "application/vnd.google-apps.spreadsheet", "version": "7"}
+        {
+            "id": "doc",
+            "mimeType": "application/vnd.google-apps.spreadsheet",
+            "version": "7",
+            "name": "बजट",
+        }
     )
-    await capture_file_content(record, **inputs)
+    result = await capture_file_content(record, **inputs)
+    assert result.blobs[0].filename == "बजट.xlsx"
     call = inputs["files"].capture_canonical_url.call_args.kwargs
     assert "/export?" in call["url"]
-    assert (
-        call["media_type"]
-        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    assert call["media_type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @pytest.mark.parametrize(
@@ -99,3 +103,18 @@ async def test_provider_export_limit_is_narrow_and_preserves_native_payload(inpu
     assert result is record and result.completeness == "metadata_only" and not result.blobs
     assert result.payload == record.payload
     inputs["get"].assert_not_awaited()
+
+
+def test_unnamed_blob_preserves_historical_descriptor_and_named_blob_roundtrips():
+    old = {
+        "key": "blob",
+        "sha256": "a" * 64,
+        "size_bytes": 3,
+        "media_type": None,
+        "source_path": None,
+    }
+    blob = BlobReference.model_validate(old)
+    assert blob.model_dump(mode="json") == old
+    named = blob.model_copy(update={"filename": "../बजट.pdf"})
+    assert BlobReference.model_validate_json(named.model_dump_json()).filename == "../बजट.pdf"
+    assert named.key == blob.key and named.sha256 == blob.sha256

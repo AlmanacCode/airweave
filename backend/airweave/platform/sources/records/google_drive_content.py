@@ -47,6 +47,7 @@ async def capture_file_content(
     blob, export_state = await _download_representation(
         download_url, media_type, mime, files=files, client=client, auth=auth, logger=logger
     )
+    blob = _label_representation(blob, payload.get("name"), mime)
     has_native_parts = False
     if mime == DOCS_MIME:
         record = await capture_document_parts(
@@ -75,6 +76,17 @@ async def capture_file_content(
     return record.model_copy(
         update={"blobs": (blob,), "content_hash": blob.sha256, "completeness": "complete"}
     )
+
+
+def _label_representation(
+    blob: BlobReference | None, name: object, mime: str
+) -> BlobReference | None:
+    """Native document titles need the selected export extension; binary names are exact."""
+    if blob is None or not isinstance(name, str) or not name:
+        return blob
+    export = GOOGLE_EXPORT_FORMATS.get(mime)
+    filename = name + export[1] if export and not name.lower().endswith(export[1]) else name
+    return blob.model_copy(update={"filename": filename})
 
 
 def _download_target(url: str, mime: str) -> tuple[str, str] | None:

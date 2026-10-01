@@ -184,7 +184,15 @@ class GmailCapture:
             except FileSkippedException:
                 complete = False
                 continue
-            blobs.append(blob.model_copy(update={"source_path": path}))
+            blobs.append(
+                BlobReference.model_validate(
+                    {
+                        **blob.model_dump(),
+                        "source_path": path,
+                        "filename": part.get("filename") or None,
+                    }
+                )
+            )
         return tuple(blobs), complete
 
     async def body_bytes(self, message_id: str, body: dict) -> bytes:
