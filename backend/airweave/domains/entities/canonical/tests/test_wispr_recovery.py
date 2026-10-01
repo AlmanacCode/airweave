@@ -278,3 +278,60 @@ async def test_active_meeting_only_cycle_requires_explicit_restart_for_scratchpa
     async with database() as db:
         after = await service.read_cycle(db, fence)
         assert after == before
+
+
+async def test_body_byte_overflow_preserves_committed_siblings_and_resume(
+    database, source, monkeypatch
+):
+    from airweave.domains.sources.exceptions import SourceError
+    from airweave.platform.sources import wispr
+
+    service, fence = source
+    rows = [{"id": f"bounded{i}", "start": "2026-09-20T00:00:00Z"} for i in range(2)]
+    calls = []
+    first = await connector(rows, calls)
+    execute = first._execute
+
+    async def oversized_second(slug, arguments):
+        result = await execute(slug, arguments)
+        if "meeting_id" in arguments and len(calls) == 2:
+            result["native_metadata"] = "x" * 2048
+        return result
+
+    first._execute = oversized_second
+    monkeypatch.setattr(wispr, "MAX_BODY_BYTES", 1024)
+    with pytest.raises(SourceError, match="body exceeds byte limit"):
+        await driver(service, database, fence, first).run()
+    async with database() as db:
+        states = list(
+            (
+                await db.scalars(select(CaptureScan).where(CaptureScan.record_type == "meeting"))
+            ).all()
+        )
+        assert sorted(state.phase for state in states) == ["collecting", "complete"]
+        bodies = list(
+            (
+                await db.scalars(
+                    select(Entity).where(Entity.entity_definition_short_name == "meeting")
+                )
+            ).all()
+        )
+        assert len(bodies) == 1 and bodies[0].native_id == calls[0]
+        newer = await service.activate_writer(
+            db,
+            fence.organization_id,
+            fence.sync_id,
+            fence.job_id,
+            attempt_id=uuid4(),
+            attempt_number=2,
+        )
+    second = await connector(rows, calls)
+    completed = await driver(service, database, newer, second).run()
+    from airweave.domains.entities.canonical.cycle_models import CompleteCycle
+
+    async with database() as db:
+        completed = await service.complete_cycle(
+            db, CompleteCycle(fence=newer, expected=completed.version)
+        )
+    assert completed.phase == "complete"
+    assert len(calls) == 3 and calls[1] == calls[2]

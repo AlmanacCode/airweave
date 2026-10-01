@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from urllib.parse import quote
 
+import httpx
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, StrictBool
 
 from airweave.core.logging import ContextualLogger
@@ -21,14 +22,21 @@ from airweave.domains.entities.canonical.requests import (
     RecordIdentity,
 )
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
-from airweave.domains.sources.exceptions import SourceServerError
+from airweave.domains.sources.exceptions import SourceError, SourceServerError
 from airweave.domains.sources.token_providers.protocol import ManagedToolAuthProvider
+from airweave.domains.storage import FileSkippedException
 from airweave.domains.storage.file_service import FileService
 from airweave.platform.decorators import source
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+from airweave.platform.http_client.bounded_response import bounded_response_bytes
 from airweave.platform.http_client.composio_transport import ComposioTransport
 from airweave.platform.sources._base import BaseSource
 from airweave.schemas.source_connection import AuthenticationMethod
+
+# Decoded response and retained archive limits; overflow fails without advancing this body.
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_ERROR_BYTES = 64 * 1024
+MAX_BODY_BYTES = 32 * 1024 * 1024
 
 
 class SessionResponse(BaseModel):
@@ -162,13 +170,60 @@ class WisprSource(BaseSource):
         return instance
 
     async def _post(self, path: str, body: dict) -> dict:
-        response = await self.http_client.post(
+        async with self.http_client.stream(
+            "POST",
             "https://backend.composio.dev/api/v3.1/tool_router/" + path,
-            headers={"x-api-key": self._tool_auth.api_key.get_secret_value()},
+            headers={
+                "x-api-key": self._tool_auth.api_key.get_secret_value(),
+                "Accept-Encoding": "identity",
+            },
             json=body,
-        )
-        ComposioTransport._check_proxy_response(response, response.request)
-        return response.json()
+        ) as response:
+            if response.headers.get("content-encoding", "identity").lower() != "identity":
+                if not response.is_success:
+                    ComposioTransport._check_proxy_response(
+                        httpx.Response(
+                            response.status_code,
+                            headers=response.headers,
+                            request=response.request,
+                            content=b"",
+                        ),
+                        response.request,
+                    )
+                raise SourceError(
+                    "Wispr did not honor bounded identity encoding", source_short_name="wispr"
+                )
+            maximum = MAX_RESPONSE_BYTES if response.is_success else MAX_ERROR_BYTES
+            try:
+                raw = await bounded_response_bytes(response, maximum, label="Wispr response")
+            except FileSkippedException as error:
+                # Preserve status-based authentication/throttle failures without retaining an
+                # oversized error body. Successful overflow is never a storage skip.
+                if not response.is_success:
+                    ComposioTransport._check_proxy_response(
+                        httpx.Response(
+                            response.status_code,
+                            headers=response.headers,
+                            request=response.request,
+                            content=b"",
+                        ),
+                        response.request,
+                    )
+                raise SourceError(
+                    "Wispr response exceeds byte limit; capture is incomplete",
+                    source_short_name="wispr",
+                ) from error
+            buffered = httpx.Response(
+                response.status_code,
+                headers=response.headers,
+                request=response.request,
+                content=raw,
+            )
+            ComposioTransport._check_proxy_response(buffered, response.request)
+            value = buffered.json()
+            if not isinstance(value, dict):
+                raise SourceError("Wispr response must be an object", source_short_name="wispr")
+            return value
 
     async def _execute(self, slug: str, arguments: dict) -> dict[str, JsonValue]:
         if self._session_id is None:
@@ -240,6 +295,18 @@ class WisprSource(BaseSource):
         if not isinstance(version, str) or not version.strip():
             raise ValueError("Wispr paginated body has no usable version; capture is incomplete")
 
+    @staticmethod
+    def _archive_size(value: JsonValue, previous: int = 0) -> int:
+        """Count complete native JSON and range descriptors once per acquired part."""
+        size = previous + len(
+            json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        if size > MAX_BODY_BYTES:
+            raise SourceError(
+                "Wispr body exceeds byte limit; capture is incomplete", source_short_name="wispr"
+            )
+        return size
+
     async def _body(
         self, kind: Literal["meeting", "scratchpad_note"], identity: str
     ) -> dict[str, JsonValue]:
@@ -257,6 +324,7 @@ class WisprSource(BaseSource):
                 {"content": 0},
             )
         responses: list[JsonValue] = []
+        archive_bytes = len(b'{"responses":[]}')
         for _ in range(100):
             arguments = {
                 id_field: identity,
@@ -272,7 +340,9 @@ class WisprSource(BaseSource):
                 "modified_at"
             ):
                 raise ValueError("Wispr body changed during paginated capture")
-            responses.append({"requested_ranges": arguments, "response": response})
+            retained = {"requested_ranges": arguments, "response": response}
+            archive_bytes = self._archive_size(retained, archive_bytes + bool(responses))
+            responses.append(retained)
             following = {}
             for field, offset in offsets.items():
                 if (
@@ -342,6 +412,7 @@ class WisprSource(BaseSource):
             raise ValueError("Wispr listing identity does not match its scope")
         payload = await self._body(kind, identity)
         payload["listing"] = parent.payload
+        self._archive_size(payload)
         modified = _Version.model_validate(payload["responses"][0]["response"]).modified_at
         return CapturePage(
             records=(

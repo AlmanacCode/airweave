@@ -490,3 +490,130 @@ async def test_multirange_body_requires_version_before_following_continuation(ve
     with pytest.raises(ValueError, match="no usable version"):
         await connector._body("meeting", "m")
     connector._execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 400, 401, 429, 500])
+async def test_streamed_response_limit_closes_success_and_error(monkeypatch, status):
+    import httpx
+
+    from airweave.domains.storage import FileSkippedException
+    from airweave.platform.sources import wispr
+
+    class Stream(httpx.AsyncByteStream):
+        closed = False
+
+        def __init__(self):
+            self.iterator = self.chunks()
+
+        async def chunks(self):
+            yield b"x" * 16
+            yield b"never needed"
+
+        def __aiter__(self):
+            return self.iterator
+
+        async def aclose(self):
+            await self.iterator.aclose()
+            self.closed = True
+
+    stream = Stream()
+    monkeypatch.setattr(wispr, "MAX_RESPONSE_BYTES", 8)
+    monkeypatch.setattr(wispr, "MAX_ERROR_BYTES", 8)
+    connector = await source()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, stream=stream))
+    ) as client:
+        connector._http_client = client
+        with pytest.raises(Exception) as caught:
+            await connector._post("session", {})
+    assert not isinstance(caught.value, FileSkippedException)
+    assert stream.closed
+    expected = {
+        200: "SourceError",
+        400: "ComposioProxyError",
+        401: "AuthProviderAuthError",
+        429: "AuthProviderRateLimitError",
+        500: "AuthProviderServerError",
+    }
+    assert type(caught.value).__name__ == expected[status]
+
+
+@pytest.mark.asyncio
+async def test_nonidentity_encoding_is_rejected_and_valid_unicode_preserved():
+    import json
+
+    import httpx
+
+    from airweave.domains.sources.exceptions import SourceError
+
+    connector = await source()
+    value = {"data": {"text": "你好 café 🎵"}, "error": None}
+
+    def respond(request):
+        assert request.headers["accept-encoding"] == "identity"
+        return httpx.Response(200, content=json.dumps(value, ensure_ascii=False).encode())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        connector._http_client = client
+        assert await connector._post("session", {}) == value
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, headers={"content-encoding": "br"}, content=b"")
+        )
+    ) as client:
+        connector._http_client = client
+        with pytest.raises(SourceError, match="identity encoding"):
+            await connector._post("session", {})
+
+
+@pytest.mark.asyncio
+async def test_aggregate_archive_limit_counts_native_metadata(monkeypatch):
+    from airweave.domains.sources.exceptions import SourceError
+    from airweave.platform.sources import wispr
+
+    connector = await source()
+    first = {
+        "id": "m",
+        "modified_at": "same",
+        "content": "你好",
+        "native_metadata": "x" * 250,
+        "transcript": (
+            "(...truncated, 3 chars remaining; continue with view_transcript.start_char=3...)"
+        ),
+    }
+    second = {
+        "id": "m",
+        "modified_at": "same",
+        "transcript": "🎵 café",
+        "native_metadata": "y" * 250,
+    }
+    execute = AsyncMock(side_effect=[first, second])
+    monkeypatch.setattr(connector, "_execute", execute)
+    monkeypatch.setattr(wispr, "MAX_BODY_BYTES", 700)
+    with pytest.raises(SourceError, match="body exceeds byte limit"):
+        await connector._body("meeting", "m")
+    assert execute.await_count == 2
+    execute.side_effect = [first, second]
+    monkeypatch.setattr(wispr, "MAX_BODY_BYTES", 2000)
+    captured = await connector._body("meeting", "m")
+    assert [part["response"] for part in captured["responses"]] == [first, second]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, expected", [(401, "AuthProviderAuthError"), (429, "AuthProviderRateLimitError")]
+)
+async def test_encoded_error_preserves_header_status_failure(status, expected):
+    import httpx
+
+    connector = await source()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(status, headers={"content-encoding": "br"}, content=b"")
+        )
+    ) as client:
+        connector._http_client = client
+        with pytest.raises(Exception) as caught:
+            await connector._post("session", {})
+        assert type(caught.value).__name__ == expected
