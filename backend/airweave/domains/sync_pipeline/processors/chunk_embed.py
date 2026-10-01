@@ -19,7 +19,7 @@ from airweave.domains.embedders.exceptions import EmbedderProviderError
 from airweave.domains.embedders.protocols import DenseEmbedderProtocol, SparseEmbedderProtocol
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, SyncFailureError
 from airweave.domains.sync_pipeline.pipeline.text_builder import TextualRepresentationBuilder
-from airweave.domains.sync_pipeline.pipeline.text_models import BuiltTextBatch
+from airweave.domains.sync_pipeline.pipeline.text_models import BuiltTextBatch, NativeTextBody
 from airweave.domains.sync_pipeline.processors.utils import filter_empty_representations
 from airweave.platform.entities._base import BaseEntity, CodeFileEntity
 
@@ -77,9 +77,13 @@ class ChunkEmbedProcessor:
         entities: List[BaseEntity],
         sync_context: "ProcessingContext",
         runtime: "ProcessingRuntime",
+        *,
+        native_bodies: dict[str, NativeTextBody] | None = None,
     ) -> BuiltTextBatch:
         """Convert once, exposing the complete pre-chunk representation for retention."""
-        return await self._text_builder.build_with_text(entities, sync_context, runtime)
+        return await self._text_builder.build_with_text(
+            entities, sync_context, runtime, native_bodies=native_bodies
+        )
 
     async def process_built_text(
         self,

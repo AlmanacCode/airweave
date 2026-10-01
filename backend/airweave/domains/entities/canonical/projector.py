@@ -107,7 +107,17 @@ class CanonicalProjector:
                 )
                 context = ProjectionContext(logger, source_name)
                 runtime = ProjectionRuntime(StrictProjectionTracker())
-                built = await self._processor.build_text(selected, context, runtime)
+                selected_ids = {entity.entity_id for entity in selected}
+                native_bodies = {
+                    item.entity.entity_id: item.native_body
+                    for item in mapped.parts
+                    if item.native_body is not None
+                    and item.entity is not None
+                    and item.entity.entity_id in selected_ids
+                }
+                built = await self._processor.build_text(
+                    selected, context, runtime, native_bodies=native_bodies
+                )
                 artifacts = prepare_text(built.representations, generation)
                 chunks = await self._processor.process_built_text(
                     built.entities,

@@ -9,7 +9,11 @@ from airweave.core.shared_models import AirweaveFieldFlag
 from airweave.domains.converters.protocols import ConverterRegistryProtocol
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, SyncFailureError
 from airweave.domains.sync_pipeline.file_types import SUPPORTED_FILE_EXTENSIONS
-from airweave.domains.sync_pipeline.pipeline.text_models import BuiltText, BuiltTextBatch
+from airweave.domains.sync_pipeline.pipeline.text_models import (
+    BuiltText,
+    BuiltTextBatch,
+    NativeTextBody,
+)
 from airweave.platform.entities._base import BaseEntity, CodeFileEntity, FileEntity, WebEntity
 
 if TYPE_CHECKING:
@@ -70,13 +74,29 @@ class TextualRepresentationBuilder:
         entities: List[BaseEntity],
         sync_context: "ProcessingContext",
         runtime: "ProcessingRuntime",
+        *,
+        native_bodies: dict[str, NativeTextBody] | None = None,
     ) -> BuiltTextBatch:
         """Retain exact converted text and content boundaries before chunking clears them."""
+        native_bodies = native_bodies or {}
+        if set(native_bodies) - {entity.entity_id for entity in entities}:
+            raise EntityProcessingError("Native body does not belong to this text batch")
+        if any(
+            entity.entity_id in native_bodies and isinstance(entity, (FileEntity, WebEntity))
+            for entity in entities
+        ):
+            raise EntityProcessingError("Native body cannot override converted content")
         content_starts: dict[str, int] = {}
         source_name = sync_context.source_short_name
 
         # Step 1: Build metadata section for all entities
-        await self._build_metadata_for_all(entities, source_name)
+        await self._build_metadata_for_all(entities, source_name, native_bodies)
+        for entity in entities:
+            body = native_bodies.get(entity.entity_id)
+            if body is not None:
+                prefix = f"{entity.textual_representation}\n\n# Content\n\n"
+                content_starts[entity.entity_id] = len(prefix)
+                entity.textual_representation = prefix + body.text
 
         # Step 2: Partition entities by converter
         converter_groups, failed_entities = self._partition_by_converter(entities, sync_context)
@@ -97,6 +117,13 @@ class TextualRepresentationBuilder:
                     entity_id=entity.entity_id,
                     text=entity.textual_representation or "",
                     content_start=content_starts.get(entity.entity_id),
+                    kind=(
+                        "native_text"
+                        if entity.entity_id in native_bodies
+                        else "extracted_text"
+                        if entity.entity_id in content_starts
+                        else "generated_text"
+                    ),
                 )
                 for entity in entities
             ),
@@ -106,26 +133,43 @@ class TextualRepresentationBuilder:
     # Metadata Building
     # ------------------------------------------------------------------------------------
 
-    async def _build_metadata_for_all(self, entities: List[BaseEntity], source_name: str) -> None:
+    async def _build_metadata_for_all(
+        self,
+        entities: List[BaseEntity],
+        source_name: str,
+        native_bodies: dict[str, NativeTextBody],
+    ) -> None:
         """Build metadata section for all entities.
 
         Args:
             entities: Entities to build metadata for
             source_name: Name of the source connector
+            native_bodies: Explicit source bodies whose fields leave the metadata section
 
         Note:
             CodeFileEntity is exempt because code is self-documenting.
         """
 
         async def build_metadata(entity: BaseEntity):
-            metadata = self.build_metadata_section(entity, source_name)
+            body = native_bodies.get(entity.entity_id)
+            metadata = self.build_metadata_section(
+                entity,
+                source_name,
+                exclude_fields=body.metadata_fields if body else (),
+            )
             if not metadata and not isinstance(entity, CodeFileEntity):
                 raise EntityProcessingError(f"Empty metadata for {entity.entity_id}")
             entity.textual_representation = metadata
 
         await asyncio.gather(*[build_metadata(e) for e in entities])
 
-    def build_metadata_section(self, entity: BaseEntity, source_name: str) -> str:
+    def build_metadata_section(
+        self,
+        entity: BaseEntity,
+        source_name: str,
+        *,
+        exclude_fields: tuple[str, ...] = (),
+    ) -> str:
         """Build metadata section for any entity type.
 
         This method is public to allow federated search sources to build
@@ -136,6 +180,7 @@ class TextualRepresentationBuilder:
         Args:
             entity: Entity to build metadata for
             source_name: Name of the source (e.g., "slack", "github")
+            exclude_fields: Explicit fields represented in the separate native body
 
         Returns:
             Markdown formatted metadata section
@@ -159,7 +204,11 @@ class TextualRepresentationBuilder:
             lines.append(f"**Path**: {path_str}")
 
         # Add embeddable fields
-        embeddable_fields = self._extract_embeddable_fields(entity)
+        embeddable_fields = {
+            key: value
+            for key, value in self._extract_embeddable_fields(entity).items()
+            if key not in exclude_fields
+        }
         if embeddable_fields:
             lines.append("")
             lines.append(self._format_embeddable_fields_as_markdown(embeddable_fields))

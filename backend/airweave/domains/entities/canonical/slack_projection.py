@@ -13,6 +13,7 @@ from airweave.domains.entities.canonical.projection_inputs import ProjectionInpu
 from airweave.domains.entities.canonical.requests import BlobReference, parent_container_key
 from airweave.domains.entities.canonical.slack_files import SlackFileManifest
 from airweave.domains.storage.protocols import StorageBackend
+from airweave.domains.sync_pipeline.pipeline.text_models import NativeTextBody
 from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
 from airweave.platform.entities._base import BaseEntity, Breadcrumb
 from airweave.platform.entities.slack import SlackAttachmentEntity
@@ -76,8 +77,15 @@ async def map_slack_files(
     """Retain one body and one expected part per file, including uncaptured originals."""
     files, manifest = await _file_inventory(record, storage)
     populate_base_fields(body)
+    native_body = None
+    if "text" in record.payload:
+        native_body = NativeTextBody(text=record.payload["text"], metadata_fields=("text",))
     parts = [
-        ProjectionInput(part=ExtractionPart(part_index=0, key="body", kind="body"), entity=body)
+        ProjectionInput(
+            part=ExtractionPart(part_index=0, key="body", kind="body"),
+            entity=body,
+            native_body=native_body,
+        )
     ]
     if record.payload_schema_version == 2:
         return ProjectionInputs(parts=tuple(parts))

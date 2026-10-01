@@ -36,7 +36,7 @@ Synthetic provider/PDF and migrated SQL tests are separate from live qualificati
 returns `record_id`, `revision`, `status` (`available` or `unavailable`) and
 `representations`. Each descriptor contains an opaque `id`, parent `record_id`,
 `revision`, `generation`, `pipeline_version`, source-local `part_key`,
-`kind` (`extracted_text` or `generated_text`), `media_type: text/markdown`,
+`kind` (`native_text`, `extracted_text`, or `generated_text`), `media_type: text/markdown`,
 `content_characters` (null for generated-only text), `index_characters`, and
 `source_anchors: unavailable`. Storage keys and internal part ordinals are omitted.
 
@@ -174,3 +174,30 @@ changed. Deployment and product reader migration remain separate activation gate
 Tests exercise a real retained PDF transitioning from an inline publication to one
 body-only parent, one indexed file child and one unavailable child. Provider HTTP,
 real embeddings and live Vespa are not part of this synthetic SQL proof.
+
+### Native Slack message text
+
+Slack message projections select the captured `/text` string as `native_text`.
+The same builder appends that string to generated search context and records its
+exact character boundary. Retention and indexing consume that single result;
+content reads return the string verbatim, without the generated context. An
+explicit empty string is available empty content. A missing field has no native
+content view; a present non-string field fails projection. Generated display
+names are never substituted for native content.
+
+This is the `/text` representation, not a rendering of Slack blocks or legacy
+attachments. Native formatting markers remain intact; block-only messages do not
+claim extracted block text. Files keep their independent extraction parts (capture
+schema 1) or child records (schema 2). Other providers require their own explicit
+body selection; field names alone do not establish native provenance.
+
+Artifacts now record native, extracted, or generated text provenance in their
+existing generation JSON. Older descriptors without provenance retain their
+prior interpretation: content boundary means extracted text, otherwise generated
+text. They are not retroactively reclassified as native.
+
+Deploying this code does not rebuild existing publications. Use the existing
+scoped reprojection plan/apply operation to increment the selected sync pipeline
+version and replay retained originals. The version fence hides old publications
+until their replacement is published. No provider recapture is required, and no
+global runtime activation or version mutation is included in this change.

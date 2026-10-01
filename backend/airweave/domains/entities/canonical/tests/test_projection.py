@@ -141,7 +141,7 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
 
     from airweave.domains.sync_pipeline.pipeline.text_models import BuiltText, BuiltTextBatch
 
-    async def build_text(entities, context, runtime):
+    async def build_text(entities, context, runtime, *, native_bodies=None):
         return BuiltTextBatch(
             entities=entities,
             representations=tuple(

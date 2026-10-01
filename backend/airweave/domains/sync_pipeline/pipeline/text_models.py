@@ -1,8 +1,18 @@
 """One conversion result, shared by indexing and optional retained representation reads."""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from airweave.platform.entities._base import BaseEntity
+
+
+class NativeTextBody(BaseModel):
+    """Source-selected body; an empty string is present content, not missing content."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    text: str
+    metadata_fields: tuple[str, ...] = ()
 
 
 class BuiltText(BaseModel):
@@ -12,6 +22,7 @@ class BuiltText(BaseModel):
     entity_id: str
     text: str
     content_start: int | None = Field(default=None, ge=0)
+    kind: Literal["native_text", "extracted_text", "generated_text"] = "generated_text"
 
 
 class BuiltTextBatch(BaseModel):

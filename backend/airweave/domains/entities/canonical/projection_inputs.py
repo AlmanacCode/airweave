@@ -3,6 +3,7 @@
 from pydantic import BaseModel, ConfigDict
 
 from airweave.domains.entities.canonical.extraction_models import ExtractionPart
+from airweave.domains.sync_pipeline.pipeline.text_models import NativeTextBody
 from airweave.platform.entities._base import BaseEntity
 
 
@@ -12,6 +13,7 @@ class ProjectionInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     part: ExtractionPart
     entity: BaseEntity | None
+    native_body: NativeTextBody | None = None
 
 
 class ProjectionInputs(BaseModel):

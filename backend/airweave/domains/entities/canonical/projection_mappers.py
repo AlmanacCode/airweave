@@ -156,7 +156,11 @@ def _slack(record: SourceRecord) -> tuple[BaseEntity, ...]:
         raise ProjectionMappingError("Slack message requires its conversation identity")
     timestamp = datetime.fromtimestamp(float(record.identity.native_id), timezone.utc)
     metadata = {**payload, "channel": {"id": record.identity.container_id}}
+    text = payload.get("text", "")
+    if not isinstance(text, str):
+        raise ProjectionMappingError("Slack message text must be a string when present")
     entity = SlackMessageEntity.from_api(metadata, breadcrumbs=[])
+    entity.text = text
     entity.created_at = entity.message_time = timestamp
     edited = payload.get("edited")
     if isinstance(edited, dict) and edited.get("ts"):

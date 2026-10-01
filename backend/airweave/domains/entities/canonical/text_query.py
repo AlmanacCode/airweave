@@ -128,7 +128,7 @@ class CanonicalTextReader:
             generation=row.id,
             pipeline_version=row.pipeline_version,
             part_key=part.key,
-            kind="extracted_text" if artifact.content_start is not None else "generated_text",
+            kind=artifact.kind,
             content_characters=(
                 artifact.characters - artifact.content_start
                 if artifact.content_start is not None
