@@ -202,6 +202,14 @@ async def test_all_schemas_retrieve_varied_vectors_with_collection_and_sync_scop
                         ),
                         collection,
                     )
+                    params = compiled.raw["params"]
+                    if mode == RetrievalStrategy.KEYWORD:
+                        assert "ranking.matching.filterFirstThreshold" not in params
+                    else:
+                        assert params["ranking.matching.filterFirstThreshold"] == 0.0
+                        # Force this fixture through ANN even when its random scope is tiny.
+                        # Mutate the actual executable dictionary: raw is PrivateAttr-backed.
+                        params["ranking.matching.approximateThreshold"] = 0.0
                     result = await engine.execute_query(compiled)
                     assert not result.engine_partial, (mode, result.engine_coverage_percent)
                     assert {item.entity_id for item in result.results} == expected, mode

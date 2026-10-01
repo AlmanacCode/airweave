@@ -384,6 +384,10 @@ class VespaVectorDB:
             RetrievalStrategy.SEMANTIC,
             RetrievalStrategy.HYBRID,
         ):
+            # Filter-first graph traversal can miss all eligible neighbors in
+            # selectively scoped collections. Keep pre-filtering, but compute
+            # distances before checking the filter to preserve candidate recall.
+            params["ranking.matching.filterFirstThreshold"] = 0.0
             for i, dense_emb in enumerate(embeddings.dense_embeddings):
                 params[f"input.query(q{i})"] = {"values": dense_emb.vector}
 
