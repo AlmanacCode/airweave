@@ -294,6 +294,11 @@ async def map_record(
 
             yield await map_gmail(record, storage, directory)
             return
+        elif source_name == "slack" and record.identity.record_type == "message":
+            from airweave.domains.entities.canonical.slack_projection import map_slack_files
+
+            yield await map_slack_files(record, _slack(record)[0], storage, directory)
+            return
         else:
             entities = await _map_entities(record, source_name, storage, directory)
         parts = tuple(_projection_input(index, entity) for index, entity in enumerate(entities))

@@ -105,3 +105,32 @@ failure: native size exceeded the initial capture limit and no bytes were stored
 | Native capability/resource | Product name | Access operation | Stored representation | Sync/change guarantee | Proof | Gap |
 | --- | --- | --- | --- | --- | --- | --- |
 | File metadata without captured body | Original / extraction availability | Existing record and extraction reads | Native metadata plus explicit unavailable-original coverage | Later captured bytes form a new revision; loss of body retires previous text eligibility | Real SQL metadata-only → retained text → metadata-only lifecycle; complete/missing-blob remains error | Actual recapture depends on provider access and configured limits; no converter success claimed |
+
+## Slack retained file projection
+
+Slack messages now enumerate their body and each native `files[]` identity as
+separate extraction parts. A retained file blob must reference its exact
+`/files/N` location and pass the existing sync ownership, SHA-256 and byte-count
+checks. Supported retained files use the existing converter/chunker/embedding
+pipeline; missing original bytes are explicit `unavailable_original` parts. The
+body remains searchable when a file was deliberately not captured. Unknown or
+unsupported conversion outcomes retain the shared strict/unsupported semantics.
+
+| Native resource | Product name | Access | Stored representation | Change guarantee | Proof | Gap |
+| --- | --- | --- | --- | --- | --- | --- |
+| Message text | Slack message | Stored read/search | Native JSON | Existing message capture | Offline mapper and SQL publication | Existing source freshness limits |
+| Hosted file | Message attachment | Stored original/extraction when retained | Existing immutable blob, `/files/N` | Same message revision and visibility | Synthetic PDF conversion/publication; integrity tests | Source byte acquisition not implemented by this change |
+| Uncaptured file | Unavailable attachment | Coverage only | Native metadata | No byte-completeness claim | Explicit missing part tests | No inferred download or extracted content |
+
+Native file IDs identify extraction parts; byte-identical files with distinct IDs
+remain distinct parts. Duplicate file IDs or malformed metadata fail projection
+rather than choosing an ambiguous original. Complete records missing declared
+file bytes fail integrity checks; explicitly partial originals can publish partial
+extraction. No provider URL is fetched during projection. Attachments remain
+parts of their parent message: this adds no independent file authorization or
+file-only search facet.
+
+Existing indexed Slack generations require explicit reprojection before this
+coverage appears. No global pipeline version was bumped. The current Slack source
+still retains file metadata only; this projection change does not establish live
+`files:read` access, download support, whole-workspace completeness, or freshness.

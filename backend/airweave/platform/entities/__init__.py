@@ -286,7 +286,7 @@ from .slab import (
     SlabPostEntity,
     SlabTopicEntity,
 )
-from .slack import SlackChannelEntity, SlackMessageEntity
+from .slack import SlackAttachmentEntity, SlackChannelEntity, SlackMessageEntity
 from .slite import SliteNoteEntity
 from .stripe import (
     StripeBalanceEntity,
@@ -650,6 +650,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
         SlabTopicEntity,
     ],
     "slack": [
+        SlackAttachmentEntity,
         SlackChannelEntity,
         SlackMessageEntity,
     ],
