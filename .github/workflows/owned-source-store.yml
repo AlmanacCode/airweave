@@ -5,6 +5,7 @@ on:
     branches: [dev, main]
     paths:
       - backend/**
+      - evaluation/**
       - vespa/app/**
       - Makefile
       - .github/workflows/owned-source-store.yml
@@ -12,6 +13,7 @@ on:
     branches: [dev]
     paths:
       - backend/**
+      - evaluation/**
       - vespa/app/**
       - Makefile
       - .github/workflows/owned-source-store.yml
@@ -24,6 +26,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.13'
+      - name: Verify offline retrieval metrics and file boundaries
+        run: |
+          python -m venv .venv-evaluation
+          .venv-evaluation/bin/python -m pip install ir-measures==0.4.3 pydantic==2.11.9 pytest==8.3.5
+          .venv-evaluation/bin/python -m pytest evaluation/tests -q --confcutdir=evaluation
+
   correctness:
     runs-on: ubuntu-latest
     timeout-minutes: 25

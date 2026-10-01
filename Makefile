@@ -32,7 +32,7 @@ setup:
 
 test-store:
 	@test -n "$$CANONICAL_TEST_DATABASE_URL" || (echo 'Set CANONICAL_TEST_DATABASE_URL to a disposable PostgreSQL database.' >&2; exit 1)
-	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/entities/canonical/tests airweave/domains/syncs/tests
+	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/entities/canonical/tests airweave/domains/native_ingestion/tests airweave/domains/syncs/tests
 
 test-capture:
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/platform/sources/tests tests/unit/platform/sources/records tests/unit/platform/sources/test_*_capture.py tests/unit/domains/entities tests/unit/platform/http_client/test_composio_transport.py airweave/domains/storage/tests/test_file_service.py
@@ -42,7 +42,7 @@ test-provisioning:
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/owned_provisioning/tests airweave/domains/source_connections/tests airweave/domains/temporal/tests airweave/domains/sources/tests/test_lifecycle.py airweave/domains/sync_pipeline/tests/test_factory.py
 
 test-search:
-	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/search
+	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/search airweave/domains/embedders
 
 test-auth:
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/api/tests/test_service_auth.py airweave/api/tests/test_sync_authorization.py airweave/api/tests/test_context_resolver_auth.py
