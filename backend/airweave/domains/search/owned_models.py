@@ -5,10 +5,10 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
-from airweave.domains.entities.canonical.coverage import CaptureCoverage
+from airweave.domains.entities.canonical.coverage_models import CaptureCoverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.requests import RecordIdentity
-from airweave.domains.search.types import RetrievalStrategy
+from airweave.domains.search.retrieval_strategy import RetrievalStrategy
 
 
 class OwnedSearchRequest(BaseModel):

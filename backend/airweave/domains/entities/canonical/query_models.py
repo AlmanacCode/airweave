@@ -6,9 +6,9 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
 
-from airweave.domains.entities.canonical.coverage import CaptureCoverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.models import ObservedChange, SourceRecord
+from airweave.domains.entities.canonical.models import RecordPage as RecordPage
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.platform.sources.records.sheets_manifest import GridBounds, GridGap
 from airweave.platform.sources.records.sheets_models import SpreadsheetCell
@@ -71,18 +71,6 @@ class RecordListQuery(BaseModel):
     filters: RecordFilters = Field(default_factory=RecordFilters)
     limit: int = Field(default=100, ge=1, le=500)
     cursor: str | None = None
-
-
-class RecordPage(BaseModel):
-    """Committed records with truthful traversal semantics."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    capture: CaptureCoverage | None = None
-    records: tuple[SourceRecord, ...]
-    next_cursor: str | None
-    has_more: bool
-    consistency: Literal["live"] = "live"
-    order: Literal["id_asc"] = "id_asc"
 
 
 class RecordChangePage(BaseModel):

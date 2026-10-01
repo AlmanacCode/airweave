@@ -5,20 +5,12 @@ RetrievalStrategy, SearchQuery, SearchPlan.
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import List
 
 from pydantic import BaseModel, Field
 
+from airweave.domains.search.retrieval_strategy import RetrievalStrategy
 from airweave.domains.search.types.filters import FilterGroup
-
-
-class RetrievalStrategy(str, Enum):
-    """Supported retrieval strategies."""
-
-    SEMANTIC = "semantic"
-    KEYWORD = "keyword"
-    HYBRID = "hybrid"
 
 
 class SearchQuery(BaseModel):

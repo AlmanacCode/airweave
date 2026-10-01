@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
+from airweave.domains.entities.canonical.coverage_models import CaptureCoverage
 from airweave.domains.entities.canonical.requests import BlobReference, RecordIdentity
 
 
@@ -68,3 +69,15 @@ class ChangePage(BaseModel):
     next_sequence: int
     high_watermark: int
     has_more: bool
+
+
+class RecordPage(BaseModel):
+    """Committed records with truthful traversal semantics."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    capture: CaptureCoverage | None = None
+    records: tuple[SourceRecord, ...]
+    next_cursor: str | None
+    has_more: bool
+    consistency: Literal["live"] = "live"
+    order: Literal["id_asc"] = "id_asc"

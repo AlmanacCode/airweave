@@ -1,16 +1,19 @@
 """Describe persisted capture promises independently of indexing counts or job success."""
 
-from typing import Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import ValidationError
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from airweave.domains.entities.canonical.coverage_models import (
+    CaptureCoverage,
+    CaptureScopeSummary,
+    FullCaptureCoverage,
+)
 from airweave.domains.entities.canonical.cycle_models import (
     CYCLE_KEY,
     CaptureCycle,
-    CompletionPolicy,
 )
 from airweave.domains.entities.canonical.requests import WriterFence
 from airweave.domains.entities.canonical.store import content_is_available
@@ -18,45 +21,6 @@ from airweave.models.capture_scan import CaptureScan
 from airweave.models.entity import Entity
 from airweave.models.sync import Sync
 from airweave.models.sync_cursor import SyncCursor
-
-
-class FullCaptureCoverage(BaseModel):
-    """Public coverage evidence excludes private provider continuation values."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    cycle_id: UUID
-    completed_at: AwareDatetime
-    discovery: Literal["incomplete", "scope_enumeration_complete"]
-
-
-class CaptureScopeSummary(BaseModel):
-    """Counts describe eligible exact scopes, never original/indexed record totals."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    eligible: int = Field(ge=0, strict=True)
-    completed_full: int = Field(ge=0, strict=True)
-    completed_changes: int = Field(ge=0, strict=True)
-    unfinished: int = Field(ge=0, strict=True)
-
-    @model_validator(mode="after")
-    def partition(self):
-        """Every eligible scope belongs to exactly one progress category."""
-        if self.eligible != self.completed_full + self.completed_changes + self.unfinished:
-            raise ValueError("Scope progress must partition eligible scopes")
-        return self
-
-
-class CaptureCoverage(BaseModel):
-    """No cycle means unknown; completion only certifies the declared scope policies."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    phase: Literal["active", "complete"]
-    mode: Literal["full", "changes", "mixed"] = "full"
-    scope_summary: CaptureScopeSummary | None = None
-    last_full_capture: FullCaptureCoverage | None = None
-    provider_checkpoint_promoted_at: AwareDatetime | None = None
-    policies: dict[str, CompletionPolicy]
-    discovery: Literal["incomplete", "pending", "scope_enumeration_complete"]
 
 
 async def mixed_scope_summary(

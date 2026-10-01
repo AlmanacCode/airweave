@@ -4,6 +4,7 @@ Usage:
     from airweave.domains.search.types import SearchResult, FilterGroup, SearchPlan
 """
 
+from airweave.domains.search.retrieval_strategy import RetrievalStrategy
 from airweave.domains.search.types.embeddings import QueryEmbeddings
 from airweave.domains.search.types.filters import (
     FilterableField,
@@ -18,7 +19,6 @@ from airweave.domains.search.types.metadata import (
     SourceMetadata,
 )
 from airweave.domains.search.types.plan import (
-    RetrievalStrategy,
     SearchPlan,
     SearchQuery,
 )

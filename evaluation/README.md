@@ -202,7 +202,7 @@ when its displayed message is not the answer. Keep these two experiments separat
   whole. Use a separately fingerprinted dataset tagged `unit:card`.
 - **Displayed-original ranking:** representative original followed by the explicitly
   returned additional matches, preserving card order and within-card order. Judge
-  those exact original identities in a separate dataset tagged `unit:original`.
+  those exact original identities in a separate dataset tagged `unit:displayed_original`.
   Do not add unreturned members merely because they belong to a returned group.
   This is a ranking of inspectable originals, not the number of visible cards.
 
@@ -244,3 +244,70 @@ The delivery adapter's synthetic tests use backend fixtures:
 PYTHONPATH=backend:. backend/.venv/bin/python -m pytest \
   backend/tests/unit/search/test_owned_evaluation.py -q
 ```
+
+## HTTP replay of a retained corpus
+
+The replay command runs one mode against an **already qualified, retained** corpus.
+It does not copy records, publish, fetch providers or rebuild an index. The earlier
+mixed-corpus trial was cleaned; its census cannot be replayed against missing records.
+Prepare and qualify a retained fixture separately before using this command.
+
+```sh
+PYTHONPATH=backend:. backend/.venv/bin/python -m evaluation.replay_cli \
+  --url http://127.0.0.1:18086/api/v1/ \
+  --dataset /private/path/card-dataset.json \
+  --census /private/path/qualified-corpus.json \
+  --output /private/path/new-hybrid-run \
+  --system 'reviewed-commit+embedding+retrieval+reranker+configuration' \
+  --mode hybrid --unit card --limit 20
+```
+
+Authentication uses `AIRWEAVE_API_KEY` and the census organization via
+`X-Organization-ID`. The native publisher's URL rules also apply here: external
+HTTPS, loopback HTTP, no URL credentials, no redirects or environment proxies.
+No server database credentials or dotenv files are needed; `--help` needs no key.
+Each HTTP operation has a 10-second connect and 60-second read/write/pool timeout.
+Requests run once, sequentially, without retries or a whole-run deadline.
+
+Inputs are strict `Dataset` and `evaluation.replay.FrozenCorpus` JSON, each at most
+32 MiB. The census contains `corpus_id`, `organization_id`, explicit `sync_ids`
+(at most 20) and `records`. Each `FrozenRecord` extends `CorpusRecord` with the
+qualified `capture_hash`, `indexed_pipeline_version`, exact `extraction` parts,
+and canonical `parent` identity. Preserve source revisions/native versions in the
+qualified corpus specification identified by `corpus_id`; destination revisions
+are separately checked here. Freeze conversation membership before retrieval.
+The census must enumerate **every active, content-available record in each selected
+sync**, including intentionally excluded records; it need not describe other
+sources in the provider account. Empty selected syncs are allowed. Every query
+must carry exactly the matching `unit:card` or `unit:displayed_original` tag and
+every judgment must refer to an identity in this corpus.
+
+Before and after querying, the runner paginates the existing record-list endpoint
+and checks exact eligible membership, native/parent identities, destination
+revisions, capture hashes and current index/pipeline revisions. Missing, extra,
+withdrawn or changed records reject the comparison. Every explicitly returned
+representative and additional match must also have exactly the qualified
+extraction coverage. No per-record fetches are added. Availability is API
+metadata/permission evidence, **not physical blob integrity**. These live census
+traversals are non-atomic; changes that occur and revert between observations can
+escape detection. The API does not attest the supplied model/system descriptor.
+
+The fresh output directory is mode 0700; files are 0600 and never overwritten.
+It retains validated inputs, paginated census responses, numbered search request
+and raw response files, every query outcome, mode/fallback metadata and HTTP
+timings with unknown cache state. Response bytes are saved before decoding.
+HTTP failures, timeouts and malformed responses remain failed query outcomes;
+corpus or delivered-proof contradictions abort scoring while preserving evidence.
+Only successful before/after checks produce `run.json` and an unjudged candidate
+pool. Query failures still stay in the metric denominator. No labels are invented.
+
+Use `--report` to invoke the existing offline scorer; install its pinned
+`ir-measures==0.4.3` dependency in that environment first. Alternatively, score
+the retained `dataset.json` and `run.json` with the standalone command above.
+Exit codes: 0 replay retained (inspect failed/partial counts); 2 invalid inputs or
+output; 3 failed census HTTP verification; 4 corpus/proof mismatch; 5 unavailable
+offline scoring dependency; 130 interrupted; 1 unexpected failure.
+
+`make test-search` runs both the delivery adapter and replay boundary tests.
+These synthetic HTTP tests establish runner behavior, not live ranking quality
+or qualification of any existing local corpus.

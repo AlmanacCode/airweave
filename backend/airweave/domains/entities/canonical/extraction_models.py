@@ -1,6 +1,6 @@
 """Generation-owned extraction evidence, separate from captured original completeness."""
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
@@ -50,6 +50,18 @@ class ExtractionCoverage(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     parts: tuple[ExtractionOutcome, ...]
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_serialized_status(cls, value: Any) -> Any:
+        """Accept wire status only as a checked attestation of the underlying parts."""
+        if not isinstance(value, dict) or "status" not in value:
+            return value
+        facts = {key: item for key, item in value.items() if key != "status"}
+        coverage = cls.model_validate(facts)
+        if value["status"] != coverage.status:
+            raise ValueError("Serialized extraction status conflicts with its parts")
+        return facts
 
     @model_validator(mode="after")
     def unique_parts(self):

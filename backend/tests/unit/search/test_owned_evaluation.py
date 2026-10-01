@@ -6,6 +6,10 @@ from uuid import uuid4
 import pytest
 from evaluation.owned_retrieval import ConversationIdentity, CorpusRecord, delivered_result
 
+from airweave.domains.entities.canonical.extraction_models import (
+    ExtractionCoverage,
+    ExtractionOutcome,
+)
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.search.owned_models import (
     OwnedSearchGroup,
@@ -151,3 +155,42 @@ def test_group_membership_must_match_frozen_census(violation):
     for unit in ("card", "displayed_original"):
         with pytest.raises(ValueError, match="frozen conversation membership"):
             delivered_result("q", response(first), (first_record, second_record), unit=unit)
+
+
+@pytest.mark.parametrize("location", ("representative", "additional"))
+@pytest.mark.parametrize("violation", (None, "wrong_status", "unknown_status", "unknown_field"))
+def test_actual_search_wire_extraction_roundtrip_stays_strict(location, violation):
+    """The normal API dump includes computed status, including additional matches."""
+    coverage = ExtractionCoverage(
+        parts=(ExtractionOutcome(part_index=0, key="body", kind="body", outcome="indexed"),)
+    )
+    first, _ = match()
+    second, _ = match(sync_id=first.sync_id, native_id="second")
+    first.extraction = second.extraction = coverage
+    first.group = OwnedSearchGroup(
+        kind="session",
+        native_id="session",
+        matched_records=2,
+        additional_matches=(OwnedSearchMatch.model_validate(second.model_dump(exclude={"group"})),),
+    )
+    wire = response(first).model_dump(mode="json")
+    extraction = (
+        wire["items"][0]["extraction"]
+        if location == "representative"
+        else wire["items"][0]["group"]["additional_matches"][0]["extraction"]
+    )
+    assert extraction["status"] == "complete"
+    if violation == "wrong_status":
+        extraction["status"] = "partial"
+    elif violation == "unknown_status":
+        extraction["status"] = "invented"
+    elif violation == "unknown_field":
+        extraction["future_field"] = True
+    if violation is None:
+        parsed = OwnedSearchResponse.model_validate(wire)
+        assert parsed.model_dump(mode="json") == wire
+        assert ExtractionCoverage.model_validate(coverage.persisted()).status == "complete"
+        assert "status" not in coverage.persisted()
+    else:
+        with pytest.raises(ValueError):
+            OwnedSearchResponse.model_validate(wire)

@@ -16,10 +16,9 @@ from pydantic import (
     model_validator,
 )
 
+from airweave.domains.entities.canonical.coverage_models import CompletionPolicy
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.requests import RecordKind, ScanVersion, WriterFence
-
-CompletionPolicy = Literal["exhaustive", "discovery_only", "discovery_with_validation"]
 
 CaptureMode = Literal["full", "changes", "mixed"]
 CompletedDiscovery = Literal["incomplete", "scope_enumeration_complete"]
