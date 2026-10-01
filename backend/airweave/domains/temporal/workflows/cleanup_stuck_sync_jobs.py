@@ -5,12 +5,16 @@ from __future__ import annotations
 from datetime import timedelta
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
+from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
+from temporalio.exceptions import WorkflowAlreadyStartedError
 
 with workflow.unsafe.imports_passed_through():
     from airweave.domains.temporal.activities import cleanup_stuck_sync_jobs_activity
     from airweave.domains.temporal.activities.cleanup_projection_generations import (
         CleanupProjectionGenerationsActivity,
+    )
+    from airweave.domains.temporal.workflows.recover_native_projection import (
+        RecoverNativeProjectionWorkflow,
     )
 
 _CLEANUP_TIMEOUT = timedelta(minutes=5)
@@ -32,16 +36,27 @@ class CleanupStuckSyncJobsWorkflow:
 
     @workflow.run
     async def run(self) -> None:
-        """Run the cleanup workflow."""
-        await workflow.execute_activity(
-            cleanup_stuck_sync_jobs_activity,  # type: ignore[arg-type]
-            start_to_close_timeout=_CLEANUP_TIMEOUT,
-            retry_policy=_CLEANUP_RETRY,
-        )
-
-        if workflow.patched("canonical-generation-gc-v1"):
+        """Preserve cleanup failures while independently dispatching native recovery."""
+        try:
             await workflow.execute_activity(
-                CleanupProjectionGenerationsActivity.run,
+                cleanup_stuck_sync_jobs_activity,  # type: ignore[arg-type]
                 start_to_close_timeout=_CLEANUP_TIMEOUT,
                 retry_policy=_CLEANUP_RETRY,
             )
+            if workflow.patched("canonical-generation-gc-v1"):
+                await workflow.execute_activity(
+                    CleanupProjectionGenerationsActivity.run,
+                    start_to_close_timeout=_CLEANUP_TIMEOUT,
+                    retry_policy=_CLEANUP_RETRY,
+                )
+        finally:
+            if workflow.patched("native-projection-recovery-v1"):
+                try:
+                    await workflow.start_child_workflow(
+                        RecoverNativeProjectionWorkflow.run,
+                        id="native-projection-recovery",
+                        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+                        parent_close_policy=workflow.ParentClosePolicy.ABANDON,
+                    )
+                except WorkflowAlreadyStartedError:
+                    pass

@@ -24,12 +24,17 @@ class ProjectCanonicalRecordsWorkflow:
         after_id: str | None = None,
         failures: int = 0,
         sweep: int = 0,
+        skip_failed: bool = False,
     ) -> None:
         """Drain bounded pages; retry failed sweeps without recapturing providers."""
         for _ in range(100):
             result = await workflow.execute_activity(
                 ProjectCanonicalRecordsActivity.run,
-                args=[organization_id, sync_id, after_id],
+                args=(
+                    [organization_id, sync_id, after_id, True]
+                    if skip_failed
+                    else [organization_id, sync_id, after_id]
+                ),
                 start_to_close_timeout=timedelta(minutes=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
@@ -38,7 +43,7 @@ class ProjectCanonicalRecordsWorkflow:
             if not result["has_more"]:
                 if not failures:
                     return
-                if sweep >= 2:
+                if skip_failed or sweep >= 2:
                     raise ApplicationError(
                         "Canonical projection still has failed records; retained as pending",
                         non_retryable=True,
@@ -46,4 +51,7 @@ class ProjectCanonicalRecordsWorkflow:
                 await workflow.sleep(timedelta(seconds=30 * (2**sweep)))
                 workflow.continue_as_new(args=[organization_id, sync_id, None, 0, sweep + 1])
             # Bound history even for very large sources.
-        workflow.continue_as_new(args=[organization_id, sync_id, after_id, failures, sweep])
+        args = [organization_id, sync_id, after_id, failures, sweep]
+        if skip_failed:
+            args.append(True)
+        workflow.continue_as_new(args=args)

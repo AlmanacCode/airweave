@@ -26,7 +26,13 @@ class ProjectCanonicalRecordsActivity:
     source_registry: SourceRegistryProtocol
 
     @activity.defn(name="project_canonical_records_activity")
-    async def run(self, organization_id: str, sync_id: str, after_id: str | None = None) -> dict:
+    async def run(
+        self,
+        organization_id: str,
+        sync_id: str,
+        after_id: str | None = None,
+        skip_failed: bool = False,
+    ) -> dict:
         """Resolve tenant collection scope fresh; never receive OAuth credentials."""
         organization = UUID(organization_id)
         sync = UUID(sync_id)
@@ -57,6 +63,7 @@ class ProjectCanonicalRecordsActivity:
                 sync,
                 after_id=UUID(after_id) if after_id else None,
                 limit=1,
+                skip_failed=skip_failed,
             )
             if not pending:
                 return ProjectionBatchResult().model_dump(mode="json")
@@ -67,6 +74,7 @@ class ProjectCanonicalRecordsActivity:
             soft_fail=False,
         )
         try:
+            options = {"skip_failed": True} if skip_failed else {}
             result = await self.projector.batch(
                 organization,
                 sync,
@@ -74,6 +82,7 @@ class ProjectCanonicalRecordsActivity:
                 destination,
                 logger,
                 after_id=UUID(after_id) if after_id else None,
+                **options,
             )
             return result.model_dump(mode="json")
         finally:

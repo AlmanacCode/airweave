@@ -40,6 +40,9 @@ def create_activities() -> list:
     from airweave.domains.temporal.activities.cleanup_projection_generations import (
         CleanupProjectionGenerationsActivity,
     )
+    from airweave.domains.temporal.activities.discover_native_projection import (
+        DiscoverNativeProjectionActivity,
+    )
     from airweave.domains.temporal.activities.project_canonical_records import (
         ProjectCanonicalRecordsActivity,
     )
@@ -61,6 +64,7 @@ def create_activities() -> list:
     logger.debug("Wiring activities with container dependencies")
 
     return [
+        DiscoverNativeProjectionActivity().run,
         CleanupProjectionGenerationsActivity(container.storage_backend).run,
         ProjectCanonicalRecordsActivity(
             projector=CanonicalProjector(
@@ -129,8 +133,12 @@ def get_workflows() -> list:
     from airweave.domains.temporal.workflows.project_canonical_records import (
         ProjectCanonicalRecordsWorkflow,
     )
+    from airweave.domains.temporal.workflows.recover_native_projection import (
+        RecoverNativeProjectionWorkflow,
+    )
 
     return [
+        RecoverNativeProjectionWorkflow,
         ProjectCanonicalRecordsWorkflow,
         RunSourceConnectionWorkflow,
         CleanupStuckSyncJobsWorkflow,
