@@ -132,6 +132,7 @@ class NativeImportStore:
             fingerprint=fingerprint,
             parents=parents,
             completion_policies={kind: policy for kind in parents},
+            membership="observed" if request.coverage == "bounded" else "retained",
         )
         previous = cycle_state(await cursor_row(db, fence))
         if previous is not None and previous.source_plan.get("native_import_id") != str(

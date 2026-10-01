@@ -47,10 +47,13 @@ class CycleConfiguration(BaseModel):
     completion_policies: dict[RecordKind, CompletionPolicy] = Field(default_factory=dict)
     known_object_validation: tuple[RecordKind, ...] = ()
     scope_changes: tuple[RecordKind, ...] = ()
+    membership: Literal["retained", "observed"] = "retained"
 
     def digest(self) -> str:
         """Bind history to scope, topology and guarantees, including default policies."""
         value = self.model_dump(mode="json")
+        if self.membership == "retained":
+            value.pop("membership")  # Preserve existing provider checkpoint digests.
         if not self.known_object_validation:
             value.pop("known_object_validation")  # Preserve existing default configuration digests.
         if not self.scope_changes:

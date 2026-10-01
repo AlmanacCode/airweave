@@ -175,8 +175,14 @@ def inventory_complete(subject, fence: WriterFence, state: CaptureCycle):
         .correlate(subject)
         .scalar_subquery()
     )
+    sightings = (
+        (subject.last_seen_run_id == CaptureScan.sweep_id,)
+        if state.configuration.membership == "observed"
+        else ()
+    )
     return exists(
         select(CaptureScan.id).where(
+            *sightings,
             CaptureScan.organization_id == fence.organization_id,
             CaptureScan.sync_id == fence.sync_id,
             CaptureScan.cycle_id == state.version.cycle_id,
@@ -384,7 +390,7 @@ async def terminal_checkpoint(
 
 
 async def complete_cycle(db: AsyncSession, sync: Sync, request: CompleteCycle) -> CaptureCycle:
-    """Publish the checkpoint only when SQL proves all currently visible scopes complete."""
+    """Publish only when every parent eligible under the declared membership is complete."""
     cursor, state = await attest_cycle(db, request.fence, request.expected.cycle_id)
     if state.version != request.expected:
         raise CycleConflict("Cycle changed before completion")
@@ -403,6 +409,13 @@ async def complete_cycle(db: AsyncSession, sync: Sync, request: CompleteCycle) -
                 Entity.record_revision > 0,
                 Entity.deleted_at.is_(None),
                 content_is_available(),
+                # The same current-sweep parent/ancestor predicate governs admission
+                # and frontier selection. Retained mode preserves provider semantics.
+                *(
+                    (membership_ready(request.fence, state),)
+                    if state.configuration.membership == "observed"
+                    else ()
+                ),
                 ~child_scope_complete(request.fence, state, child_type),
             )
             .limit(1)
@@ -418,7 +431,8 @@ async def complete_cycle(db: AsyncSession, sync: Sync, request: CompleteCycle) -
             completed_at=now,
             configuration_digest=state.configuration.digest(),
             discovery="scope_enumeration_complete"
-            if all(
+            if state.configuration.membership == "retained"
+            and all(
                 state.configuration.policy(kind) == "exhaustive"
                 for kind in state.configuration.parents
             )
