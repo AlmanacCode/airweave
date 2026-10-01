@@ -138,7 +138,16 @@ class TestCanonicalBlobs:
         svc.sync_id = uuid4()
         content = b"original unsupported format"
 
-        async def download(client, url, headers, destination, logger, *, follow_redirects=True):
+        async def download(
+            client,
+            url,
+            headers,
+            destination,
+            logger,
+            *,
+            follow_redirects=True,
+            expected_media_type=None,
+        ):
             with open(destination, "wb") as output:
                 output.write(content)
 
@@ -256,3 +265,32 @@ async def test_canonical_can_reject_redirect_without_storing_its_body(tmp_path):
         assert calls[-2:] == ["/original.pdf", "/target.pdf"]
         with open(downloaded.local_path, "rb") as original:
             assert original.read() == b"original"
+
+
+@pytest.mark.asyncio
+async def test_expected_file_type_rejects_login_html_but_accepts_binary(tmp_path):
+    from airweave.domains.sources.token_providers.static import StaticTokenProvider
+    from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+
+    service, storage = _make_service(str(tmp_path))
+    service.sync_id = uuid4()
+    responses = [
+        httpx.Response(200, headers={"Content-Type": "text/html; charset=utf-8"}, content=b"login"),
+        httpx.Response(
+            200, headers={"Content-Type": "application/octet-stream"}, content=b"original"
+        ),
+    ]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: responses.pop(0))) as raw:
+        client = AirweaveHttpClient(raw, uuid4(), "fixture", feature_flag_enabled=False)
+        args = (
+            "https://files.example/original.pdf",
+            client,
+            StaticTokenProvider("fixture"),
+            MagicMock(),
+        )
+        with pytest.raises(ValueError, match="content type does not match"):
+            await service.capture_canonical_url(*args, expected_media_type="application/pdf")
+        storage.write_file.assert_not_awaited()
+        assert not list(tmp_path.iterdir())
+        blob = await service.capture_canonical_url(*args, expected_media_type="application/pdf")
+        storage.write_file.assert_awaited_once_with(blob.key, b"original")

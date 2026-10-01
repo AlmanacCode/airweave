@@ -82,6 +82,7 @@ class FileService:
         media_type: str | None = None,
         *,
         follow_redirects: bool = True,
+        expected_media_type: str | None = None,
     ) -> BlobReference:
         """Capture original bytes with size/auth checks, independent of search file types."""
         if self.sync_id is None:
@@ -92,7 +93,13 @@ class FileService:
         try:
             try:
                 await self._stream_download(
-                    client, url, headers, temp_path, logger, follow_redirects=follow_redirects
+                    client,
+                    url,
+                    headers,
+                    temp_path,
+                    logger,
+                    follow_redirects=follow_redirects,
+                    expected_media_type=expected_media_type,
                 )
             except httpx.HTTPStatusError as exc:
                 if (
@@ -104,7 +111,13 @@ class FileService:
                 # Never promote an unauthenticated signed URL to provider credentials.
                 headers = await authorization_headers(auth, refresh=True)
                 await self._stream_download(
-                    client, url, headers, temp_path, logger, follow_redirects=follow_redirects
+                    client,
+                    url,
+                    headers,
+                    temp_path,
+                    logger,
+                    follow_redirects=follow_redirects,
+                    expected_media_type=expected_media_type,
                 )
             async with aiofiles.open(temp_path, "rb") as downloaded:
                 content = await downloaded.read(self.MAX_FILE_SIZE_BYTES + 1)
@@ -178,6 +191,7 @@ class FileService:
         logger: ContextualLogger,
         *,
         follow_redirects: bool = True,
+        expected_media_type: str | None = None,
     ) -> None:
         """Stream-download a file to disk with retry on 429/5xx/timeout."""
         async with client.stream(
@@ -188,6 +202,18 @@ class FileService:
             timeout=httpx.Timeout(180.0, read=540.0),
         ) as response:
             response.raise_for_status()
+            if expected_media_type is not None:
+                actual_type = (
+                    response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                )
+                expected_type = expected_media_type.split(";", 1)[0].strip().lower()
+                if not actual_type or actual_type not in {
+                    expected_type,
+                    "application/octet-stream",
+                }:
+                    raise ValueError(
+                        "Downloaded file content type does not match provider metadata"
+                    )
 
             content_length = response.headers.get("Content-Length")
             if content_length and int(content_length) > self.MAX_FILE_SIZE_BYTES:
