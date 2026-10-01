@@ -71,10 +71,26 @@ async def _drive(
     if any(blob.role == "representation_manifest" for blob in record.blobs):
         from airweave.domains.entities.canonical.workspace_docs import read_document
 
-        document = await read_document(record, storage)
-        content = document.text().encode("utf-8")
-        media_type = "text/plain"
-        suffix = ".txt"
+        if data.get("mimeType") == "application/vnd.google-apps.spreadsheet":
+            from airweave.domains.entities.canonical.workspace_sheets import read_spreadsheet
+
+            spreadsheet = await read_spreadsheet(record, storage, for_projection=True)
+            if spreadsheet.manifest.native.status == "complete":
+                content = spreadsheet.text().encode("utf-8")
+                media_type, suffix = "text/plain", ".txt"
+            else:
+                digest = spreadsheet.manifest.export.blob
+                if digest is None:
+                    raise ProjectionMappingError("Partial native grid has no complete export")
+                blob = next(blob for blob in record.blobs if blob.sha256 == digest)
+                content = await read_blob(record, blob, storage)
+                media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                suffix = ".xlsx"
+        else:
+            document = await read_document(record, storage)
+            content = document.text().encode("utf-8")
+            media_type = "text/plain"
+            suffix = ".txt"
     else:
         # Historical Drive records retain their export-only contract.
         if len(record.blobs) != 1:

@@ -10,6 +10,8 @@ from airweave.domains.entities.canonical.coverage import CaptureCoverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.models import ObservedChange, SourceRecord
 from airweave.domains.entities.canonical.requests import RecordIdentity
+from airweave.platform.sources.records.sheets_manifest import GridBounds, GridGap
+from airweave.platform.sources.records.sheets_models import SpreadsheetCell
 from airweave.platform.sources.records.workspace_manifest import WorkspaceManifestV1
 
 
@@ -30,6 +32,26 @@ class DocumentRead(BaseModel):
     completeness: Literal["complete", "partial", "metadata_only"]
     manifest: WorkspaceManifestV1
     document: dict[str, JsonValue]
+
+
+class SpreadsheetRead(BaseModel):
+    """Stored workbook metadata and bounded native cells; unknown ranges stay unknown."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    identity: RecordIdentity
+    revision: int = Field(ge=1)
+    observed_at: AwareDatetime
+    completeness: Literal["complete", "partial", "metadata_only"]
+    spreadsheet: dict[str, JsonValue]
+    grid_status: Literal["complete", "partial"]
+    captured: tuple[GridBounds, ...]
+    missing: tuple[GridGap, ...]
+    requested: GridBounds | None = None
+    cells: tuple[SpreadsheetCell, ...] = ()
+    comments: Literal["omitted"] = "omitted"
+    embedded_media: Literal["not_retained"] = "not_retained"
+    calculated_values: Literal["observed_at_capture"] = "observed_at_capture"
 
 
 class RecordFilters(BaseModel):

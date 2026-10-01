@@ -389,6 +389,11 @@ class GoogleDriveConfig(SourceConfig):
         description="Trusted native Drive permission ID; required for owned canonical capture.",
     )
 
+    capture_native_sheets: bool = Field(
+        default=False,
+        description="Enable bounded native Sheets capture after verifying account API access.",
+    )
+
     include_patterns: list[str] = Field(
         default=[],
         title="Include Patterns",

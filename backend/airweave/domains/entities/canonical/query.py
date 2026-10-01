@@ -17,12 +17,15 @@ from airweave.domains.entities.canonical.query_models import (
     RecordCursor,
     RecordListQuery,
     RecordPage,
+    SpreadsheetRead,
 )
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.canonical.store import CanonicalRecordStore, CanonicalStoreError
 from airweave.domains.entities.canonical.workspace_docs import read_document
+from airweave.domains.entities.canonical.workspace_sheets import read_spreadsheet
 from airweave.domains.storage.exceptions import StorageException
 from airweave.domains.storage.protocols import StorageBackend
+from airweave.platform.sources.records.sheets_manifest import GridBounds
 
 
 class InvalidRecordCursor(CanonicalStoreError):
@@ -59,6 +62,12 @@ class DocumentUnavailable(CanonicalStoreError):
     """This record has no valid retained native document representation."""
 
     code = "document_unavailable"
+
+
+class SpreadsheetUnavailable(CanonicalStoreError):
+    """Native spreadsheet representation or selected sheet cannot be read at this revision."""
+
+    code = "spreadsheet_unavailable"
 
 
 class DocumentIncomplete(CanonicalStoreError):
@@ -266,6 +275,58 @@ class CanonicalQueryService:
             completeness=current.completeness,
             manifest=captured.manifest,
             document=captured.document,
+        )
+
+    async def spreadsheet(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        sync_id: UUID,
+        record_id: UUID,
+        revision: int,
+        storage: StorageBackend,
+        bounds: GridBounds | None = None,
+    ) -> SpreadsheetRead:
+        """Read a revision-pinned native grid; provider access is never a fallback."""
+        if bounds is not None and (
+            (bounds.end_row - bounds.start_row) * (bounds.end_column - bounds.start_column) > 10000
+        ):
+            raise SpreadsheetUnavailable("Requested grid exceeds the 10000-cell read limit")
+        record = await self.read(db, organization_id, sync_id, record_id)
+        self._check_blob_record(record, revision)
+        try:
+            captured = await read_spreadsheet(record, storage, bounds=bounds)
+        except (StorageException, BlobIntegrityError) as exc:
+            raise BlobUnavailable(
+                "Committed spreadsheet bytes are unavailable; retry later"
+            ) from exc
+        except ValueError as exc:
+            raise SpreadsheetUnavailable(
+                "No valid native spreadsheet is retained; refresh and reread"
+            ) from exc
+        try:
+            cells = captured.cells(bounds) if bounds is not None else ()
+        except ValueError as exc:
+            raise SpreadsheetUnavailable(
+                "Requested grid is outside retained sheet dimensions"
+            ) from exc
+        db.expire_all()
+        current = await self.read(db, organization_id, sync_id, record_id)
+        self._check_blob_record(current, revision)
+        if record.blobs != current.blobs:
+            raise StaleRecordRevision("Spreadsheet changed; reread before requesting content")
+        return SpreadsheetRead(
+            id=current.id,
+            identity=current.identity,
+            revision=current.revision,
+            observed_at=current.observed_at,
+            completeness=current.completeness,
+            spreadsheet=captured.spreadsheet,
+            grid_status=captured.manifest.native.status,
+            captured=tuple(p.bounds for p in captured.manifest.native.parts),
+            missing=captured.manifest.native.missing,
+            requested=bounds,
+            cells=tuple(cells),
         )
 
     async def blob(

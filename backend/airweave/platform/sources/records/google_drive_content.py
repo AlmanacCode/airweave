@@ -13,6 +13,8 @@ from airweave.platform.entities.google_drive import GOOGLE_EXPORT_FORMATS
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
 from airweave.platform.sources.records.google_docs_content import capture_document_parts
 from airweave.platform.sources.records.google_drive import BASE, GetJSON
+from airweave.platform.sources.records.google_sheets_content import capture_spreadsheet_parts
+from airweave.platform.sources.records.sheets_manifest import SHEETS_MIME
 from airweave.platform.sources.records.workspace_manifest import DOCS_MIME, ExportState
 
 
@@ -24,6 +26,7 @@ async def capture_file_content(
     client: AirweaveHttpClient,
     auth: SourceAuthProvider,
     logger: ContextualLogger,
+    capture_native_sheets: bool = False,
 ) -> CaptureRecord:
     """Reuse downloads/storage; never pair bytes with metadata from another file version."""
     if record.kind == "delete" or record.completeness == "complete":
@@ -37,18 +40,14 @@ async def capture_file_content(
     if isinstance(capabilities, dict) and capabilities.get("canDownload") is False:
         return record
     url = f"{BASE}/files/{quote(record.identity.native_id, safe='')}"
-    if mime.startswith("application/vnd.google-apps."):
-        export = GOOGLE_EXPORT_FORMATS.get(mime)
-        if export is None:
-            return record
-        media_type = export[0]
-        download_url = url + "/export?" + urlencode({"mimeType": media_type})
-    else:
-        media_type = mime
-        download_url = url + "?alt=media&supportsAllDrives=true"
+    target = _download_target(url, mime)
+    if target is None:
+        return record
+    download_url, media_type = target
     blob, export_state = await _download_representation(
         download_url, media_type, mime, files=files, client=client, auth=auth, logger=logger
     )
+    has_native_parts = False
     if mime == DOCS_MIME:
         record = await capture_document_parts(
             record,
@@ -58,6 +57,12 @@ async def capture_file_content(
             client=client,
             auth=auth,
         )
+        has_native_parts = True
+    elif mime == SHEETS_MIME and capture_native_sheets:
+        record = await capture_spreadsheet_parts(
+            record, export=export_state, export_blob=blob, files=files, client=client, auth=auth
+        )
+        has_native_parts = True
     elif blob is None:
         return record
     latest = await get(url, params={"fields": "version", "supportsAllDrives": "true"})
@@ -65,11 +70,20 @@ async def capture_file_content(
         raise ValueError(
             "Drive file changed during content capture; retry before advancing checkpoint"
         )
-    if mime == DOCS_MIME:
+    if has_native_parts:
         return record
     return record.model_copy(
         update={"blobs": (blob,), "content_hash": blob.sha256, "completeness": "complete"}
     )
+
+
+def _download_target(url: str, mime: str) -> tuple[str, str] | None:
+    if not mime.startswith("application/vnd.google-apps."):
+        return url + "?alt=media&supportsAllDrives=true", mime
+    export = GOOGLE_EXPORT_FORMATS.get(mime)
+    if export is None:
+        return None
+    return url + "/export?" + urlencode({"mimeType": export[0]}), export[0]
 
 
 async def _download_representation(

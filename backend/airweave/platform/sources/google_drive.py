@@ -113,6 +113,7 @@ class GoogleDriveSource(BaseSource):
 
     canonical_container_parents = {}
     expected_permission_id: str | None = None
+    capture_native_sheets: bool = False
     _verified_permission_id: str | None = None
 
     def _require_principal(self) -> None:
@@ -135,7 +136,11 @@ class GoogleDriveSource(BaseSource):
                     {
                         "capture_version": 3,
                         "permission_id": self.expected_permission_id,
-                        "scope": "drive-all-accessible-docs-native",
+                        "scope": (
+                            "drive-all-accessible-workspace-native-v2"
+                            if self.capture_native_sheets
+                            else "drive-all-accessible-docs-native"
+                        ),
                     },
                     sort_keys=True,
                 ).encode()
@@ -163,6 +168,7 @@ class GoogleDriveSource(BaseSource):
             client=self.http_client,
             auth=self.auth,
             logger=self.logger,
+            capture_native_sheets=self.capture_native_sheets,
         )
 
     async def capture_page(
@@ -213,6 +219,7 @@ class GoogleDriveSource(BaseSource):
         instance = cls(auth=auth, logger=logger, http_client=http_client)
         instance.include_patterns = config.include_patterns if config else []
         instance.expected_permission_id = config.expected_permission_id if config else None
+        instance.capture_native_sheets = config.capture_native_sheets if config else False
         instance.batch_size = 30
         instance.batch_generation = True
         instance.max_queue_size = 200

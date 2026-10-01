@@ -311,7 +311,7 @@ async def test_proxy_envelope_is_bounded_before_json_decode():
 
 
 @pytest.mark.asyncio
-async def test_drive_binding_allows_native_docs_only_with_same_verified_toolkit(monkeypatch):
+async def test_drive_binding_allows_native_workspace_only_with_same_verified_toolkit(monkeypatch):
     from airweave.domains.auth_provider.providers.composio import ComposioAuthProvider
 
     provider = await ComposioAuthProvider.create(
@@ -330,8 +330,12 @@ async def test_drive_binding_allows_native_docs_only_with_same_verified_toolkit(
     )
     result = await provider.get_auth_result("google_drive", ["access_token"])
     assert result.managed_auth.connected_account_id == "ca_drive"
-    assert result.managed_auth.allowed_hosts == {"www.googleapis.com", "docs.googleapis.com"}
-    assert "sheets.googleapis.com" not in result.managed_auth.allowed_hosts
+    assert result.managed_auth.allowed_hosts == {
+        "www.googleapis.com",
+        "docs.googleapis.com",
+        "sheets.googleapis.com",
+    }
+    assert "untrusted.example" not in result.managed_auth.allowed_hosts
 
 
 @pytest.mark.asyncio
