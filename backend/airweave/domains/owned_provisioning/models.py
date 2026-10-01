@@ -11,7 +11,7 @@ class ManagedSource(BaseModel):
     """Native identity is supplied only by Almanac's verified account authority."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    provider: Literal["gmail", "google_calendar", "google_drive", "slack", "outlook_mail"]
+    provider: Literal["gmail", "google_calendar", "google_drive", "slack", "outlook_mail", "stripe"]
     expected_identity: str = Field(min_length=1, max_length=512)
     expected_user_identity: str | None = Field(default=None, min_length=1, max_length=512)
     collection: str = Field(min_length=1, max_length=255)
@@ -27,6 +27,8 @@ class ManagedSource(BaseModel):
         """Slack workspace membership requires its native user, not broker user_id."""
         if (self.provider == "slack") != (self.expected_user_identity is not None):
             raise ValueError("Only Slack requires an expected native user identity")
+        if self.provider == "stripe":
+            self.source_config()  # Validate mode/version before admission, not during delivery.
         return self
 
     @field_validator("cron")
@@ -39,6 +41,13 @@ class ManagedSource(BaseModel):
 
     def source_config(self) -> dict[str, JsonValue]:
         """Expected identity cannot be overridden inside unstructured provider config."""
+        if self.provider == "stripe":
+            from airweave.platform.configs.config import StripeCaptureConfig, StripeConfig
+
+            binding = StripeCaptureConfig.model_validate(
+                {**self.config, "expected_account_id": self.expected_identity}
+            )
+            return StripeConfig(original_capture=binding).model_dump(mode="json")
         if self.provider == "outlook_mail":
             return {
                 **self.config,
@@ -108,6 +117,7 @@ def native_principal(provider: str, config: dict) -> tuple[str, str | None]:
         GoogleDriveConfig,
         OutlookMailConfig,
         SlackConfig,
+        StripeConfig,
     )
 
     user = None
@@ -123,6 +133,11 @@ def native_principal(provider: str, config: dict) -> tuple[str, str | None]:
             if not outlook.capture_originals:
                 raise ValueError("Owned Outlook source must capture originals")
             identity = outlook.expected_principal_id
+        case "stripe":
+            stripe = StripeConfig.model_validate(config)
+            if stripe.original_capture is None:
+                raise ValueError("Owned Stripe source must capture originals")
+            identity = stripe.original_capture.expected_account_id
         case "slack":
             slack = SlackConfig.model_validate(config)
             identity, user = slack.expected_team_id, slack.expected_user_id

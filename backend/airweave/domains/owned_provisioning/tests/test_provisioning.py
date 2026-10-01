@@ -569,3 +569,111 @@ async def test_job_admission_failure_rolls_back_verified_readiness(database, set
     monkeypatch.setattr(service.jobs, "create", create_job)
     async with database(autoflush=False) as db:
         assert (await service.ensure(db, ctx, account, request)).state == "ready"
+
+
+async def test_stripe_provisioning_retry_and_reconnect_preserve_account_mode_and_version(
+    database, setup
+):
+    ctx, service, request, account, lifecycle, schedules, workflows = setup
+    creator = service.store.create
+    creator._source_registry.get.return_value.short_name = "stripe"
+    spec = ManagedSource.model_validate(
+        {
+            **request.source.model_dump(),
+            "provider": "stripe",
+            "expected_identity": "acct_selected",
+            "config": {
+                "expected_account_id": "acct_untrusted",
+                "livemode": False,
+                "api_version": "2025-06-30.basil",
+            },
+        }
+    )
+    expected_config = spec.source_config()
+    creator._source_validation.seed_config_result("stripe", expected_config)
+    assert native_principal("stripe", expected_config) == ("acct_selected", None)
+    request = request.model_copy(update={"source": spec})
+    async with database() as db:
+        first = await service.ensure(db, ctx, account, request)
+        sync = await db.get(Sync, first.sync_id)
+        assert sync.index_pipeline_version == 2
+        original_epoch = sync.writer_epoch
+    async with database() as db:
+        assert await service.ensure(db, ctx, account, request) == first
+        assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 1
+        assert (await db.get(Sync, first.sync_id)).writer_epoch == original_epoch
+    for change in (
+        {"livemode": True},
+        {"api_version": "2026-01-28.clover"},
+        {"connected_account_id": "acct_selected"},
+    ):
+        changed = ManagedSource.model_validate(
+            {
+                **spec.model_dump(),
+                "config": {**spec.config, **change},
+            }
+        )
+        async with database() as db:
+            with pytest.raises(HTTPException, match="Reconnect changes Stripe"):
+                await service.ensure(
+                    db,
+                    ctx,
+                    account,
+                    request.model_copy(
+                        update={
+                            "generation": 2,
+                            "source": changed,
+                        }
+                    ),
+                )
+        async with database() as db:
+            assert await service.get(db, ctx, account) == first
+            assert (
+                await db.get(SourceConnection, first.source_connection_id)
+            ).config_fields == expected_config
+            assert (await db.get(Sync, first.sync_id)).writer_epoch == original_epoch
+    # New broker credentials may reconnect the same native identity/configuration.
+    async with database() as db:
+        reconnected = await service.ensure(
+            db,
+            ctx,
+            account,
+            request.model_copy(
+                update={
+                    "generation": 2,
+                    "source": spec.model_copy(update={"connected_account_id": "ca_reconnected"}),
+                }
+            ),
+        )
+        assert reconnected.source_connection_id == first.source_connection_id
+        assert reconnected.sync_id == first.sync_id and reconnected.generation == 2
+        source = await db.get(SourceConnection, first.source_connection_id)
+        assert source.auth_provider_config["account_id"] == "ca_reconnected"
+        assert source.config_fields == expected_config
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        {"livemode": "false", "api_version": "2025-06-30.basil"},
+        {
+            "livemode": False,
+            "api_version": "2025-06-30.basil",
+            "connected_account_id": "acct_other",
+        },
+    ],
+)
+def test_stripe_provisioning_requires_explicit_typed_mode_and_version(config):
+    with pytest.raises(ValueError):
+        ManagedSource(
+            provider="stripe",
+            expected_identity="acct_selected",
+            collection="owned",
+            auth_provider="composio",
+            connected_account_id="ca_selected",
+            auth_config_id="ac_selected",
+            user_id="owner",
+            cron="0 * * * *",
+            config=config,
+        )

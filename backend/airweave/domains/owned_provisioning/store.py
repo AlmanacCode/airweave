@@ -20,6 +20,7 @@ from airweave.models.owned_provisioning import OwnedProvisioning
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
 from airweave.models.sync_job import SyncJob
+from airweave.platform.configs.config import StripeConfig
 from airweave.schemas.source_connection import (
     AuthProviderAuthentication,
     ScheduleConfig,
@@ -210,6 +211,15 @@ class ProvisioningStore:
                 )
                 .with_for_update()
             )
+            if spec.provider == "stripe" and (
+                StripeConfig.model_validate(source.config_fields or {}).original_capture
+                != StripeConfig.model_validate(config).original_capture
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Reconnect changes Stripe account mode, context or API version; "
+                    "connect a new account",
+                )
             source.config_fields = config
             source.readable_auth_provider_id = spec.auth_provider
             source.auth_provider_config = spec.auth_config()

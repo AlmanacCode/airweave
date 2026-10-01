@@ -876,6 +876,15 @@ class StripeCaptureConfig(BaseModel):
     api_version: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}(?:\.[a-z]+)?$")
     connected_account_id: str | None = Field(default=None, pattern=r"^acct_[A-Za-z0-9]+$")
 
+    @model_validator(mode="after")
+    def consistent_connect_context(self):
+        """The selected Connect account is the effective native account, not its platform."""
+        if self.connected_account_id is not None and (
+            self.connected_account_id != self.expected_account_id
+        ):
+            raise ValueError("Stripe Connect context must match expected_account_id")
+        return self
+
 
 class StripeConfig(SourceConfig):
     """Legacy entity ingestion, or explicitly bound original capture on a fresh source."""
