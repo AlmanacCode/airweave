@@ -220,6 +220,17 @@ class ProvisioningStore:
                     detail="Reconnect changes Stripe account mode, context or API version; "
                     "connect a new account",
                 )
+            if spec.provider == "github":
+                from airweave.platform.configs.config import GitHubConfig
+
+                if GitHubConfig.model_validate(source.config_fields) != GitHubConfig.model_validate(
+                    config
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Reconnect changes GitHub repository selection or capture options; "
+                        "connect a new account",
+                    )
             if spec.provider == "linear":
                 from airweave.platform.configs.config import LinearConfig
 

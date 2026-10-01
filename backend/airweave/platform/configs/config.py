@@ -203,6 +203,11 @@ class GitHubConfig(SourceConfig):
     """Selected repositories captured through one owned account and durable page engine."""
 
     model_config = ConfigDict(extra="forbid")
+    expected_user_id: int = Field(
+        gt=0,
+        strict=True,
+        description="Expected native GitHub user ID; verified using authenticated /user",
+    )
     repositories: tuple[GitHubRepositorySelection, ...] = Field(min_length=1, max_length=500)
     include_code: bool = True
     include_conversations: bool = True

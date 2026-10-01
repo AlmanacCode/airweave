@@ -797,3 +797,121 @@ def test_workspace_provisioning_rejects_invalid_intent(provider, identity, confi
             user_id="owner",
             cron="0 * * * *",
         )
+
+
+GITHUB_REPOSITORIES = [
+    {"repository_id": 20, "owner_id": 30, "full_name": "team/two", "ref": "main"},
+    {"repository_id": 10, "owner_id": 30, "full_name": "team/one"},
+]
+
+
+async def test_github_provisioning_reconnect_preserves_principal_and_exact_scope(database, setup):
+    ctx, service, request, account, lifecycle, _, _ = setup
+    spec = ManagedSource.model_validate(
+        {
+            **request.source.model_dump(),
+            "provider": "github",
+            "expected_identity": "00042",
+            "config": {"expected_user_id": 999, "repositories": GITHUB_REPOSITORIES},
+        }
+    )
+    assert spec.expected_identity == "42"
+    config = spec.source_config()
+    assert config["expected_user_id"] == 42
+    assert [row["repository_id"] for row in config["repositories"]] == [10, 20]
+    assert native_principal("github", config) == ("42", None)
+    creator = service.store.create
+    creator._source_registry.get.return_value.short_name = "github"
+    creator._source_validation.seed_config_result("github", config)
+    request = request.model_copy(update={"source": spec})
+    async with database() as db:
+        first = await service.ensure(db, ctx, account, request)
+        epoch = (await db.get(Sync, first.sync_id)).writer_epoch
+    async with database() as db:
+        assert await service.ensure(db, ctx, account, request) == first
+        assert await db.scalar(select(func.count()).select_from(SyncJob)) == 1
+    variants = [
+        {"expected_identity": "43"},
+        *(
+            {
+                "config": {
+                    **spec.config,
+                    "repositories": [{**GITHUB_REPOSITORIES[0], **change}, GITHUB_REPOSITORIES[1]],
+                }
+            }
+            for change in (
+                {"repository_id": 21},
+                {"owner_id": 31},
+                {"ref": "other"},
+                {"full_name": "team/renamed"},
+            )
+        ),
+        {"config": {**spec.config, "include_code": False}},
+        {"config": {**spec.config, "include_conversations": False}},
+    ]
+    for change in variants:
+        candidate = ManagedSource.model_validate({**spec.model_dump(), **change})
+        async with database() as db:
+            with pytest.raises(HTTPException, match="Reconnect changes"):
+                await service.ensure(
+                    db,
+                    ctx,
+                    account,
+                    request.model_copy(update={"generation": 2, "source": candidate}),
+                )
+        async with database() as db:
+            unchanged = await service.get(db, ctx, account)
+            assert unchanged == first and unchanged.observed_generation == 1
+            assert (await db.get(Sync, first.sync_id)).writer_epoch == epoch
+            assert (
+                await db.get(SourceConnection, first.source_connection_id)
+            ).config_fields == config
+            assert await db.scalar(select(func.count()).select_from(SyncJob)) == 1
+    reconnected = ManagedSource.model_validate(
+        {
+            **spec.model_dump(),
+            "connected_account_id": "ca_reconnected",
+            "config": {**spec.config, "repositories": list(reversed(GITHUB_REPOSITORIES))},
+        }
+    )
+    retry = request.model_copy(update={"generation": 2, "source": reconnected})
+    async with database() as db:
+        second = await service.ensure(db, ctx, account, retry)
+        assert second.source_connection_id == first.source_connection_id
+        assert second.sync_id == first.sync_id and second.observed_generation == 2
+        assert (await db.get(Sync, first.sync_id)).writer_epoch > epoch
+        connection = await db.get(SourceConnection, first.source_connection_id)
+        assert connection.auth_provider_config["account_id"] == "ca_reconnected"
+        assert connection.config_fields == config
+    async with database() as db:
+        assert await service.ensure(db, ctx, account, retry) == second
+        assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 1
+        assert await db.scalar(select(func.count()).select_from(SyncJob)) == 2
+    assert lifecycle.create.await_count == 2
+
+
+@pytest.mark.parametrize(
+    "identity,config",
+    [
+        ("octocat", {"repositories": GITHUB_REPOSITORIES}),
+        ("0", {"repositories": GITHUB_REPOSITORIES}),
+        ("-42", {"repositories": GITHUB_REPOSITORIES}),
+        ("４２", {"repositories": GITHUB_REPOSITORIES}),
+        ("42", {}),
+        ("42", {"repositories": []}),
+        ("42", {"repo_name": "team/one"}),
+    ],
+)
+def test_github_provisioning_rejects_invalid_principal_or_missing_selection(identity, config):
+    with pytest.raises(ValueError):
+        ManagedSource(
+            provider="github",
+            expected_identity=identity,
+            config=config,
+            collection="owned",
+            auth_provider="composio",
+            connected_account_id="ca_test",
+            auth_config_id="ac_test",
+            user_id="owner",
+            cron="0 * * * *",
+        )

@@ -30,7 +30,10 @@ ISSUE = {
 }
 COMMIT, TREE = "1" * 40, "2" * 40
 BRANCH = {"name": "main", "commit": {"sha": COMMIT}}
-CONFIG = {"repositories": [{"repository_id": 100, "owner_id": 200, "full_name": "team/repo"}]}
+CONFIG = {
+    "expected_user_id": 42,
+    "repositories": [{"repository_id": 100, "owner_id": 200, "full_name": "team/repo"}],
+}
 
 
 def response(value=None, *, status=200, headers=None, content=None):
@@ -350,7 +353,7 @@ def test_legacy_and_ambiguous_selections_rejected():
     with pytest.raises(ValidationError, match="Refresh GitHub"):
         GitHubConfig(repo_name="team/repo")
     with pytest.raises(ValidationError):
-        GitHubConfig.model_validate({"repositories": CONFIG["repositories"] * 2})
+        GitHubConfig.model_validate({**CONFIG, "repositories": CONFIG["repositories"] * 2})
 
 
 @pytest.mark.asyncio
@@ -629,3 +632,42 @@ async def test_transferred_issue_withdraws_old_scope_without_reading_new_comment
     assert error.value.removal_reason == "scope_removed"
     await capture.confirm_absent(issue)
     assert all("/comments" not in call.args[0] for call in client.get.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_validate_attests_native_user_and_identity_binds_capture_configuration():
+    connector, client = await source(response({"id": 42, "login": "renamed-user"}))
+    await connector.validate()
+    assert client.get.call_args.args[0] == "https://api.github.com/user"
+    other, _ = await source(config={**CONFIG, "expected_user_id": 43})
+    assert (
+        connector.capture_cycle_configuration.fingerprint
+        != other.capture_cycle_configuration.fingerprint
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_rejects_different_native_user_before_repository_reads():
+    from airweave.domains.sources.exceptions import SourceAuthError
+
+    connector, client = await source(response({"id": 43, "login": "same-display-label"}))
+    with pytest.raises(SourceAuthError, match="does not match"):
+        await connector.validate()
+    assert client.get.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity", [{}, {"id": None}, {"id": "42"}, {"id": True}, {"id": 0}])
+async def test_validate_rejects_missing_or_malformed_native_identity(identity):
+    connector, _ = await source(response(identity))
+    with pytest.raises(ValidationError):
+        await connector.validate()
+
+
+@pytest.mark.parametrize("identity", [None, "42", True, 0, -1, 1.5])
+def test_config_requires_strict_positive_native_user_id(identity):
+    config = {**CONFIG, "expected_user_id": identity}
+    if identity is None:
+        config.pop("expected_user_id")
+    with pytest.raises(ValidationError):
+        GitHubConfig.model_validate(config)

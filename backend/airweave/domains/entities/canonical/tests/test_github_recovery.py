@@ -137,6 +137,7 @@ async def runner(database, source, native, *, attempt=1, service=None):
         http_client=client,
         config=GitHubConfig.model_validate(
             {
+                "expected_user_id": 42,
                 "repositories": [{"repository_id": 100, "owner_id": 200, "full_name": "team/repo"}],
                 "include_code": native.code,
             }

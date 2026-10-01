@@ -28,6 +28,7 @@ class ManagedSource(BaseModel):
         "stripe",
         "linear",
         "attio",
+        "github",
     ]
     expected_identity: str = Field(min_length=1, max_length=512)
     expected_user_identity: str | None = Field(default=None, min_length=1, max_length=512)
@@ -44,14 +45,18 @@ class ManagedSource(BaseModel):
         """Slack workspace membership requires its native user, not broker user_id."""
         if (self.provider == "slack") != (self.expected_user_identity is not None):
             raise ValueError("Only Slack requires an expected native user identity")
-        if self.provider in {"stripe", "linear", "attio"}:
+        if self.provider in {"stripe", "linear", "attio", "github"}:
             self.source_config()  # Validate native scope before admission, not during delivery.
         return self
 
     @field_validator("expected_identity")
     @classmethod
-    def workspace_identity(cls, value: str, info: ValidationInfo) -> str:
-        """Workspace UUIDs have one canonical spelling across admission and reconnect."""
+    def canonical_identity(cls, value: str, info: ValidationInfo) -> str:
+        """Native IDs have one canonical spelling across admission and reconnect."""
+        if info.data.get("provider") == "github":
+            if not value.isascii() or not value.isdecimal() or int(value) <= 0:
+                raise ValueError("GitHub identity must be a positive numeric user ID")
+            return str(int(value))
         if info.data.get("provider") in {"linear", "attio"}:
             return str(UUID(value))
         return value
@@ -66,6 +71,17 @@ class ManagedSource(BaseModel):
 
     def source_config(self) -> dict[str, JsonValue]:
         """Expected identity cannot be overridden inside unstructured provider config."""
+        if self.provider == "github":
+            from airweave.platform.configs.config import GitHubConfig
+
+            parsed = GitHubConfig.model_validate(
+                {**self.config, "expected_user_id": int(self.expected_identity)}
+            )
+            value = parsed.model_dump(mode="json")
+            value["repositories"] = sorted(
+                value["repositories"], key=lambda item: item["repository_id"]
+            )
+            return value
         if self.provider in {"linear", "attio"}:
             from airweave.platform.configs.config import AttioConfig, LinearConfig
 
@@ -155,6 +171,10 @@ def _workspace_principal(provider: str, config: dict) -> str:
 
 def native_principal(provider: str, config: dict) -> tuple[str, str | None]:
     """Read the original attested principal from the protected source config."""
+    if provider == "github":
+        from airweave.platform.configs.config import GitHubConfig
+
+        return str(GitHubConfig.model_validate(config).expected_user_id), None
     if provider in {"linear", "attio"}:
         return _workspace_principal(provider, config), None
     return _account_principal(provider, config)

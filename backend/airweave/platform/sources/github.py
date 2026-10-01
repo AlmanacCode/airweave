@@ -28,6 +28,7 @@ from airweave.domains.entities.canonical.requests import (
     parent_container_key,
 )
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
+from airweave.domains.sources.exceptions import SourceAuthError
 from airweave.domains.sources.token_providers.protocol import SourceAuthProvider
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.syncs.cursors.cursor import SyncCursor
@@ -127,7 +128,14 @@ class GitHubSource(BaseSource):
 
     async def validate(self) -> None:
         """Verify authentication independently from permission to every selected repository."""
-        Identity.model_validate(await self.reader.object("/user"))
+        principal = Identity.model_validate(await self.reader.object("/user"))
+        if principal.id != self.config.expected_user_id:
+            raise SourceAuthError(
+                "GitHub authenticated user does not match the configured account",
+                source_short_name="github",
+                status_code=200,
+                token_provider_kind=self.auth.provider_kind,
+            )
 
     def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
         """Use one bounded, stable parent identity policy at every hierarchy depth."""
