@@ -114,7 +114,7 @@ async def test_sheets_exact_revision_projection_and_removal(
                 record.revision + 1,
                 files.storage,
             )
-    entities = await _drive(record, files.storage, tmp_path / "projection")
+    entities = (await _drive(record, files.storage, tmp_path / "projection")).entities
     assert len(entities) == 1
     from pathlib import Path
 
@@ -135,7 +135,12 @@ async def test_sheets_exact_revision_projection_and_removal(
         )
     newer = (await capture(database, service, fence, partial)).changes[0].record
     assert newer.id == record.id and newer.revision == record.revision + 1
-    fallback = await _drive(newer, files.storage, tmp_path / "fallback")
+    projection = await _drive(newer, files.storage, tmp_path / "fallback")
+    fallback = projection.entities
+    assert len(projection.parts) == 2
+    assert projection.parts[1].entity is None
+    assert projection.parts[1].part.key == "/native/sheets/0/rows/0:2/columns/0:2"
+    assert newer.completeness == "partial"
     assert len(fallback) == 1
     assert Path(fallback[0].local_path).read_bytes() == b"exact-export"
     assert fallback[0].file_type == "xlsx"

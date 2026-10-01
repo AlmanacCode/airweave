@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from airweave.domains.entities.canonical.calendar import is_cancelled_recurring_event
 from airweave.domains.entities.canonical.extraction_models import ExtractionPart
@@ -26,6 +26,7 @@ from airweave.platform.entities.google_calendar import (
 from airweave.platform.entities.google_drive import GoogleDriveFileEntity, GoogleDriveFolderEntity
 from airweave.platform.entities.slack import SlackChannelEntity, SlackMessageEntity
 from airweave.platform.entities.wispr import WisprMeetingEntity, WisprNoteEntity
+from airweave.platform.sources.records.sheets_manifest import GridGap
 
 
 class ProjectionMappingError(ValueError):
@@ -49,32 +50,118 @@ def _datetime(value: JsonValue) -> datetime | None:
     return parsed
 
 
+def _drive_omissions(
+    paths: tuple[str, ...], *, start_index: int = 1
+) -> tuple[ProjectionInput, ...]:
+    """Missing native representations remain explicit beside any usable text/export."""
+    return tuple(
+        ProjectionInput(
+            part=ExtractionPart(part_index=index + start_index, key=path, kind="file"),
+            entity=None,
+        )
+        for index, path in enumerate(dict.fromkeys(paths))
+    )
+
+
+def _sheet_gap_key(gap: GridGap) -> str:
+    """Use native sheet IDs and exclusive bounds, never mutable sheet titles."""
+    key = f"/native/sheets/{gap.sheet_id}"
+    bounds = gap.bounds
+    if bounds is not None:
+        key += (
+            f"/rows/{bounds.start_row}:{bounds.end_row}"
+            f"/columns/{bounds.start_column}:{bounds.end_column}"
+        )
+    return key
+
+
+async def _drive_document(
+    record: SourceRecord, storage: StorageBackend, directory: Path
+) -> ProjectionInputs:
+    """Verify each retained Docs representation once and preserve missing-native evidence."""
+    from airweave.domains.entities.canonical.blob_materializer import read_blob
+    from airweave.domains.entities.canonical.workspace_docs import CapturedDocument
+    from airweave.platform.sources.records.workspace_manifest import (
+        parse_manifest,
+        validate_document,
+    )
+
+    if record.payload.get("mimeType") != "application/vnd.google-apps.document":
+        raise ProjectionMappingError("Captured file is not a Google document")
+    marked = [blob for blob in record.blobs if blob.role == "representation_manifest"]
+    if len(marked) != 1:
+        raise ProjectionMappingError("Drive document requires one representation manifest")
+    manifest = parse_manifest(
+        await read_blob(record, marked[0], storage),
+        file_id=record.identity.native_id,
+        drive_version=_string(record.payload.get("version")),
+        blobs=record.blobs,
+    )
+    by_digest = {blob.sha256: blob for blob in record.blobs}
+    missing = tuple(gap.source_path or "/native" for gap in manifest.native.missing)
+    if manifest.native.status == "unavailable":
+        if manifest.export.status != "retained":
+            return ProjectionInputs(parts=_drive_omissions(missing, start_index=0))
+        content = await read_blob(record, by_digest[manifest.export.blob], storage)
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        suffix = ".docx"
+    else:
+        raw = await read_blob(record, by_digest[manifest.native.document_blob], storage)
+        document = TypeAdapter(dict[str, JsonValue]).validate_json(raw)
+        validate_document(document, file_id=record.identity.native_id)
+        content = CapturedDocument(manifest=manifest, document=document).text().encode("utf-8")
+        media_type, suffix = "text/plain", ".txt"
+    body = await _drive_file(record, content, media_type, suffix, directory)
+    return ProjectionInputs(parts=(body, *_drive_omissions(missing)))
+
+
 async def _drive(
     record: SourceRecord,
     storage: StorageBackend,
     directory: Path,
-) -> tuple[BaseEntity, ...]:
-    from airweave.domains.entities.canonical.blob_materializer import read_blob, write_blob
+) -> ProjectionInputs:
+    from airweave.domains.entities.canonical.blob_materializer import read_blob
 
     if record.identity.record_type != "file":
         raise ProjectionMappingError("Unsupported Drive record type")
     data = record.payload
     if data.get("mimeType") == "application/vnd.google-apps.folder":
-        return (
-            GoogleDriveFolderEntity(
-                folder_id=record.identity.native_id,
-                title=_string(data.get("name"), default="Untitled"),
-                description=_string(data.get("description")),
-                breadcrumbs=[],
-            ),
+        return ProjectionInputs(
+            parts=(
+                _projection_input(
+                    0,
+                    GoogleDriveFolderEntity(
+                        folder_id=record.identity.native_id,
+                        title=_string(data.get("name"), default="Untitled"),
+                        description=_string(data.get("description")),
+                        breadcrumbs=[],
+                    ),
+                ),
+            )
         )
+    if record.completeness == "metadata_only" and not record.blobs:
+        return ProjectionInputs(
+            parts=(
+                ProjectionInput(
+                    part=ExtractionPart(
+                        part_index=0,
+                        key=record.identity.native_id,
+                        kind="file",
+                        media_type=_string(data.get("mimeType")) or None,
+                    ),
+                    entity=None,
+                ),
+            )
+        )
+    omissions: tuple[ProjectionInput, ...] = ()
     if any(blob.role == "representation_manifest" for blob in record.blobs):
-        from airweave.domains.entities.canonical.workspace_docs import read_document
-
         if data.get("mimeType") == "application/vnd.google-apps.spreadsheet":
             from airweave.domains.entities.canonical.workspace_sheets import read_spreadsheet
 
             spreadsheet = await read_spreadsheet(record, storage, for_projection=True)
+            omissions = _drive_omissions(
+                tuple(_sheet_gap_key(gap) for gap in spreadsheet.manifest.native.missing)
+            )
             if spreadsheet.manifest.native.status == "complete":
                 content = spreadsheet.text().encode("utf-8")
                 media_type, suffix = "text/plain", ".txt"
@@ -87,10 +174,7 @@ async def _drive(
                 media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 suffix = ".xlsx"
         else:
-            document = await read_document(record, storage)
-            content = document.text().encode("utf-8")
-            media_type = "text/plain"
-            suffix = ".txt"
+            return await _drive_document(record, storage, directory)
     else:
         # Historical Drive records retain their export-only contract.
         if len(record.blobs) != 1:
@@ -100,8 +184,32 @@ async def _drive(
         media_type = blob.media_type or _string(data.get("mimeType"))
         suffix = mimetypes.guess_extension(media_type) or Path(_string(data.get("name"))).suffix
         if not suffix:
-            raise ProjectionMappingError("Drive captured bytes have no known file format")
+            return ProjectionInputs(
+                parts=(
+                    ProjectionInput(
+                        part=ExtractionPart(
+                            part_index=0,
+                            key=record.identity.native_id,
+                            kind="file",
+                            media_type=media_type or None,
+                        ),
+                        entity=None,
+                        omission="unsupported_format",
+                    ),
+                )
+            )
         suffix = suffix.lower()
+    body = await _drive_file(record, content, media_type, suffix, directory)
+    return ProjectionInputs(parts=(body, *omissions))
+
+
+async def _drive_file(
+    record: SourceRecord, content: bytes, media_type: str, suffix: str, directory: Path
+) -> ProjectionInput:
+    """Materialize one verified representation without changing its captured original."""
+    from airweave.domains.entities.canonical.blob_materializer import write_blob
+
+    data = record.payload
     local_path = await write_blob(content, directory, suffix=suffix)
     metadata = {
         **data,
@@ -114,7 +222,7 @@ async def _drive(
     entity.mime_type = media_type
     entity.file_type = suffix.lstrip(".")
     entity.url = entity.web_url
-    return (entity,)
+    return _projection_input(0, entity)
 
 
 def _calendar(record: SourceRecord) -> tuple[BaseEntity, ...]:
@@ -277,29 +385,6 @@ async def map_record(
 
         yield map_native(record)
         return
-    if (
-        source_name == "google_drive"
-        and record.identity.record_type == "file"
-        and record.completeness == "metadata_only"
-        and not record.blobs
-        and record.payload.get("mimeType") != "application/vnd.google-apps.folder"
-    ):
-        # Capture explicitly omitted bytes. Publish the omission, not invented
-        # title-only document content; complete records still require their blob.
-        yield ProjectionInputs(
-            parts=(
-                ProjectionInput(
-                    part=ExtractionPart(
-                        part_index=0,
-                        key=record.identity.native_id,
-                        kind="file",
-                        media_type=_string(record.payload.get("mimeType")) or None,
-                    ),
-                    entity=None,
-                ),
-            )
-        )
-        return
     with TemporaryDirectory(prefix="airweave-projection-") as temporary:
         directory = Path(temporary)
         if source_name == "gmail":
@@ -321,6 +406,9 @@ async def map_record(
             from airweave.domains.entities.canonical.slack_projection import map_slack_files
 
             yield await map_slack_files(record, _slack(record)[0], storage, directory)
+            return
+        elif source_name == "google_drive":
+            yield await _drive(record, storage, directory)
             return
         else:
             entities = await _map_entities(record, source_name, storage, directory)
@@ -364,8 +452,6 @@ async def _map_entities(
         from airweave.domains.entities.canonical.notion_projection import map_notion
 
         entities = map_notion(record)
-    elif source_name == "google_drive":
-        entities = await _drive(record, storage, directory)
     elif source_name == "google_calendar":
         entities = _calendar(record)
     elif source_name == "slack":
