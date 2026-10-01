@@ -94,3 +94,26 @@ Native indexed sources use the same publication and access validation as provide
 sources, without a provider registry entry or fabricated OAuth connection. This
 is an index capability, not an authentication grant. The trusted publisher and
 owner-binding API must still be implemented before exposing native ingestion.
+
+## Trusted source and import identity
+
+Backend-key `PUT /native/sources` ensures the server-derived organization/owner/
+dataset identity in one collection; `GET /native/sources/{source_id}` reads it.
+Concurrent requests serialize through the existing Sync primary key. Collection
+changes and unexplained partial state conflict; an exact ensure never reopens
+withdrawn availability. This setup is not proof of imported or indexed content.
+
+`NativeImportStore` is the internal start/read transaction primitive, not yet an
+HTTP publisher API. A bounded request key derives an existing SyncJob primary
+key. Exact retries recover the original state, even after cancellation or source
+withdrawal; they never activate another writer. A changed body conflicts. New
+imports require an available source and cannot replace another active writer.
+Job creation, canonical writer activation and cycle creation commit together.
+A new key after a terminal job may replace its incomplete cycle only when the
+retained cycle is associated with that preceding native import. Retained records
+remain until the subsequent declared scans reconcile them.
+
+Publisher-declared bounded snapshots use discovery-only completion policies;
+complete dataset snapshots use exhaustive policies. This declaration does not
+itself certify completeness: final scopes, stable export boundaries, receipts,
+renewal and import completion/cancellation still need their HTTP lifecycle.
