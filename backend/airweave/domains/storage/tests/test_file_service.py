@@ -5,6 +5,7 @@ import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from airweave.domains.storage.exceptions import FileSkippedException
@@ -159,3 +160,48 @@ class TestCanonicalBlobs:
         storage.write_file.side_effect = OSError("storage down")
         with pytest.raises(OSError, match="storage down"):
             await svc.store_canonical_blob(b"bytes")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("canonical", [True, False])
+@pytest.mark.parametrize("signed", [True, False])
+async def test_401_refresh_requires_original_bearer_request(tmp_path, canonical, signed):
+    from airweave.domains.sources.token_providers.protocol import TokenProviderProtocol
+    from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+
+    auth = MagicMock(spec=TokenProviderProtocol)
+    auth.supports_refresh = True
+    auth.get_token = AsyncMock(return_value="fixture-old")
+    auth.force_refresh = AsyncMock(return_value="fixture-new")
+    requests = []
+
+    async def download(request):
+        if request.method == "HEAD":
+            return httpx.Response(200)
+        requests.append(request.headers.get("Authorization"))
+        return httpx.Response(401 if len(requests) == 1 else 200, content=b"original")
+
+    service, storage = _make_service(str(tmp_path))
+    service.sync_id = uuid4()
+    url = "https://files.example/original.pdf"
+    if signed:
+        url += "?X-Amz-Algorithm=fixture"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(download)) as raw:
+        client = AirweaveHttpClient(raw, uuid4(), "fixture", feature_flag_enabled=False)
+        if canonical:
+            operation = service.capture_canonical_url(url, client, auth, MagicMock())
+        else:
+            entity = MagicMock(name="entity")
+            entity.name, entity.url = "original.pdf", url
+            operation = service.download_from_url(entity, client, auth, MagicMock())
+        if signed:
+            with pytest.raises(httpx.HTTPStatusError):
+                await operation
+            auth.force_refresh.assert_not_awaited()
+            assert requests == [None]
+            storage.write_file.assert_not_awaited()
+            assert not list(tmp_path.iterdir())
+        else:
+            await operation
+            auth.force_refresh.assert_awaited_once()
+            assert requests == ["Bearer fixture-old", "Bearer fixture-new"]

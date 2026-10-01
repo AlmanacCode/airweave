@@ -91,8 +91,13 @@ class FileService:
             try:
                 await self._stream_download(client, url, headers, temp_path, logger)
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code != 401 or not auth.supports_refresh:
+                if (
+                    exc.response.status_code != 401
+                    or not headers.get("Authorization")
+                    or not auth.supports_refresh
+                ):
                     raise
+                # Never promote an unauthenticated signed URL to provider credentials.
                 headers = await authorization_headers(auth, refresh=True)
                 await self._stream_download(client, url, headers, temp_path, logger)
             async with aiofiles.open(temp_path, "rb") as downloaded:
@@ -238,7 +243,11 @@ class FileService:
             self._cleanup_temp(temp_path)
             raise
         except httpx.HTTPStatusError as first_error:
-            if first_error.response.status_code == 401 and auth.supports_refresh:
+            if (
+                first_error.response.status_code == 401
+                and headers.get("Authorization")
+                and auth.supports_refresh
+            ):
                 logger.info("Download got 401, refreshing token and retrying")
                 headers = await authorization_headers(auth, refresh=True)
                 try:
