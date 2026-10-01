@@ -117,7 +117,7 @@ async def test_recovery_walks_later_page_despite_active_source_and_cleanup_failu
             active = await env.client.start_workflow(
                 ProjectCanonicalRecordsWorkflow.run,
                 args=[organization, sources[0], None, 0, 0, True],
-                id=f"native-projection:{organization}:{sources[0]}",
+                id=f"canonical-projection:{organization}:{sources[0]}",
                 task_queue=queue,
             )
             await asyncio.wait_for(started.wait(), timeout=20)
@@ -131,7 +131,7 @@ async def test_recovery_walks_later_page_despite_active_source_and_cleanup_failu
                 await active.result()
                 for sync in sources[1:]:
                     await env.client.get_workflow_handle(
-                        f"native-projection:{organization}:{sync}"
+                        f"canonical-projection:{organization}:{sync}"
                     ).result()
             finally:
                 release.set()
@@ -163,3 +163,146 @@ async def test_automatic_recovery_reports_failure_without_restarting_failed_swee
                     task_queue=queue,
                 )
     assert calls == [True]
+
+
+async def test_maintenance_projects_during_capture_and_finalizer_reuses_active_projection():
+    """Capture need not finish for search publication, and both triggers share ownership."""
+    from airweave.domains.temporal.workflows.run_source_connection import (
+        RunSourceConnectionWorkflow,
+    )
+
+    from .conftest import (
+        ORG_ID,
+        SYNC_ID,
+        ActivityRecorder,
+        make_collection_dict,
+        make_connection_dict,
+        make_ctx_dict,
+        make_sync_dict,
+        make_sync_job_dict,
+        mock_transition_sync_job,
+    )
+
+    capturing, projected = asyncio.Event(), asyncio.Event()
+    finish_capture, finish_projection = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    @activity.defn(name="run_sync_activity")
+    async def capture(
+        sync: dict,
+        job: dict,
+        collection: dict,
+        connection: dict,
+        context: dict,
+        token: str | None,
+        force: bool,
+    ):
+        capturing.set()
+        await finish_capture.wait()
+
+    @activity.defn(name="discover_native_projection_activity")
+    async def discover(after: str | None = None):
+        assert capturing.is_set() and not finish_capture.is_set()
+        return {"sources": [{"organization_id": ORG_ID, "sync_id": SYNC_ID}], "next_cursor": None}
+
+    @activity.defn(name="project_canonical_records_activity")
+    async def project(org: str, sync: str, after: str | None = None, skip_failed: bool = False):
+        assert skip_failed
+        calls.append(sync)
+        projected.set()
+        await finish_projection.wait()
+        return {"after_id": None, "has_more": False, "failed": 0, "published": 1}
+
+    recorder = ActivityRecorder()
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        queue = "concurrent-projection-" + uuid4().hex
+        async with Worker(
+            env.client,
+            task_queue=queue,
+            workflows=[
+                RunSourceConnectionWorkflow,
+                RecoverNativeProjectionWorkflow,
+                ProjectCanonicalRecordsWorkflow,
+            ],
+            activities=[capture, discover, project, mock_transition_sync_job(recorder)],
+        ):
+            handle = await env.client.start_workflow(
+                RunSourceConnectionWorkflow.run,
+                args=[
+                    make_sync_dict(),
+                    make_sync_job_dict(),
+                    make_collection_dict(),
+                    make_connection_dict(),
+                    make_ctx_dict(),
+                ],
+                id=uuid4().hex,
+                task_queue=queue,
+            )
+            try:
+                await asyncio.wait_for(capturing.wait(), 20)
+                await env.client.execute_workflow(
+                    RecoverNativeProjectionWorkflow.run, id=uuid4().hex, task_queue=queue
+                )
+                await asyncio.wait_for(projected.wait(), 20)
+                assert not finish_capture.is_set()
+                finish_capture.set()
+                await handle.result()
+                assert recorder.called("transition_completed")
+                assert calls == [SYNC_ID]
+            finally:
+                finish_capture.set()
+                finish_projection.set()
+            await env.client.get_workflow_handle(
+                f"canonical-projection:{ORG_ID}:{SYNC_ID}"
+            ).result()
+
+
+@workflow.defn(name="RecoverNativeProjectionWorkflow")
+class PreviousRecoveryWorkflow:
+    """The historical native-only child ID must remain replayable."""
+
+    @workflow.run
+    async def run(self, after_sync_id: str | None = None) -> None:
+        page = await workflow.execute_activity(
+            "discover_native_projection_activity",
+            after_sync_id,
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=RetryPolicy(maximum_attempts=3),
+        )
+        for source in page["sources"]:
+            await workflow.start_child_workflow(
+                ProjectCanonicalRecordsWorkflow.run,
+                args=[source["organization_id"], source["sync_id"], None, 0, 0, True],
+                id=f"native-projection:{source['organization_id']}:{source['sync_id']}",
+                parent_close_policy=workflow.ParentClosePolicy.ABANDON,
+            )
+
+
+async def test_previous_source_projection_identity_replays():
+    organization, sync = str(uuid4()), str(uuid4())
+
+    @activity.defn(name="discover_native_projection_activity")
+    async def discover(after: str | None = None):
+        return {
+            "sources": [{"organization_id": organization, "sync_id": sync}],
+            "next_cursor": None,
+        }
+
+    @activity.defn(name="project_canonical_records_activity")
+    async def project(org: str, sync: str, after: str | None = None, skip_failed: bool = False):
+        return {"after_id": None, "has_more": False, "failed": 0, "published": 1}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        queue = "previous-projection-" + uuid4().hex
+        async with Worker(
+            env.client,
+            task_queue=queue,
+            workflows=[PreviousRecoveryWorkflow, ProjectCanonicalRecordsWorkflow],
+            activities=[discover, project],
+        ):
+            handle = await env.client.start_workflow(
+                PreviousRecoveryWorkflow.run, id=uuid4().hex, task_queue=queue
+            )
+            await handle.result()
+            history = await handle.fetch_history()
+        await Replayer(workflows=[RecoverNativeProjectionWorkflow]).replay_workflow(history)

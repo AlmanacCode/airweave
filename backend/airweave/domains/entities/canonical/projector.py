@@ -79,6 +79,18 @@ class CanonicalProjector:
         self._processor = processor
         self._storage = storage
 
+    async def _admit(
+        self, work: ProjectionWork, source_name: str, destination: VespaDestination
+    ) -> bool:
+        """Close authorization transaction before any external processing begins."""
+        if (
+            source_name != work.binding.source_name
+            or destination.collection_id != work.binding.collection_id
+        ):
+            return False
+        async with self._sessions() as db:
+            return await self._store.admit(db, work)
+
     async def project_one(
         self,
         work: ProjectionWork,
@@ -91,6 +103,9 @@ class CanonicalProjector:
             excluded_from_search,
             map_record,
         )
+
+        if not await self._admit(work, source_name, destination):
+            return False
 
         generation = uuid4()
         chunks = []

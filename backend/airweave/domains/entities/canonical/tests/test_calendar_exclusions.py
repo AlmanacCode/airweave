@@ -14,12 +14,14 @@ from airweave.domains.entities.canonical.query_models import RecordFilters, Reco
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.canonical.requests import CaptureBatch
 from airweave.domains.entities.canonical.store import CanonicalRecordStore
+from airweave.domains.entities.canonical.tests.helpers import bind_projection
 from airweave.models import Entity, ProjectionGeneration
 from airweave.platform.sources.records.google_calendar import record
 
 
 async def test_cancelled_exception_read_project_reinstate_and_revoke(database, source):
     capture, fence = source
+    binding = await bind_projection(database, fence, "google_calendar")
     parent = record("calendar", {"id": "cal"})
     native = {
         "id": "instance",
@@ -54,7 +56,7 @@ async def test_cancelled_exception_read_project_reinstate_and_revoke(database, s
     processor = MagicMock()
     processor.build_text = AsyncMock()
     destination = MagicMock()
-    destination.collection_id = uuid4()
+    destination.collection_id = binding.collection_id
     destination.feed_prepared = AsyncMock()
     projector = CanonicalProjector(projections, database, processor, AsyncMock())
     assert await projector.project_one(work, "google_calendar", destination, MagicMock())
@@ -122,6 +124,7 @@ async def test_cancelled_exception_read_project_reinstate_and_revoke(database, s
 
 async def test_live_event_cannot_publish_empty_or_exclusion_nonempty(database, source):
     capture, fence = source
+    binding = await bind_projection(database, fence, "google_calendar")
     fact = record(
         "event",
         {
@@ -146,13 +149,14 @@ async def test_live_event_cannot_publish_empty_or_exclusion_nonempty(database, s
             }
         )
         generation = uuid4()
-        assert await store.prepare(db, active, generation, uuid4(), ())
+        assert await store.prepare(db, active, generation, binding.collection_id, ())
         with pytest.raises(ValueError, match="indexed content"):
             await store.publish(db, active, generation, 0)
 
 
 async def test_operational_occurrences_publish_zero_documents_without_retry(database, source):
     capture, fence = source
+    binding = await bind_projection(database, fence, "google_calendar")
     parent = record("calendar", {"id": "cal"})
     occurrence = record(
         "event_occurrence",
@@ -177,7 +181,7 @@ async def test_operational_occurrences_publish_zero_documents_without_retry(data
     processor = MagicMock()
     processor.build_text = AsyncMock()
     destination = MagicMock()
-    destination.collection_id = uuid4()
+    destination.collection_id = binding.collection_id
     destination.feed_prepared = AsyncMock()
     projector = CanonicalProjector(projections, database, processor, AsyncMock())
     assert await projector.project_one(work, "google_calendar", destination, MagicMock())

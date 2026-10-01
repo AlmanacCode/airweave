@@ -8,8 +8,9 @@ from sqlalchemy import select
 from airweave.domains.entities.canonical.projection_models import ProjectionBatchResult
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.projector import CanonicalProjector
-from airweave.domains.entities.canonical.tests.helpers import capture, observation
-from airweave.models import Entity, Organization, SourceConnection, Sync, SyncJob
+from airweave.domains.entities.canonical.tests.helpers import bind_projection, capture, observation
+from airweave.models import Collection, Entity, Organization, SourceConnection, Sync, SyncJob
+from airweave.models.vector_db_deployment_metadata import VectorDbDeploymentMetadata
 
 
 async def test_source_pages_skip_failed_indexed_unsupported_and_foreign_rows(database, source):
@@ -17,11 +18,29 @@ async def test_source_pages_skip_failed_indexed_unsupported_and_foreign_rows(dat
     foreign = uuid4()
     async with database() as db:
         db.add(Organization(id=foreign, name="Foreign"))
+        metadata = VectorDbDeploymentMetadata(
+            dense_embedder="test", sparse_embedder="test", embedding_dimensions=3
+        )
+        db.add(metadata)
+        await db.flush()
+        for owner, readable in ((seed.organization_id, "owned"), (foreign, "foreign")):
+            db.add(
+                Collection(
+                    id=uuid4(),
+                    name=readable,
+                    readable_id=readable,
+                    organization_id=owner,
+                    vector_db_deployment_metadata_id=metadata.id,
+                )
+            )
         await db.commit()
     expected = set()
     for case in (
         "fresh",
-        "fresh-two",
+        "provider",
+        "unauthenticated",
+        "missing-collection",
+        "foreign-collection",
         "tombstone",
         "failed",
         "indexed",
@@ -48,8 +67,21 @@ async def test_source_pages_skip_failed_indexed_unsupported_and_foreign_rows(dat
                     sync_id=sync_id,
                     organization_id=foreign if case == "foreign-source" else seed.organization_id,
                     name=case,
-                    short_name="legacy" if case == "unsupported" else "almanac",
-                    is_authenticated=False,
+                    short_name=(
+                        "legacy"
+                        if case == "unsupported"
+                        else "slack"
+                        if case == "provider"
+                        else "almanac"
+                    ),
+                    is_authenticated=case != "unauthenticated",
+                    readable_collection_id=(
+                        None
+                        if case == "missing-collection"
+                        else "foreign"
+                        if case == "foreign-collection"
+                        else "owned"
+                    ),
                 )
             )
             await db.commit()
@@ -83,14 +115,16 @@ async def test_source_pages_skip_failed_indexed_unsupported_and_foreign_rows(dat
             elif case == "withdrawn":
                 record.removal_reason = "access_revoked"
             await db.commit()
-        if case in ("fresh", "fresh-two", "tombstone"):
+        if case in ("fresh", "provider", "tombstone"):
             expected.add(sync_id)
     store = CanonicalProjectionStore()
     async with database() as db:
-        first = await store.pending_sources(db, ("almanac",), limit=2)
+        first = await store.pending_sources(db, ("almanac", "slack"), limit=2)
         assert len(first.sources) == 2
         assert first.next_cursor == first.sources[-1].sync_id
-        second = await store.pending_sources(db, ("almanac",), after_id=first.next_cursor, limit=2)
+        second = await store.pending_sources(
+            db, ("almanac", "slack"), after_id=first.next_cursor, limit=2
+        )
         assert len(second.sources) == 1 and second.next_cursor is None
         assert {item.sync_id for item in (*first.sources, *second.sources)} == expected
         assert all(
@@ -102,6 +136,7 @@ async def test_source_pages_skip_failed_indexed_unsupported_and_foreign_rows(dat
 
 async def test_recovery_execution_skips_failed_until_original_changes(database, source):
     service, fence = source
+    await bind_projection(database, fence, "almanac")
     await capture(database, service, fence, observation())
     store = CanonicalProjectionStore()
     async with database() as db:

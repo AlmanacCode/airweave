@@ -121,7 +121,11 @@ async def test_slack_pdf_publication_records_partial_extraction(database, source
     from airweave.adapters.storage.filesystem import FilesystemBackend
     from airweave.core.logging import logger
     from airweave.domains.entities.canonical.projection_store import current_extraction
-    from airweave.domains.entities.canonical.tests.helpers import capture, observation
+    from airweave.domains.entities.canonical.tests.helpers import (
+        bind_projection,
+        capture,
+        observation,
+    )
     from airweave.domains.entities.canonical.tests.test_extraction_coverage import (
         destination,
         projector,
@@ -130,6 +134,7 @@ async def test_slack_pdf_publication_records_partial_extraction(database, source
     from airweave.models import Entity
 
     service, fence = source
+    binding = await bind_projection(database, fence, "slack")
     storage = FilesystemBackend(tmp_path)
     pdf = fitz.open()
     page = pdf.new_page()
@@ -155,7 +160,7 @@ async def test_slack_pdf_publication_records_partial_extraction(database, source
     )
     await capture(database, service, fence, item)
     result = await projector(database, storage).batch(
-        fence.organization_id, fence.sync_id, "slack", destination(), logger
+        fence.organization_id, fence.sync_id, "slack", destination(binding.collection_id), logger
     )
     assert result.published == 1 and result.failed == 0
     async with database() as db:
@@ -229,7 +234,7 @@ async def test_slack_pdf_publication_records_partial_extraction(database, source
         assert parent_row.record_revision > old_revision
         assert parent_row.indexed_revision != parent_row.record_revision
     result = await projector(database, storage).batch(
-        fence.organization_id, fence.sync_id, "slack", destination(), logger
+        fence.organization_id, fence.sync_id, "slack", destination(binding.collection_id), logger
     )
     assert result.published == 3 and result.failed == 0
     async with database() as db:

@@ -18,6 +18,7 @@ from airweave.domains.entities.canonical.store import (
     StaleWriter,
     content_is_available,
 )
+from airweave.domains.entities.canonical.tests.helpers import bind_projection
 from airweave.domains.native_ingestion.errors import NativeAdmissionError
 from airweave.domains.native_ingestion.models import (
     IngestNativeBatch,
@@ -47,17 +48,10 @@ def snapshot(native_id="one", revision=1, **changes):
 
 
 async def bind(database, fence, *, dataset="knowledge", provider="almanac"):
+    binding = await bind_projection(database, fence, provider)
     async with database() as db:
-        db.add(
-            SourceConnection(
-                id=uuid4(),
-                organization_id=fence.organization_id,
-                sync_id=fence.sync_id,
-                name="Native test",
-                short_name=provider,
-                config_fields={"owner_id": "owner-one", "dataset": dataset},
-            )
-        )
+        source = await db.get(SourceConnection, binding.source_connection_id)
+        source.config_fields = {"owner_id": "owner-one", "dataset": dataset}
         await db.commit()
 
 

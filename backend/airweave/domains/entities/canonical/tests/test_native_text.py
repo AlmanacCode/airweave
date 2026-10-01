@@ -88,7 +88,11 @@ async def test_slack_native_retained_read_matches_text_used_for_index(
     from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
     from airweave.domains.entities.canonical.requests import RecordIdentity
     from airweave.domains.entities.canonical.store import CanonicalRecordStore
-    from airweave.domains.entities.canonical.tests.helpers import capture, observation
+    from airweave.domains.entities.canonical.tests.helpers import (
+        bind_projection,
+        capture,
+        observation,
+    )
     from airweave.domains.entities.canonical.tests.test_extraction_coverage import (
         destination,
         projector,
@@ -97,6 +101,7 @@ async def test_slack_native_retained_read_matches_text_used_for_index(
     from airweave.models.sync import Sync
 
     service, fence = source
+    binding = await bind_projection(database, fence, "slack")
     original = observation(
         identity=RecordIdentity(record_type="message", native_id="1.000001", container_id="C1"),
         payload={"ts": "1.000001", **({"text": body} if body is not None else {})},
@@ -120,7 +125,9 @@ async def test_slack_native_retained_read_matches_text_used_for_index(
         work = (await CanonicalProjectionStore().pending(db, fence.organization_id, fence.sync_id))[
             0
         ]
-    assert await projection.project_one(work, "slack", destination(), MagicMock())
+    assert await projection.project_one(
+        work, "slack", destination(binding.collection_id), MagicMock()
+    )
     reader = CanonicalTextReader(
         CanonicalQueryService(CanonicalRecordStore(), CanonicalQueryStore(), "key"),
         storage,

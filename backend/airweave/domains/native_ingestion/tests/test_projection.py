@@ -167,7 +167,9 @@ async def test_mixed_message_publishes_partial_coverage_and_exact_native_text(
         assert mapped.parts[0].entity.block_index == 0
         assert mapped.parts[0].native_body.text == text
         assert mapped.parts[1].omission == "unsupported_format"
-    assert await projection.project_one(work, "almanac", destination(), MagicMock())
+    assert await projection.project_one(
+        work, "almanac", destination(work.binding.collection_id), MagicMock()
+    )
     assert indexed[0].endswith(text)
     assert "DO NOT INDEX" not in indexed[0] and "PRIVATE REPLAY TEXT" not in indexed[0]
     async with database() as db:
@@ -246,7 +248,9 @@ async def test_person_fields_enter_index_without_rewriting_native_body(database,
         work = (await CanonicalProjectionStore().pending(db, fence.organization_id, fence.sync_id))[
             0
         ]
-    assert await projection.project_one(work, "almanac", destination(), MagicMock())
+    assert await projection.project_one(
+        work, "almanac", destination(work.binding.collection_id), MagicMock()
+    )
     assert "sam@example.org" in indexed[0] and "Research engineer" in indexed[0]
     assert "samdev" in indexed[0] and "2024" in indexed[0]
     assert "UNSELECTED_METADATA" not in indexed[0] and "opaque-id" not in indexed[0]

@@ -15,7 +15,7 @@ from airweave.domains.embedders.fakes.embedder import FakeDenseEmbedder, FakeSpa
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.projector import CanonicalProjector
 from airweave.domains.entities.canonical.requests import BlobReference, RecordIdentity
-from airweave.domains.entities.canonical.tests.helpers import capture, observation
+from airweave.domains.entities.canonical.tests.helpers import bind_projection, capture, observation
 from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
 from airweave.models import Entity
 
@@ -30,6 +30,7 @@ async def test_scanned_pdf_without_ocr_stays_pending_with_owned_bytes(database, 
     content = document.tobytes()
     document.close()
     service, fence = source
+    binding = await bind_projection(database, fence, "google_drive")
     digest = hashlib.sha256(content).hexdigest()
     blob = BlobReference(
         key=f"canonical/{fence.sync_id}/blobs/sha256/{digest}",
@@ -49,7 +50,7 @@ async def test_scanned_pdf_without_ocr_stays_pending_with_owned_bytes(database, 
             blobs=(blob,),
         ),
     )
-    destination = MagicMock(feed_prepared=AsyncMock())
+    destination = MagicMock(collection_id=binding.collection_id, feed_prepared=AsyncMock())
     store = CanonicalProjectionStore()
     projector = CanonicalProjector(
         store,

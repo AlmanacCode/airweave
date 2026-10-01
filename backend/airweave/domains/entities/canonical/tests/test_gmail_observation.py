@@ -14,7 +14,11 @@ from airweave.domains.entities.canonical.requests import (
     RecordIdentity,
 )
 from airweave.domains.entities.canonical.store import capture_fingerprint
-from airweave.domains.entities.canonical.tests.helpers import capture, publish_prepared
+from airweave.domains.entities.canonical.tests.helpers import (
+    bind_projection,
+    capture,
+    publish_prepared,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -23,6 +27,7 @@ async def test_locator_rotation_preserves_originals_and_requires_current_publica
     database, source
 ):
     service, fence = source
+    await bind_projection(database, fence, "gmail")
     digest = sha256(b"identical message body").hexdigest()
     payload = {
         "id": "synthetic-message",

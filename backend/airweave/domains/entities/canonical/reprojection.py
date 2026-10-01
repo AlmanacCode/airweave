@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from airweave.domains.entities.canonical.projection_models import canonical_projection_workflow_id
 from airweave.domains.entities.canonical.search_metadata import SEARCH_METADATA_PIPELINE_VERSION
 from airweave.models.collection import Collection
 from airweave.models.entity import Entity
@@ -101,7 +102,7 @@ async def plan_reprojection(
         target_version=target_version,
         captured_records=count,
         target_pending_records=pending,
-        workflow_id=f"reprojection:{organization_id}:{sync_id}:{target_version}",
+        workflow_id=canonical_projection_workflow_id(organization_id, sync_id),
         applied=apply,
     )
     if apply:

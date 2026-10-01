@@ -8,6 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from airweave.domains.entities.canonical.models import SourceRecord
 
 
+def canonical_projection_workflow_id(organization_id: UUID | str, sync_id: UUID | str) -> str:
+    """One execution identity shared by scheduled, capture and operator projection."""
+    return f"canonical-projection:{organization_id}:{sync_id}"
+
+
 class ProjectionLocator(BaseModel):
     """Stored in the existing original_entity_id field, never a native provider ID."""
 
@@ -42,11 +47,21 @@ class ProjectionLocator(BaseModel):
         )
 
 
+class ProjectionBinding(BaseModel):
+    """Authenticated tenant source and exact destination captured with pending work."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    source_connection_id: UUID
+    source_name: str
+    collection_id: UUID
+
+
 class ProjectionWork(BaseModel):
     """Snapshot plus publication pointer used for compare-and-swap."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     organization_id: UUID
+    binding: ProjectionBinding
     record: SourceRecord
     pipeline_version: int
     previous_generation: UUID | None

@@ -4,7 +4,6 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
 
 import fitz
 import httpx
@@ -25,7 +24,7 @@ from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.canonical.requests import BlobReference, RecordIdentity
 from airweave.domains.entities.canonical.store import CanonicalRecordStore, CanonicalStoreError
-from airweave.domains.entities.canonical.tests.helpers import capture, observation
+from airweave.domains.entities.canonical.tests.helpers import bind_projection, capture, observation
 from airweave.domains.entities.canonical.text_models import TextArtifact
 from airweave.domains.entities.canonical.text_query import CanonicalTextReader
 from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
@@ -37,6 +36,7 @@ from airweave.platform.destinations.vespa.transformer import EntityTransformer
 @pytest.fixture
 async def publication(database, source, tmp_path):
     service, fence = source
+    binding = await bind_projection(database, fence, "google_drive")
     storage = FilesystemBackend(tmp_path)
     pdf = fitz.open()
     for index in range(3):
@@ -89,7 +89,7 @@ async def publication(database, source, tmp_path):
         )
 
     processor._chunk_entities = fixed_chunks
-    destination = MagicMock(collection_id=uuid4(), feed_prepared=AsyncMock())
+    destination = MagicMock(collection_id=binding.collection_id, feed_prepared=AsyncMock())
     destination.prepare_documents = lambda chunks: {
         "base_entity": [
             EntityTransformer(collection_id=destination.collection_id).transform(chunk)

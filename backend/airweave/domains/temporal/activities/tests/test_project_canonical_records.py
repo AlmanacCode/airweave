@@ -41,6 +41,7 @@ async def activity_setup(database, source, monkeypatch):
                 organization_id=fence.organization_id,
                 sync_id=fence.sync_id,
                 name="Native",
+                is_authenticated=True,
                 short_name="almanac",
                 readable_collection_id="native",
             )
@@ -129,3 +130,18 @@ async def test_projector_failure_propagates_and_closes_destination(activity_setu
     with pytest.raises(RuntimeError, match="synthetic projection failure"):
         await activity.run(str(fence.organization_id), str(fence.sync_id))
     destination.close_connection.assert_awaited_once()
+
+
+async def test_deauthenticated_binding_never_constructs_destination(activity_setup, database):
+    activity, fence, connection_id, _, destination, create = activity_setup
+    async with database() as db:
+        connection = await db.get(SourceConnection, connection_id)
+        connection.is_authenticated = False
+        await db.commit()
+    assert await activity.run(str(fence.organization_id), str(fence.sync_id)) == (
+        ProjectionBatchResult().model_dump(mode="json")
+    )
+    activity.source_registry.get.assert_not_called()
+    activity.projector.batch.assert_not_awaited()
+    create.assert_not_awaited()
+    destination.close_connection.assert_not_awaited()

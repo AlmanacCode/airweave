@@ -10,7 +10,7 @@ import pytest
 
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_mappers import map_record
-from airweave.domains.entities.canonical.projection_models import ProjectionWork
+from airweave.domains.entities.canonical.projection_models import ProjectionBinding, ProjectionWork
 from airweave.domains.entities.canonical.projector import _select_inputs
 from airweave.domains.entities.canonical.requests import BlobReference, RecordIdentity
 from airweave.platform.sources.records.workspace_manifest import (
@@ -126,7 +126,13 @@ def docs_record(*, native_available):
 
 def coverage(result, source):
     work = ProjectionWork(
-        organization_id=uuid4(), record=source, pipeline_version=2, previous_generation=None
+        binding=ProjectionBinding(
+            source_connection_id=uuid4(), source_name="google_drive", collection_id=uuid4()
+        ),
+        organization_id=uuid4(),
+        record=source,
+        pipeline_version=2,
+        previous_generation=None,
     )
     return _select_inputs(result, work, "google_drive", uuid4(), lambda _: True)[1]
 

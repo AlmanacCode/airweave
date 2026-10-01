@@ -1,4 +1,4 @@
-"""Recover native publications independently of unrelated cleanup outcomes."""
+"""Recover canonical publications independently of capture and cleanup outcomes."""
 
 from datetime import timedelta
 
@@ -7,7 +7,10 @@ from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 with workflow.unsafe.imports_passed_through():
-    from airweave.domains.entities.canonical.projection_models import ProjectionSourcePage
+    from airweave.domains.entities.canonical.projection_models import (
+        ProjectionSourcePage,
+        canonical_projection_workflow_id,
+    )
     from airweave.domains.temporal.activities.discover_native_projection import (
         DiscoverNativeProjectionActivity,
     )
@@ -39,7 +42,11 @@ class RecoverNativeProjectionWorkflow:
                     await workflow.start_child_workflow(
                         ProjectCanonicalRecordsWorkflow.run,
                         args=[str(source.organization_id), str(source.sync_id), None, 0, 0, True],
-                        id=f"native-projection:{source.organization_id}:{source.sync_id}",
+                        id=(
+                            canonical_projection_workflow_id(source.organization_id, source.sync_id)
+                            if workflow.patched("canonical-projection-identity-v1")
+                            else f"native-projection:{source.organization_id}:{source.sync_id}"
+                        ),
                         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
                         parent_close_policy=workflow.ParentClosePolicy.ABANDON,
                     )

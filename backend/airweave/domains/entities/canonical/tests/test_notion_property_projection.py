@@ -11,6 +11,7 @@ from airweave.domains.entities.canonical.projection_mappers import (
     map_record,
 )
 from airweave.domains.entities.canonical.requests import BlobReference, RecordIdentity
+from airweave.domains.entities.canonical.tests.helpers import bind_projection
 from airweave.domains.entities.canonical.tests.test_notion_projection import PAGE, STAMP, original
 
 
@@ -204,6 +205,7 @@ async def test_property_publication_obeys_current_parent(database, source):
     from airweave.models import Entity, Sync
 
     service, fence = source
+    await bind_projection(database, fence, "notion")
     record, content = fixture("number", [item("number", 1)])
     blob = record.blobs[0].model_copy(
         update={"key": f"canonical/{fence.sync_id}/blobs/sha256/{record.blobs[0].sha256}"}
@@ -273,6 +275,7 @@ async def test_unsupported_property_publishes_explicit_extraction(database, sour
     from airweave.models import Entity
 
     service, fence = source
+    binding = await bind_projection(database, fence, "notion")
     record, content = fixture("formula", [item("formula", {"type": "unsupported"})], "unsupported")
     blob = record.blobs[0].model_copy(
         update={"key": f"canonical/{fence.sync_id}/blobs/sha256/{record.blobs[0].sha256}"}
@@ -301,7 +304,9 @@ async def test_unsupported_property_publishes_explicit_extraction(database, sour
             )
             if w.record.identity.record_type == "page_property"
         )
-    assert await projector(database, storage).project_one(work, "notion", destination(), logger)
+    assert await projector(database, storage).project_one(
+        work, "notion", destination(binding.collection_id), logger
+    )
     async with database() as db:
         row = await db.scalar(select(Entity).where(Entity.id == work.record.id))
         coverage = await current_extraction(

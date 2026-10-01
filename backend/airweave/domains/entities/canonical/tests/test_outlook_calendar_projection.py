@@ -8,7 +8,7 @@ import pytest
 
 from airweave.domains.converters.html import HtmlConverter
 from airweave.domains.entities.canonical.outlook_calendar_projection import map_outlook_calendar
-from airweave.domains.entities.canonical.projection_models import ProjectionWork
+from airweave.domains.entities.canonical.projection_models import ProjectionBinding, ProjectionWork
 from airweave.domains.entities.canonical.projector import StrictProjectionTracker, _select_inputs
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.entities.canonical.tests.test_outlook_projection import source
@@ -77,7 +77,13 @@ def event(body):
 async def build(record, tmp_path):
     mapped = await map_outlook_calendar(record, tmp_path)
     work = ProjectionWork(
-        organization_id=uuid4(), record=record, pipeline_version=2, previous_generation=None
+        binding=ProjectionBinding(
+            source_connection_id=uuid4(), source_name="outlook_calendar", collection_id=uuid4()
+        ),
+        organization_id=uuid4(),
+        record=record,
+        pipeline_version=2,
+        previous_generation=None,
     )
     selected, coverage = _select_inputs(mapped, work, "outlook_calendar", uuid4(), lambda _: True)
     registry = MagicMock()

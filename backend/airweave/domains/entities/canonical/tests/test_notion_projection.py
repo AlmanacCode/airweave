@@ -19,7 +19,12 @@ from airweave.domains.entities.canonical.projection_store import (
 )
 from airweave.domains.entities.canonical.projector import CanonicalProjector
 from airweave.domains.entities.canonical.requests import RecordIdentity
-from airweave.domains.entities.canonical.tests.helpers import capture, observation, publish_prepared
+from airweave.domains.entities.canonical.tests.helpers import (
+    bind_projection,
+    capture,
+    observation,
+    publish_prepared,
+)
 from airweave.models import Entity, Sync
 
 PAGE, BLOCK = str(UUID(int=1)), str(UUID(int=2))
@@ -232,6 +237,7 @@ def test_original_search_view_is_in_existing_entity_registry():
 @pytest.mark.integration
 async def test_notion_publication_uses_current_revision_and_ancestor_authority(database, source):
     service, fence = source
+    await bind_projection(database, fence, "notion")
     root = original(properties={"title": {"type": "title", "title": [rich("Page")]}})
     child = block("paragraph", {"rich_text": [rich("First version")]})
     root_observation = observation(
@@ -281,6 +287,7 @@ async def test_notion_publication_uses_current_revision_and_ancestor_authority(d
 @pytest.mark.integration
 async def test_unknown_notion_block_stays_pending_in_actual_projector(database, source):
     service, fence = source
+    binding = await bind_projection(database, fence, "notion")
     root = original(properties={"title": {"type": "title", "title": []}})
     child = block("future_type", {"body": "not raw JSON prose"})
     await capture(
@@ -300,7 +307,7 @@ async def test_unknown_notion_block_stays_pending_in_actual_projector(database, 
         pending = await store.pending(db, fence.organization_id, fence.sync_id)
         root_work = next(item for item in pending if item.record.identity.record_type == "page")
         assert await publish_prepared(store, db, root_work, uuid4(), 1)
-    processor, destination = MagicMock(), MagicMock()
+    processor, destination = MagicMock(), MagicMock(collection_id=binding.collection_id)
     projector = CanonicalProjector(store, database, processor, AsyncMock())
     result = await projector.batch(
         fence.organization_id, fence.sync_id, "notion", destination, MagicMock()

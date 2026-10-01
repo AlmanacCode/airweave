@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import select
 from temporalio import activity
 
 from airweave.core.logging import logger
@@ -13,8 +12,6 @@ from airweave.domains.entities.canonical.projection_store import CanonicalProjec
 from airweave.domains.entities.canonical.projector import CanonicalProjector
 from airweave.domains.entities.canonical.source import indexed_record_types
 from airweave.domains.sources.protocols import SourceRegistryProtocol
-from airweave.models.collection import Collection
-from airweave.models.source_connection import SourceConnection
 from airweave.platform.destinations.vespa.destination import VespaDestination
 
 
@@ -37,23 +34,10 @@ class ProjectCanonicalRecordsActivity:
         organization = UUID(organization_id)
         sync = UUID(sync_id)
         async with get_db_context() as db:
-            row = (
-                await db.execute(
-                    select(SourceConnection.short_name, Collection.id)
-                    .join(
-                        Collection,
-                        Collection.readable_id == SourceConnection.readable_collection_id,
-                    )
-                    .where(
-                        SourceConnection.organization_id == organization,
-                        SourceConnection.sync_id == sync,
-                        Collection.organization_id == organization,
-                    )
-                )
-            ).one_or_none()
-            if row is None:
+            binding = await CanonicalProjectionStore().binding(db, organization, sync)
+            if binding is None:
                 return ProjectionBatchResult().model_dump(mode="json")
-            source_name, collection_id = row
+            source_name, collection_id = binding.source_name, binding.collection_id
             if not indexed_record_types(source_name, self.source_registry):
                 return ProjectionBatchResult().model_dump(mode="json")
             # Do not construct an index client for sources with no pending records.

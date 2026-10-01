@@ -23,7 +23,7 @@ from airweave.domains.entities.canonical.projection_store import (
 )
 from airweave.domains.entities.canonical.projector import CanonicalProjector
 from airweave.domains.entities.canonical.requests import RecordIdentity
-from airweave.domains.entities.canonical.tests.helpers import capture, observation
+from airweave.domains.entities.canonical.tests.helpers import bind_projection, capture, observation
 from airweave.domains.entities.canonical.tests.test_gmail_projection import part
 from airweave.domains.search.owned import OwnedSearchService
 from airweave.domains.search.owned_models import OwnedSearchRequest
@@ -52,8 +52,8 @@ def original(*attachments, completeness="complete"):
     )
 
 
-def destination():
-    result = MagicMock(collection_id=uuid4(), feed_prepared=AsyncMock())
+def destination(collection_id):
+    result = MagicMock(collection_id=collection_id, feed_prepared=AsyncMock())
     result.prepare_documents = lambda chunks: {
         "base_entity": [
             EntityTransformer(collection_id=result.collection_id).transform(c) for c in chunks
@@ -75,6 +75,7 @@ async def test_message_pdf_video_and_missing_part_publish_truthful_coverage(
     database, source, tmp_path
 ):
     service, fence = source
+    binding = await bind_projection(database, fence, "gmail")
     pdf = fitz.open()
     page = pdf.new_page()
     page.insert_text(
@@ -98,7 +99,7 @@ async def test_message_pdf_video_and_missing_part_publish_truthful_coverage(
     )
     await capture(database, service, fence, item)
     store = CanonicalProjectionStore()
-    target = destination()
+    target = destination(binding.collection_id)
     result = await projector(database, FilesystemBackend(tmp_path)).batch(
         fence.organization_id, fence.sync_id, "gmail", target, logger
     )
@@ -182,13 +183,14 @@ async def test_supported_attachment_conversion_failure_and_feed_failure_stay_pen
     database, source, tmp_path
 ):
     service, fence = source
+    binding = await bind_projection(database, fence, "gmail")
     await capture(
         database,
         service,
         fence,
         original(part(b"broken binary\x00", mime="application/pdf", filename="broken.pdf")),
     )
-    target = destination()
+    target = destination(binding.collection_id)
     project = projector(database, FilesystemBackend(tmp_path))
     assert (
         await project.batch(fence.organization_id, fence.sync_id, "gmail", target, logger)
@@ -224,6 +226,7 @@ async def test_unsupported_only_publication_is_explicit_and_retries_on_pipeline_
     database, source, tmp_path
 ):
     service, fence = source
+    binding = await bind_projection(database, fence, "google_drive")
     from airweave.domains.entities.canonical.tests.test_gmail_projection import blob, record
 
     captured = record({}, sync_id=fence.sync_id)
@@ -240,7 +243,7 @@ async def test_unsupported_only_publication_is_explicit_and_retries_on_pipeline_
             blobs=(ref,),
         ),
     )
-    target = destination()
+    target = destination(binding.collection_id)
     assert (
         await projector(database, storage).batch(
             fence.organization_id, fence.sync_id, "google_drive", target, logger
@@ -288,11 +291,12 @@ async def test_coverage_manifest_is_exact_immutable_and_capture_fences_publicati
     )
 
     service, fence = source
+    binding = await bind_projection(database, fence, "gmail")
     await capture(database, service, fence, original())
     store = CanonicalProjectionStore()
     async with database() as db:
         work = (await store.pending(db, fence.organization_id, fence.sync_id))[0]
-    generation, collection = uuid4(), uuid4()
+    generation, collection = uuid4(), binding.collection_id
     locator = ProjectionLocator(
         record_id=work.record.id,
         revision=work.record.revision,
@@ -356,11 +360,12 @@ async def test_inline_image_without_ocr_keeps_body_partial_but_converter_failure
     database, source, tmp_path
 ):
     service, fence = source
+    binding = await bind_projection(database, fence, "gmail")
     item = original(part(b"retained image bytes", mime="image/png", filename="inline.png"))
     item.payload["payload"]["mimeType"] = "multipart/related"
     await capture(database, service, fence, item)
     storage = FilesystemBackend(tmp_path)
-    target = destination()
+    target = destination(binding.collection_id)
     result = await projector(database, storage).batch(
         fence.organization_id, fence.sync_id, "gmail", target, logger
     )
@@ -408,12 +413,13 @@ async def test_drive_metadata_only_reports_missing_original_then_new_bytes_are_i
     from airweave.domains.entities.canonical.tests.test_gmail_projection import blob, record
 
     service, fence = source
+    binding = await bind_projection(database, fence, "google_drive")
     identity = RecordIdentity(record_type="file", native_id="retained-file")
     payload = {"id": identity.native_id, "name": "Notes.txt", "mimeType": "text/plain"}
     metadata = observation(identity=identity, payload=payload, completeness="metadata_only")
     await capture(database, service, fence, metadata)
     storage = FilesystemBackend(tmp_path)
-    target = destination()
+    target = destination(binding.collection_id)
     project = projector(database, storage)
     assert (
         await project.batch(fence.organization_id, fence.sync_id, "google_drive", target, logger)

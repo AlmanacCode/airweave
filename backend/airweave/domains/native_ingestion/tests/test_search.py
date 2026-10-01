@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
@@ -19,7 +19,6 @@ from airweave.domains.search.owned_models import OwnedSearchRequest
 from airweave.domains.search.types import SearchResults
 from airweave.models.collection import Collection
 from airweave.models.source_connection import SourceConnection
-from airweave.models.vector_db_deployment_metadata import VectorDbDeploymentMetadata
 
 
 async def test_native_search_requires_current_publication_and_source_access(database, source):
@@ -28,25 +27,17 @@ async def test_native_search_requires_current_publication_and_source_access(data
     await bind(database, fence)
     await ingest(database, fence, snapshot())
     async with database() as db:
-        deployment = VectorDbDeploymentMetadata(
-            dense_embedder="fake", embedding_dimensions=3, sparse_embedder="fake"
+        collection = await db.scalar(
+            select(Collection)
+            .join(
+                SourceConnection, SourceConnection.readable_collection_id == Collection.readable_id
+            )
+            .where(
+                SourceConnection.sync_id == fence.sync_id,
+                Collection.organization_id == fence.organization_id,
+            )
         )
-        db.add(deployment)
-        await db.flush()
-        collection = Collection(
-            name="Native synthetic",
-            readable_id="native-search",
-            organization_id=fence.organization_id,
-            vector_db_deployment_metadata_id=deployment.id,
-        )
-        db.add(collection)
-        await db.flush()
-        await db.execute(
-            update(SourceConnection)
-            .where(SourceConnection.sync_id == fence.sync_id)
-            .values(readable_collection_id=collection.readable_id, is_authenticated=True)
-        )
-        await db.commit()
+        assert collection is not None
     store = CanonicalProjectionStore()
     async with database() as db:
         work = (await store.pending(db, fence.organization_id, fence.sync_id))[0]
@@ -80,9 +71,12 @@ async def test_native_search_requires_current_publication_and_source_access(data
         ) == [candidate]
         legacy = candidate.model_copy(deep=True)
         legacy.airweave_system_metadata.original_entity_id = "unversioned-native-id"
-        assert await visible_results(
-            db, fence.organization_id, collection.readable_id, [legacy], registry
-        ) == []
+        assert (
+            await visible_results(
+                db, fence.organization_id, collection.readable_id, [legacy], registry
+            )
+            == []
+        )
 
     async def revoke_during_retrieval(**kwargs):
         async with database() as db:

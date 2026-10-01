@@ -11,7 +11,12 @@ from airweave.domains.entities.canonical.projection_store import (
     publication_matches,
 )
 from airweave.domains.entities.canonical.requests import RecordIdentity
-from airweave.domains.entities.canonical.tests.helpers import capture, observation, publish_prepared
+from airweave.domains.entities.canonical.tests.helpers import (
+    bind_projection,
+    capture,
+    observation,
+    publish_prepared,
+)
 from airweave.models import Entity, Sync
 
 pytestmark = pytest.mark.integration
@@ -24,6 +29,7 @@ async def pending(database, fence):
 
 async def test_publication_compare_and_swap_revision_generation_and_pipeline(database, source):
     service, fence = source
+    await bind_projection(database, fence, "slack")
     await capture(database, service, fence, observation())
     work = (await pending(database, fence))[0]
     store = CanonicalProjectionStore()
@@ -64,6 +70,7 @@ async def test_publication_compare_and_swap_revision_generation_and_pipeline(dat
 
 async def test_parent_access_loss_fences_publication_and_tombstone_is_empty(database, source):
     service, fence = source
+    await bind_projection(database, fence, "slack")
     parent_id = RecordIdentity(record_type="calendar", native_id="cal")
     parent = observation(identity=parent_id)
     child = observation("event", "cal", parent=parent_id)
@@ -88,6 +95,7 @@ async def test_parent_access_loss_fences_publication_and_tombstone_is_empty(data
 
 async def test_failed_work_retries_and_stale_failure_preserves_publication(database, source):
     service, fence = source
+    await bind_projection(database, fence, "slack")
     await capture(database, service, fence, observation())
     work = (await pending(database, fence))[0]
     store = CanonicalProjectionStore()
@@ -116,6 +124,7 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
     from airweave.platform.destinations.vespa.transformer import EntityTransformer
 
     service, fence = source
+    binding = await bind_projection(database, fence, "slack")
     await capture(
         database,
         service,
@@ -152,7 +161,7 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
     processor.build_text = build_text
     processor.process_built_text = process
     destination = MagicMock()
-    destination.collection_id = uuid4()
+    destination.collection_id = binding.collection_id
     destination.prepare_documents = lambda chunks: {
         "base_entity": [
             EntityTransformer(collection_id=destination.collection_id).transform(chunk)

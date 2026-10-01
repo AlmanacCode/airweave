@@ -12,6 +12,7 @@ from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.calendar import is_cancelled_recurring_event
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import (
+    ProjectionBinding,
     ProjectionDocument,
     ProjectionLocator,
     ProjectionSourcePage,
@@ -22,6 +23,7 @@ from airweave.domains.entities.canonical.projection_models import (
 from airweave.domains.entities.canonical.store import content_is_available, source_record
 from airweave.domains.entities.canonical.text_artifacts import text_manifest
 from airweave.domains.entities.canonical.text_models import TextArtifact
+from airweave.models.collection import Collection
 from airweave.models.entity import Entity
 from airweave.models.projection_generation import ProjectionGeneration
 from airweave.models.source_connection import SourceConnection
@@ -96,6 +98,47 @@ def _pending_record():
 class CanonicalProjectionStore:
     """Optimistic projection computation, serialized CAS against source capture."""
 
+    async def binding(
+        self, db: AsyncSession, organization_id: UUID, sync_id: UUID
+    ) -> ProjectionBinding | None:
+        """Resolve one authenticated source and collection; ambiguity fails closed."""
+        rows = (
+            await db.execute(
+                select(SourceConnection.id, SourceConnection.short_name, Collection.id)
+                .join(
+                    Collection,
+                    and_(
+                        Collection.readable_id == SourceConnection.readable_collection_id,
+                        Collection.organization_id == SourceConnection.organization_id,
+                    ),
+                )
+                .join(
+                    Sync,
+                    and_(
+                        Sync.id == SourceConnection.sync_id,
+                        Sync.organization_id == SourceConnection.organization_id,
+                    ),
+                )
+                .where(
+                    SourceConnection.organization_id == organization_id,
+                    SourceConnection.sync_id == sync_id,
+                    SourceConnection.is_authenticated.is_(True),
+                )
+                .limit(2)
+            )
+        ).all()
+        if len(rows) != 1:
+            return None
+        source, name, collection = rows[0]
+        return ProjectionBinding(
+            source_connection_id=source, source_name=name, collection_id=collection
+        )
+
+    async def admit(self, db: AsyncSession, work: ProjectionWork) -> bool:
+        """Fence current authorization before any converter, storage or embedding call."""
+        async with UnitOfWork(db):
+            return await self._current(db, work) is not None
+
     async def pending(
         self,
         db: AsyncSession,
@@ -109,6 +152,9 @@ class CanonicalProjectionStore:
         """One bounded UUID page; deleted records publish an empty generation."""
         if not 1 <= limit <= 100:
             raise ValueError("Projection batch size must be between 1 and 100")
+        binding = await self.binding(db, organization_id, sync_id)
+        if binding is None:
+            return ()
         statement = (
             select(Entity, Sync.index_pipeline_version)
             .join(Sync, Sync.id == Entity.sync_id)
@@ -127,6 +173,7 @@ class CanonicalProjectionStore:
         return tuple(
             ProjectionWork(
                 organization_id=organization_id,
+                binding=binding,
                 record=source_record(row),
                 pipeline_version=version,
                 previous_generation=row.indexed_generation,
@@ -150,7 +197,16 @@ class CanonicalProjectionStore:
         if not 1 <= limit <= 100:
             raise ValueError("Projection source page size must be between 1 and 100")
         owned_source = exists(
-            select(SourceConnection.id).where(
+            select(SourceConnection.id)
+            .join(
+                Collection,
+                and_(
+                    Collection.readable_id == SourceConnection.readable_collection_id,
+                    Collection.organization_id == SourceConnection.organization_id,
+                ),
+            )
+            .where(
+                SourceConnection.is_authenticated.is_(True),
                 SourceConnection.sync_id == Sync.id,
                 SourceConnection.organization_id == Sync.organization_id,
                 SourceConnection.short_name.in_(source_names),
@@ -191,6 +247,8 @@ class CanonicalProjectionStore:
         )
         if sync is None or sync.index_pipeline_version != work.pipeline_version:
             return None
+        if await self.binding(db, work.organization_id, work.record.sync_id) != work.binding:
+            return None
         row = (
             await db.execute(
                 select(Entity, content_is_available())
@@ -227,6 +285,8 @@ class CanonicalProjectionStore:
         text_representations: tuple[TextArtifact, ...] | None = None,
     ) -> bool:
         """Commit exact immutable deletion identities before the first remote feed."""
+        if collection_id != work.binding.collection_id:
+            raise ValueError("Projection destination does not match authenticated binding")
         identities = set()
         indexed_parts = set()
         for document in documents:
@@ -325,6 +385,8 @@ class CanonicalProjectionStore:
             if (
                 attempt is None
                 or attempt.retired_at is not None
+                or attempt.collection_id != work.binding.collection_id
+                or attempt.sync_id != work.record.sync_id
                 or attempt.organization_id != work.organization_id
                 or attempt.record_id != work.record.id
                 or attempt.revision != work.record.revision

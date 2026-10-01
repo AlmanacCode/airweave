@@ -37,6 +37,12 @@ def test_create_activities_returns_list():
     assert "ProjectCanonicalRecordsActivity" in activity_classes
     assert "CleanupProjectionGenerationsActivity" in activity_classes
     assert "DiscoverNativeProjectionActivity" in activity_classes
+    discovery = next(
+        method.__self__
+        for method in result
+        if type(method.__self__).__name__ == "DiscoverNativeProjectionActivity"
+    )
+    assert discovery.source_registry is mock_container.source_registry
 
 
 @pytest.mark.unit

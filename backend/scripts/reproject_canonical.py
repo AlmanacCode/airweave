@@ -4,7 +4,8 @@ import argparse
 import asyncio
 from uuid import UUID
 
-from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
+from temporalio.common import WorkflowIDReusePolicy
+from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from airweave.core.config import settings
 from airweave.db.session import AsyncSessionLocal
@@ -36,14 +37,19 @@ async def run(args: argparse.Namespace) -> None:
     # Non-atomic by design: a launch failure leaves pending rows durable. Repeat
     # the exact expect/target command; don't choose another version to retry.
     client = await get_client()
-    await client.start_workflow(
-        ProjectCanonicalRecordsWorkflow.run,
-        args=[str(args.organization), str(args.sync)],
-        id=plan.workflow_id,
-        task_queue=settings.TEMPORAL_TASK_QUEUE,
-        id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
-    )
+    try:
+        await client.start_workflow(
+            ProjectCanonicalRecordsWorkflow.run,
+            args=[str(args.organization), str(args.sync)],
+            id=plan.workflow_id,
+            task_queue=settings.TEMPORAL_TASK_QUEUE,
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+        )
+    except WorkflowAlreadyStartedError as exc:
+        raise SystemExit(
+            "Projection is already running. The requested version remains durable; "
+            "retry this exact command after it finishes to include previously failed records."
+        ) from exc
     print("Projection workflow accepted; this does not mean indexing is complete.")
 
 

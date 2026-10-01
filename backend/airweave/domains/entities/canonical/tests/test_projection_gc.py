@@ -12,13 +12,14 @@ from airweave.domains.entities.canonical.projection_models import (
     scope_projection_document_id,
 )
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
-from airweave.domains.entities.canonical.tests.helpers import capture, observation
+from airweave.domains.entities.canonical.tests.helpers import bind_projection, capture, observation
 from airweave.models import Entity, Sync
 from airweave.models.projection_generation import ProjectionGeneration
 
 
 async def prepare(database, source, count=3):
     service, fence = source
+    binding = await bind_projection(database, fence)
     await capture(database, service, fence, observation())
     store = CanonicalProjectionStore()
     async with database() as db:
@@ -31,7 +32,7 @@ async def prepare(database, source, count=3):
         generation=generation,
         part_index=0,
     ).encode()
-    collection_id = uuid4()
+    collection_id = binding.collection_id
     docs = tuple(
         ProjectionDocument(
             schema_name="base_entity",
@@ -259,6 +260,7 @@ async def test_manifest_rejects_foreign_scope_and_unanchored_locator(database, s
 
 async def test_empty_tombstone_publication_does_not_become_pending_each_gc_pass(database, source):
     service, fence = source
+    binding = await bind_projection(database, fence)
     await capture(
         database,
         service,
@@ -270,7 +272,7 @@ async def test_empty_tombstone_publication_does_not_become_pending_each_gc_pass(
     async with database() as db:
         work = (await store.pending(db, fence.organization_id, fence.sync_id))[0]
     async with database() as db:
-        assert await store.prepare(db, work, generation, uuid4(), ())
+        assert await store.prepare(db, work, generation, binding.collection_id, ())
     async with database() as db:
         assert await store.publish(db, work, generation, 0)
     async with database() as db:

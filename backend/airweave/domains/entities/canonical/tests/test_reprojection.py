@@ -60,7 +60,9 @@ async def test_wrong_scope_and_changed_version_fail(database, search_indexed):  
 
 
 async def test_launch_failure_keeps_queue_and_identical_retry_starts_once(
-    database, search_indexed, monkeypatch  # noqa: F811
+    database,
+    search_indexed,  # noqa: F811
+    monkeypatch,
 ):
     from argparse import Namespace
     from unittest.mock import AsyncMock
@@ -91,6 +93,8 @@ async def test_launch_failure_keeps_queue_and_identical_retry_starts_once(
     monkeypatch.setattr(reproject_canonical, "get_client", AsyncMock(return_value=client))
     await reproject_canonical.run(args)
     assert client.start_workflow.await_count == 1
-    assert client.start_workflow.call_args.kwargs["id"].endswith(":3")
+    assert client.start_workflow.call_args.kwargs["id"] == (
+        f"canonical-projection:{fence.organization_id}:{fence.sync_id}"
+    )
     async with database() as db:
         assert await db.scalar(select(Sync.index_pipeline_version)) == 3
