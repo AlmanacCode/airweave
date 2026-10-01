@@ -139,7 +139,7 @@ def effective_mode(row: CaptureScan, cycle: CaptureCycle) -> str:
 
 def publish_scope(row: CaptureScan, cycle: CaptureCycle, sequence: int, attempt_id: UUID) -> None:
     """Completed evidence is derived only from this row's committed terminal state."""
-    if cycle.mode != "mixed" or row.phase != "complete":
+    if row.execution_state is None or row.phase != "complete":
         return
     execution = ScopeExecution.model_validate(row.execution_state)
     checkpoint = row.continuation.get(TERMINAL_CHECKPOINT_KEY)
@@ -167,10 +167,15 @@ def begin_execution(
 ) -> None:
     """Previous completion survives replacement; mismatching owner/request invalidates it."""
     if cycle.mode != "mixed":
-        if request.plan is not None:
-            raise ScanConflict("Scope plans require mixed execution")
-        row.execution_state = None
-        return
+        if request.plan is None:
+            row.execution_state = None
+            return
+        if (
+            cycle.mode != "full"
+            or request.plan.mode != "full"
+            or request.plan.starting_checkpoint is not None
+        ):
+            raise ScanConflict("Full capture scope plans cannot request incremental execution")
     plan = request.plan
     if plan is None:
         raise ScanConflict("Mixed capture requires an explicit scope plan")
@@ -211,10 +216,10 @@ def validate_scope_changes(
             raise ScanConflict("Scope changes must start at its last published checkpoint")
 
 
-def attest_planned_owner(cycle: CaptureCycle, request: BeginScan, parent: Entity | None) -> None:
+def attest_planned_owner(request: BeginScan, parent: Entity | None) -> None:
     """The post-I/O plan must still describe the captured owner used to select it."""
     if request.expected_parent_epoch != (parent.visibility_epoch if parent else None) or (
-        (cycle.mode == "mixed" or request.exact_parent_observation is not None)
+        (request.plan is not None or request.exact_parent_observation is not None)
         and request.expected_parent_revision != (parent.record_revision if parent else None)
     ):
         raise ScanConflict("Scope owner changed during plan selection")
@@ -353,7 +358,7 @@ class CanonicalScanStore:
             not in cycle.configuration.exact_parent_validation
         ):
             raise ScanConflict("Scope does not accept exact parent verification")
-        attest_planned_owner(cycle, request, parent)
+        attest_planned_owner(request, parent)
         if request.fingerprint != cycle.configuration.fingerprint:
             raise CycleConflict("Scan configuration differs from the active cycle")
         row = await self._row(db, request.fence, request.scope)
@@ -427,7 +432,7 @@ class CanonicalScanStore:
     ) -> ScanState:
         """Resume unchanged scans; reuse admission checks held under the same writer lock."""
         cursor, cycle, parent = context or await self._begin_context(db, request)
-        attest_planned_owner(cycle, request, parent)
+        attest_planned_owner(request, parent)
         inventory = cycle.configuration.fresh_inventory(request.scope.record_type)
         if request.fingerprint != cycle.configuration.fingerprint:
             raise CycleConflict("Scan configuration differs from the active cycle")

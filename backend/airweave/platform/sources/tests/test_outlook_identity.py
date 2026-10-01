@@ -317,3 +317,27 @@ async def test_delta_expiry_classification_requires_structured_code_and_delta_en
         code = "ErrorItemNotFound"
         with pytest.raises(SourceEntityNotFoundError):
             await source.get(delta)
+
+
+def test_owned_calendar_config_requires_principal_and_preserves_explicit_window():
+    """Owned activation needs identity; recurrence bounds are explicit and reproducible."""
+    from datetime import datetime, timezone
+
+    from pydantic import ValidationError
+
+    from airweave.platform.configs.config import CalendarOccurrenceWindow
+
+    with pytest.raises(ValidationError, match="expected_principal_id"):
+        OutlookCalendarConfig(capture_originals=True)
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    explicit = CalendarOccurrenceWindow(start=start, end=end)
+    config = OutlookCalendarConfig(
+        capture_originals=True,
+        expected_principal_id="principal",
+        occurrence_window=explicit,
+    )
+    assert config.resolved_window() == explicit
+    assert not OutlookCalendarConfig().capture_originals
+    with pytest.raises(ValidationError):
+        OutlookCalendarConfig(occurrence_window={"start": end, "end": start})

@@ -455,36 +455,37 @@ async def test_slack_workspace_user_survives_pause_and_rejects_different_member(
         assert (resumed.expected_identity, resumed.expected_user_identity) == ("T1", "U1")
 
 
+@pytest.mark.parametrize("provider", ["outlook_mail", "outlook_calendar"])
 async def test_outlook_fresh_source_retry_and_principal_cannot_downgrade_owned_capture(
-    database, setup
+    database, setup, provider
 ):
     ctx, service, request, account, lifecycle, schedules, workflows = setup
     creator = service.store.create
-    creator._source_registry.get.return_value.short_name = "outlook_mail"
+    creator._source_registry.get.return_value.short_name = provider
     expected_config = {"expected_principal_id": "native-owner", "capture_originals": True}
-    creator._source_validation.seed_config_result("outlook_mail", expected_config)
+    creator._source_validation.seed_config_result(provider, expected_config)
     spec = ManagedSource.model_validate(
         {
             **request.source.model_dump(),
-            "provider": "outlook_mail",
+            "provider": provider,
             "expected_identity": "native-owner",
             "config": {"expected_principal_id": "wrong-owner", "capture_originals": False},
         }
     )
     request = request.model_copy(update={"source": spec})
     assert spec.source_config() == expected_config
-    assert native_principal("outlook_mail", spec.source_config()) == ("native-owner", None)
+    assert native_principal(provider, spec.source_config()) == ("native-owner", None)
     with pytest.raises(ValueError, match="must capture originals"):
-        native_principal("outlook_mail", {"expected_principal_id": "native-owner"})
+        native_principal(provider, {"expected_principal_id": "native-owner"})
     with pytest.raises(ValueError):
-        native_principal("outlook_mail", {"capture_originals": True})
+        native_principal(provider, {"capture_originals": True})
 
     async with database() as db:
         assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 0
         first = await service.ensure(db, ctx, account, request)
         assert first.state == "ready" and first.expected_identity == "native-owner"
         source = await db.get(SourceConnection, first.source_connection_id)
-        assert source.short_name == "outlook_mail" and source.config_fields == expected_config
+        assert source.short_name == provider and source.config_fields == expected_config
         sync = await db.get(Sync, first.sync_id)
         original_epoch = sync.writer_epoch
         assert sync.provisioning_generation == sync.provisioning_ready_generation == 1

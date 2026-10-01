@@ -201,15 +201,16 @@ async def test_update_config_valid():
     assert any(c[0] == "validate_config" for c in validation._calls)
 
 
+@pytest.mark.parametrize("provider", ["outlook_mail", "outlook_calendar"])
 @pytest.mark.parametrize("originals", [False, True])
-async def test_outlook_capture_mode_change_requires_new_source(originals: bool):
-    sc = _make_sc(short_name="outlook_mail")
+async def test_outlook_capture_mode_change_requires_new_source(originals: bool, provider: str):
+    sc = _make_sc(short_name=provider)
     sc.config_fields = {"expected_principal_id": "native-user", "capture_originals": originals}
     sc_repo = FakeSourceConnectionRepository()
     sc_repo.seed(sc.id, sc)
     config = {"expected_principal_id": "native-user", "capture_originals": not originals}
     validation = FakeSourceValidationService()
-    validation.seed_config_result("outlook_mail", config)
+    validation.seed_config_result(provider, config)
     svc = _build_service(sc_repo=sc_repo, source_validation=validation)
 
     with pytest.raises(HTTPException, match="Create a new source") as exc:
@@ -222,15 +223,16 @@ async def test_outlook_capture_mode_change_requires_new_source(originals: bool):
     assert not any(call[0] == "update" for call in sc_repo._calls)
 
 
+@pytest.mark.parametrize("provider", ["outlook_mail", "outlook_calendar"])
 @pytest.mark.parametrize("originals", [False, True])
-async def test_outlook_principal_change_preserves_capture_identity(originals: bool):
-    sc = _make_sc(short_name="outlook_mail")
+async def test_outlook_principal_change_preserves_capture_identity(originals: bool, provider: str):
+    sc = _make_sc(short_name=provider)
     sc.config_fields = {"expected_principal_id": "native-user", "capture_originals": originals}
     sc_repo = FakeSourceConnectionRepository()
     sc_repo.seed(sc.id, sc)
     config = {**sc.config_fields, "expected_principal_id": "another-user"}
     validation = FakeSourceValidationService()
-    validation.seed_config_result("outlook_mail", config)
+    validation.seed_config_result(provider, config)
     svc = _build_service(sc_repo=sc_repo, source_validation=validation)
 
     if originals:

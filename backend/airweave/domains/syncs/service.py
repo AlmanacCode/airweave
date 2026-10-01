@@ -59,7 +59,7 @@ from airweave.domains.temporal.protocols import (
     TemporalScheduleServiceProtocol,
     TemporalWorkflowServiceProtocol,
 )
-from airweave.platform.configs.config import OutlookMailConfig, StripeConfig
+from airweave.platform.configs.config import OutlookCalendarConfig, OutlookMailConfig, StripeConfig
 from airweave.schemas.source_connection import ScheduleConfig
 from airweave.schemas.sync import SyncCreate
 from airweave.schemas.sync_job import SyncJobCreate
@@ -135,9 +135,14 @@ class SyncService(SyncServiceProtocol):
         canonical = isinstance(
             source_entry.source_class_ref, (CanonicalSource, CanonicalPageSource)
         )
-        if source_entry.short_name == "outlook_mail":
+        if source_entry.short_name in {"outlook_mail", "outlook_calendar"}:
             # Outlook composes its canonical adapter only for explicit original capture.
-            canonical = OutlookMailConfig.model_validate(source_config or {}).capture_originals
+            config_type = (
+                OutlookMailConfig
+                if source_entry.short_name == "outlook_mail"
+                else OutlookCalendarConfig
+            )
+            canonical = config_type.model_validate(source_config or {}).capture_originals
         elif source_entry.short_name == "stripe":
             canonical = (
                 StripeConfig.model_validate(source_config or {}).original_capture is not None

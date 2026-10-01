@@ -25,6 +25,7 @@ class ManagedSource(BaseModel):
         "google_drive",
         "slack",
         "outlook_mail",
+        "outlook_calendar",
         "stripe",
         "linear",
         "attio",
@@ -119,7 +120,7 @@ class ManagedSource(BaseModel):
                 {**self.config, "expected_account_id": self.expected_identity}
             )
             return StripeConfig(original_capture=binding).model_dump(mode="json")
-        if self.provider == "outlook_mail":
+        if self.provider in {"outlook_mail", "outlook_calendar"}:
             return {
                 **self.config,
                 "expected_principal_id": self.expected_identity,
@@ -210,6 +211,7 @@ def _account_principal(provider: str, config: dict) -> tuple[str, str | None]:
         GmailConfig,
         GoogleCalendarConfig,
         GoogleDriveConfig,
+        OutlookCalendarConfig,
         OutlookMailConfig,
         SlackConfig,
         StripeConfig,
@@ -223,8 +225,9 @@ def _account_principal(provider: str, config: dict) -> tuple[str, str | None]:
             identity = GoogleCalendarConfig.model_validate(config).expected_primary_calendar_id
         case "google_drive":
             identity = GoogleDriveConfig.model_validate(config).expected_permission_id
-        case "outlook_mail":
-            outlook = OutlookMailConfig.model_validate(config)
+        case "outlook_mail" | "outlook_calendar":
+            config_type = OutlookMailConfig if provider == "outlook_mail" else OutlookCalendarConfig
+            outlook = config_type.model_validate(config)
             if not outlook.capture_originals:
                 raise ValueError("Owned Outlook source must capture originals")
             identity = outlook.expected_principal_id

@@ -67,6 +67,10 @@ class OutlookCalendarSource(BaseSource):
 
     GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 
+    # Query/projection capability; only explicit fresh-source configuration opts
+    # an instance into the composed canonical page adapter below.
+    canonical_record_types = ("calendar", "event")
+
     @classmethod
     async def create(
         cls,
@@ -81,7 +85,14 @@ class OutlookCalendarSource(BaseSource):
         instance.graph = OutlookGraphClient(
             auth, http_client, cls.short_name, config.expected_principal_id
         )
-        await instance.graph.verify_principal()
+        if config.capture_originals:
+            from airweave.platform.sources.outlook_calendar_capture import OutlookCalendarCapture
+
+            instance._capture_page_source = await OutlookCalendarCapture.create(
+                graph=instance.graph, config=config
+            )
+        else:
+            await instance.graph.verify_principal()
         return instance
 
     # ------------------------------------------------------------------

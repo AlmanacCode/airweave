@@ -31,7 +31,7 @@ from airweave.domains.syncs.protocols import SyncRepositoryProtocol, SyncService
 from airweave.domains.syncs.types import InvalidSyncTransitionError, OptimisticLockError
 from airweave.domains.temporal.protocols import TemporalScheduleServiceProtocol
 from airweave.models.source_connection import SourceConnection
-from airweave.platform.configs.config import OutlookMailConfig, StripeConfig
+from airweave.platform.configs.config import OutlookCalendarConfig, OutlookMailConfig, StripeConfig
 from airweave.schemas.source_connection import (
     AuthenticationMethod,
     ScheduleConfig,
@@ -44,10 +44,13 @@ from airweave.schemas.source_connection import (
 
 def _validate_outlook_capture_mode(source: SourceConnection, config: dict[str, Any]) -> None:
     """Mutable legacy IDs and immutable originals cannot share an existing sync."""
-    if source.short_name != "outlook_mail":
+    if source.short_name not in {"outlook_mail", "outlook_calendar"}:
         return
-    previous = OutlookMailConfig.model_validate(source.config_fields or {})
-    proposed = OutlookMailConfig.model_validate(config)
+    config_type = (
+        OutlookMailConfig if source.short_name == "outlook_mail" else OutlookCalendarConfig
+    )
+    previous = config_type.model_validate(source.config_fields or {})
+    proposed = config_type.model_validate(config)
     if previous.capture_originals != proposed.capture_originals:
         raise HTTPException(
             status_code=400,

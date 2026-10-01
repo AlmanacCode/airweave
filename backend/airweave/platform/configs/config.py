@@ -580,7 +580,31 @@ class OracleConfig(SourceConfig):
 
 
 class OutlookCalendarConfig(SourceConfig):
-    """Outlook Calendar configuration schema."""
+    """Owned calendar originals with bounded occurrence expansion on a fresh source."""
+
+    capture_originals: bool = Field(
+        default=False,
+        strict=True,
+        description="Use owned immutable-event capture; legacy source IDs are not migrated.",
+    )
+    occurrence_past_days: int = Field(default=30, ge=0, le=180)
+    occurrence_future_days: int = Field(default=90, ge=1, le=186)
+    occurrence_window: CalendarOccurrenceWindow | None = None
+
+    @model_validator(mode="after")
+    def require_capture_principal(self):
+        """Owned capture cannot inherit an unattested legacy mailbox identity."""
+        if self.capture_originals and self.expected_principal_id is None:
+            raise ValueError("Original Outlook Calendar capture requires expected_principal_id")
+        return self
+
+    def resolved_window(self) -> CalendarOccurrenceWindow:
+        """Freeze relative expansion bounds once before the durable cycle starts."""
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        return self.occurrence_window or CalendarOccurrenceWindow(
+            start=now - timedelta(days=self.occurrence_past_days),
+            end=now + timedelta(days=self.occurrence_future_days),
+        )
 
     expected_principal_id: str | None = Field(
         default=None,

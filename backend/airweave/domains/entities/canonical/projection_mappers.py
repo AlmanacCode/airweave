@@ -408,6 +408,13 @@ async def map_record(  # noqa: C901 -- explicit provider dispatch keeps mapper o
 
             yield await map_gmail(record, storage, directory)
             return
+        elif source_name == "outlook_calendar":
+            from airweave.domains.entities.canonical.outlook_calendar_projection import (
+                map_outlook_calendar,
+            )
+
+            yield await map_outlook_calendar(record, directory)
+            return
         elif source_name == "outlook_mail":
             from airweave.domains.entities.canonical.outlook_projection import map_outlook
 
