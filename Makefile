@@ -4,7 +4,7 @@ PYTHON := .venv/bin/python
 PYTEST := .venv/bin/pytest
 IMAGE ?= almanac-source-store:local
 
-.PHONY: help setup check test-store test-provisioning test-capture test-search test-auth test-health test-index validate-deploy build
+.PHONY: help setup check test-store test-provisioning test-capture test-search test-auth test-health test-worker test-index validate-deploy build
 
 help:
 	@echo 'setup         Install the locked backend and development dependencies'
@@ -14,6 +14,7 @@ help:
 	@echo 'test-search   Verify search services and visibility behavior'
 	@echo 'test-auth     Verify service-key and source authorization boundaries'
 	@echo 'test-health   Verify dependency probes and readiness behavior'
+	@echo 'test-worker   Verify owned projection, recovery and maintenance workflows'
 	@echo 'test-index    Deploy/test schemas on explicitly disposable local Vespa'
 	@echo 'check         Run store, capture, search, authentication and health checks'
 	@echo 'validate-deploy Validate the Porter application manifest locally (no deployment)'
@@ -50,8 +51,12 @@ test-auth:
 test-health:
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/core/health/tests airweave/adapters/health/tests airweave/core/container/tests/test_health_wiring.py
 
+test-worker:
+	@test -n "$$CANONICAL_TEST_DATABASE_URL" || (echo 'Set CANONICAL_TEST_DATABASE_URL to a disposable PostgreSQL database.' >&2; exit 1)
+	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/temporal/activities/tests/test_project_canonical_records.py airweave/domains/temporal/activities/tests/test_cleanup_stuck_sync_jobs.py airweave/domains/temporal/workflows/tests/test_native_projection_recovery.py airweave/domains/temporal/workflows/tests/test_cleanup_workflows.py airweave/domains/temporal/workflows/tests/test_canonical_projection.py airweave/domains/temporal/worker/tests/test_wiring.py
+
 test-index:
 	@test "$$OWNED_VESPA_TEST" = 1 || (echo 'Set OWNED_VESPA_TEST=1 only for a disposable Vespa at localhost:8081/19071; this deploys schemas.' >&2; exit 1)
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false tests/integration/test_owned_vespa.py tests/integration/test_canonical_search_prefilters.py airweave/domains/entities/canonical/tests/test_real_vespa_projection.py
 
-check: test-store test-provisioning test-capture test-search test-auth test-health
+check: test-store test-provisioning test-capture test-search test-auth test-health test-worker
