@@ -171,3 +171,52 @@ async def test_slack_pdf_publication_records_partial_extraction(database, source
         ]
         assert coverage.parts[1].key == "file:F1"
         assert row.completeness == "partial"
+
+
+@pytest.mark.asyncio
+async def test_manifest_enrichment_requires_exact_native_identity_and_blob_evidence():
+    """Slack Connect stubs retain their native JSON; acquisition evidence supplies format."""
+    import json
+
+    record = message([{"id": "F1", "file_access": "check_file_info"}, {"id": "F2"}])
+    content = b"retained PDF fixture"
+    original = blob(record, content, 0)
+    payload = {
+        "version": 1,
+        "files": [
+            {
+                "index": 0,
+                "native_id": "F1",
+                "outcome": "captured",
+                "file": {"id": "F1", "name": "verified.pdf", "mimetype": "application/pdf"},
+            },
+            {"index": 1, "native_id": "F2", "outcome": "unavailable", "reason": "access_denied"},
+        ],
+    }
+
+    async def run(value, *, include_original=True):
+        data = json.dumps(value).encode()
+        evidence = blob(record, data, 9).model_copy(
+            update={"source_path": None, "role": "representation_manifest"}
+        )
+        source = record.model_copy(
+            update={"blobs": ((original,) if include_original else ()) + (evidence,)}
+        )
+        storage = AsyncMock()
+        storage.read_file.side_effect = lambda key, **_: data if key == evidence.key else content
+        async with map_record(source, "slack", storage) as mapped:
+            assert mapped.parts[1].entity.filename == "verified.pdf"
+            assert mapped.parts[1].part.media_type == "application/pdf"
+            assert mapped.parts[2].entity is None
+            assert source.payload == record.payload
+
+    await run(payload)
+    with pytest.raises(ValueError, match="contradicts"):
+        await run(payload, include_original=False)
+    payload["files"][0].update(outcome="unavailable", reason="access_denied")
+    with pytest.raises(ValueError, match="contradicts"):
+        await run(payload)
+    payload["files"][0].update(outcome="captured", reason=None)
+    payload["files"][1]["native_id"] = "F3"
+    with pytest.raises(ValueError, match="native message identities"):
+        await run(payload)

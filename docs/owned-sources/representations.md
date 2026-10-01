@@ -131,6 +131,21 @@ parts of their parent message: this adds no independent file authorization or
 file-only search facet.
 
 Existing indexed Slack generations require explicit reprojection before this
-coverage appears. No global pipeline version was bumped. The current Slack source
-still retains file metadata only; this projection change does not establish live
-`files:read` access, download support, whole-workspace completeness, or freshness.
+coverage appears. No global pipeline version was bumped. Slack original acquisition remains opt-in (`capture_files=false` by default).
+This projection change does not establish live `files:read` access, successful
+provider downloads, whole-workspace completeness, or freshness.
+
+When present, the Slack file acquisition manifest is read from its verified
+`representation_manifest` blob. Its ordered native IDs must match the unchanged
+message file list. Retained `files.info` enrichment can supply filename/MIME type
+for Slack Connect stubs, but cannot replace the file identity. A captured outcome
+requires exactly one native-path blob; an unavailable outcome must have none.
+Contradictory evidence fails projection. Legacy records without a manifest retain
+the explicit missing-original behavior above.
+
+The companion capture contract requires an original URL, native size and MIME
+type, resolving missing fields through `files.info`. Missing metadata and explicit
+file denial remain partial acquisition evidence; missing OAuth scope fails the
+configured capture. Downloaded byte-count mismatch fails the page. Capture still
+commits whole provider pages: aggregate page download/retry cost has not been
+qualified live, even though individual files and metadata counts are bounded.

@@ -10,6 +10,7 @@ from airweave.domains.entities.canonical.blob_materializer import read_blob, wri
 from airweave.domains.entities.canonical.extraction_models import ExtractionPart
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_inputs import ProjectionInput, ProjectionInputs
+from airweave.domains.entities.canonical.slack_files import SlackFileManifest
 from airweave.domains.storage.protocols import StorageBackend
 from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
 from airweave.platform.entities._base import BaseEntity, Breadcrumb
@@ -32,19 +33,43 @@ class SlackFiles(BaseModel):
     files: list[SlackFile] = Field(default_factory=list)
 
 
-async def map_slack_files(
-    record: SourceRecord, body: BaseEntity, storage: StorageBackend, directory: Path
-) -> ProjectionInputs:
-    """Retain one body and one expected part per file, including uncaptured originals."""
+async def _file_inventory(
+    record: SourceRecord, storage: StorageBackend
+) -> tuple[list[SlackFile], SlackFileManifest | None]:
+    """Verify optional acquisition evidence against unchanged native file positions."""
     try:
         files = SlackFiles.model_validate(record.payload).files
     except ValidationError:
         raise ValueError("Slack file metadata is malformed") from None
     if len({file.id for file in files}) != len(files):
         raise ValueError("Slack message contains duplicate native file identities")
+    manifests = [blob for blob in record.blobs if blob.role == "representation_manifest"]
+    if len(manifests) > 1:
+        raise ValueError("Slack message has multiple file acquisition manifests")
+    manifest = None
+    if manifests:
+        content = await read_blob(record, manifests[0], storage)
+        try:
+            manifest = SlackFileManifest.model_validate_json(content)
+            if [entry.native_id for entry in manifest.files] != [file.id for file in files]:
+                raise ValueError("Slack file manifest does not match native message identities")
+            files = [
+                SlackFile.model_validate(entry.file) if entry.file is not None else file
+                for file, entry in zip(files, manifest.files, strict=True)
+            ]
+        except ValidationError:
+            raise ValueError("Slack file acquisition manifest is malformed") from None
     paths = {f"/files/{index}" for index in range(len(files))}
     if any(blob.role is None and blob.source_path not in paths for blob in record.blobs):
         raise ValueError("Slack blob does not identify a current message file")
+    return files, manifest
+
+
+async def map_slack_files(
+    record: SourceRecord, body: BaseEntity, storage: StorageBackend, directory: Path
+) -> ProjectionInputs:
+    """Retain one body and one expected part per file, including uncaptured originals."""
+    files, manifest = await _file_inventory(record, storage)
     populate_base_fields(body)
     parts = [
         ProjectionInput(part=ExtractionPart(part_index=0, key="body", kind="body"), entity=body)
@@ -64,6 +89,10 @@ async def map_slack_files(
         references = [blob for blob in record.blobs if blob.source_path == f"/files/{index}"]
         if len(references) > 1:
             raise ValueError("Slack file has ambiguous original blob references")
+        if manifest is not None:
+            outcome = manifest.files[index]
+            if (outcome.outcome == "captured") != bool(references):
+                raise ValueError("Slack file manifest contradicts retained original blobs")
         if not references:
             if record.completeness == "complete":
                 raise ValueError("Complete Slack message lacks a retained file")
