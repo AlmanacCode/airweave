@@ -14,6 +14,7 @@ from airweave.api.v1.endpoints import (
     entity_counts,
     file_retrieval,
     health,
+    native_sources,
     organizations,
     owned_provisioning,
     records,
@@ -63,6 +64,7 @@ api_router.include_router(
 )
 api_router.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 api_router.include_router(connect.router, prefix="/connect", tags=["connect"])
+api_router.include_router(native_sources.router, prefix="/native/sources", tags=["native-sources"])
 
 
 api_router.include_router(calendar_records.router, prefix="/sync", tags=["records"])

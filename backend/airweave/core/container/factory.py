@@ -88,6 +88,8 @@ from airweave.domains.embedders.sparse.fastembed import (
 from airweave.domains.entities.entity_count_repository import EntityCountRepository
 from airweave.domains.entities.entity_repository import EntityRepository
 from airweave.domains.entities.registry import EntityDefinitionRegistry
+from airweave.domains.native_ingestion.source_service import NativeSources
+from airweave.domains.native_ingestion.source_store import NativeSourceStore
 from airweave.domains.oauth.callback_service import OAuthCallbackService
 from airweave.domains.oauth.flow_service import OAuthFlowService
 from airweave.domains.oauth.oauth1_service import OAuth1Service
@@ -617,6 +619,7 @@ def create_container(settings: Settings) -> Container:
         user_service=user_service,
         email_service=email_service,
         owned_search=search_deps["owned_search"],
+        native_sources=NativeSources(NativeSourceStore()),
         owned_provisioning=OwnedProvisioningService(
             store=ProvisioningStore(create_service, source_validation),
             lifecycle=source_deps["source_lifecycle_service"],

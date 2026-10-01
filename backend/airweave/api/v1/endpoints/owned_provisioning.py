@@ -2,10 +2,11 @@
 
 from uuid import UUID
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api import deps
+from airweave.api.backend_actor import backend_actor
 from airweave.api.context import ApiContext
 from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
@@ -13,13 +14,6 @@ from airweave.db.session import get_db
 from airweave.domains.owned_provisioning.models import EnsureSource, ProvisionedSource
 
 router = TrailingSlashRouter()
-
-
-def backend_actor(ctx: ApiContext = Depends(deps.get_context)) -> ApiContext:
-    """A user session cannot act as Almanac's credential/identity authority."""
-    if not ctx.is_api_key_auth:
-        raise HTTPException(status_code=403, detail="Owned provisioning requires a backend API key")
-    return ctx
 
 
 @router.put("/{account_id}", response_model=ProvisionedSource)
