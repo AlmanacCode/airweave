@@ -567,11 +567,23 @@ class OracleConfig(SourceConfig):
 class OutlookCalendarConfig(SourceConfig):
     """Outlook Calendar configuration schema."""
 
-    pass
+    expected_principal_id: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"^\S+$",
+        description="Trusted Microsoft Graph /me ID; required for managed connections.",
+    )
 
 
 class OutlookMailConfig(SourceConfig):
     """Outlook Mail configuration schema."""
+
+    expected_principal_id: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"^\S+$",
+        description="Trusted Microsoft Graph /me ID; required for managed connections.",
+    )
 
     after_date: Optional[str] = Field(
         None,

@@ -113,6 +113,8 @@ class ComposioAuthProvider(BaseAuthProvider):
 
         hosts = {
             "gmail": frozenset({"gmail.googleapis.com"}),
+            "outlook_mail": frozenset({"graph.microsoft.com"}),
+            "outlook_calendar": frozenset({"graph.microsoft.com"}),
             "google_calendar": frozenset({"www.googleapis.com"}),
             "google_drive": frozenset(
                 {"www.googleapis.com", "docs.googleapis.com", "sheets.googleapis.com"}

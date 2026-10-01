@@ -16,9 +16,10 @@ from tenacity import retry, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
+from airweave.domains.auth_provider.exceptions import AuthProviderError
 from airweave.domains.browse_tree.types import NodeSelectionData
 from airweave.domains.sources.exceptions import SourceAuthError, SourceEntityNotFoundError
-from airweave.domains.sources.token_providers.protocol import TokenProviderProtocol
+from airweave.domains.sources.token_providers.protocol import SourceAuthProvider
 from airweave.domains.storage import FileSkippedException
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.syncs.cursors.cursor import SyncCursor
@@ -34,12 +35,13 @@ from airweave.platform.entities.outlook_mail import (
     OutlookMessageEntity,
 )
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+from airweave.platform.http_client.composio_transport import ComposioProxyError
 from airweave.platform.http_client.retry_helpers import (
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
 )
 from airweave.platform.sources._base import BaseSource
-from airweave.platform.sources.http_helpers import raise_for_status
+from airweave.platform.sources.outlook_graph import OutlookBoundaryError, OutlookGraphClient
 from airweave.platform.utils.filename_utils import safe_filename
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 
@@ -75,13 +77,17 @@ class OutlookMailSource(BaseSource):
     async def create(
         cls,
         *,
-        auth: TokenProviderProtocol,
+        auth: SourceAuthProvider,
         logger: ContextualLogger,
         http_client: AirweaveHttpClient,
         config: OutlookMailConfig,
     ) -> "OutlookMailSource":
         """Create a new Outlook Mail source instance."""
         instance = cls(auth=auth, logger=logger, http_client=http_client)
+        instance.graph = OutlookGraphClient(
+            auth, http_client, cls.short_name, config.expected_principal_id
+        )
+        await instance.graph.verify_principal()
         instance.after_date = config.after_date
         instance.included_folders = config.included_folders
         instance.excluded_folders = config.excluded_folders
@@ -91,16 +97,6 @@ class OutlookMailSource(BaseSource):
     # HTTP helpers
     # ------------------------------------------------------------------
 
-    async def _authed_headers(self) -> Dict[str, str]:
-        """Build Authorization header with a fresh token."""
-        token = await self.auth.get_token()
-        return {"Authorization": f"Bearer {token}"}
-
-    async def _refresh_and_get_headers(self) -> Dict[str, str]:
-        """Force-refresh the token and return updated headers."""
-        new_token = await self.auth.force_refresh()
-        return {"Authorization": f"Bearer {new_token}"}
-
     @retry(
         stop=stop_after_attempt(5),
         retry=retry_if_rate_limit_or_timeout,
@@ -108,27 +104,8 @@ class OutlookMailSource(BaseSource):
         reraise=True,
     )
     async def _get(self, url: str, params: Optional[dict] = None) -> dict:
-        """Make an authenticated GET request to Microsoft Graph API."""
-        self.logger.debug(f"Making authenticated GET request to: {url} with params: {params}")
-
-        headers = await self._authed_headers()
-        response = await self.http_client.get(url, headers=headers, params=params)
-
-        if response.status_code == 401 and self.auth.supports_refresh:
-            self.logger.warning(
-                f"Got 401 Unauthorized from Microsoft Graph API at {url}, refreshing token..."
-            )
-            headers = await self._refresh_and_get_headers()
-            response = await self.http_client.get(url, headers=headers, params=params)
-
-        raise_for_status(
-            response,
-            source_short_name=self.short_name,
-            token_provider_kind=self.auth.provider_kind,
-        )
-        data = response.json()
-        self.logger.debug(f"Received response from {url} - Status: {response.status_code}")
-        return data
+        """Read only within the attested Microsoft Graph mailbox."""
+        return await self.graph.get(url, params=params)
 
     # ------------------------------------------------------------------
     # Cursor helpers
@@ -234,7 +211,7 @@ class OutlookMailSource(BaseSource):
                 folder_entity, folder_breadcrumb, files=files
             ):
                 yield entity
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(
@@ -263,7 +240,7 @@ class OutlookMailSource(BaseSource):
                     files=files,
                 ):
                     yield child_entity
-            except SourceAuthError:
+            except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
                 raise
             except Exception as e:
                 self.logger.warning(
@@ -278,7 +255,7 @@ class OutlookMailSource(BaseSource):
         """Initialize the per-folder message delta link and store it in the cursor."""
         try:
             delta_url = f"{self.GRAPH_BASE_URL}/me/mailFolders/{folder_entity.id}/messages/delta"
-            self.logger.debug(f"Calling delta endpoint: {delta_url}")
+            self.logger.debug("Reading Microsoft Graph page")
             delta_data = await self._get(delta_url)
 
             attempts = 0
@@ -310,7 +287,7 @@ class OutlookMailSource(BaseSource):
                         f"{folder_entity.display_name} while initializing delta."
                     )
                     break
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(
@@ -387,7 +364,7 @@ class OutlookMailSource(BaseSource):
 
         try:
             while url:
-                self.logger.debug(f"Making request to: {url}")
+                self.logger.debug("Reading Microsoft Graph page")
                 data = await self._get(url)
                 folders = data.get("value", [])
                 self.logger.debug(f"Retrieved {len(folders)} folders")
@@ -400,10 +377,10 @@ class OutlookMailSource(BaseSource):
 
                 next_link = data.get("@odata.nextLink")
                 if next_link:
-                    self.logger.debug(f"Following pagination link: {next_link}")
+                    self.logger.debug("Reading Microsoft Graph page")
                 url = next_link if next_link else None
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(f"Error fetching folders: {str(e)}")
@@ -477,7 +454,12 @@ class OutlookMailSource(BaseSource):
                             message_data, folder_entity.display_name, folder_breadcrumb, files=files
                         ):
                             yield entity
-                    except SourceAuthError:
+                    except (
+                        SourceAuthError,
+                        AuthProviderError,
+                        ComposioProxyError,
+                        OutlookBoundaryError,
+                    ):
                         raise
                     except Exception as e:
                         self.logger.warning(f"Error processing message {message_id}: {str(e)}")
@@ -493,7 +475,7 @@ class OutlookMailSource(BaseSource):
                     )
                     break
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(
@@ -561,7 +543,7 @@ class OutlookMailSource(BaseSource):
                 self.logger.debug(
                     f"Processed {attachment_count} attachments for message {message_id}"
                 )
-            except SourceAuthError:
+            except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
                 raise
             except Exception as e:
                 self.logger.warning(
@@ -667,7 +649,7 @@ class OutlookMailSource(BaseSource):
             self.logger.debug(f"Skipping attachment {attachment_name}: {e.reason}")
             return None
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
 
         except Exception as e:
@@ -688,7 +670,7 @@ class OutlookMailSource(BaseSource):
 
         try:
             while url:
-                self.logger.debug(f"Making request to: {url}")
+                self.logger.debug("Reading Microsoft Graph page")
                 data = await self._get(url)
                 attachments = data.get("value", [])
                 self.logger.debug(
@@ -712,7 +694,7 @@ class OutlookMailSource(BaseSource):
                 if url:
                     self.logger.debug("Following pagination link")
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(f"Error processing attachments for message {message_id}: {str(e)}")
@@ -736,7 +718,7 @@ class OutlookMailSource(BaseSource):
             url = f"{self.GRAPH_BASE_URL}/me/mailFolders/{folder_id}/messages/delta"
             params = {"$deltatoken": delta_token}
             while url:
-                self.logger.debug(f"Fetching delta changes from: {url}")
+                self.logger.debug("Reading Microsoft Graph page")
                 data = await self._get(url, params=params)
                 params = None
 
@@ -769,7 +751,7 @@ class OutlookMailSource(BaseSource):
                 if url:
                     self.logger.debug("Following delta pagination")
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(
@@ -814,7 +796,7 @@ class OutlookMailSource(BaseSource):
         """Initialize and store the delta link for the mailFolders collection."""
         try:
             init_url = f"{self.GRAPH_BASE_URL}/me/mailFolders/delta"
-            self.logger.debug(f"Initializing folders delta link via: {init_url}")
+            self.logger.debug("Reading Microsoft Graph page")
             data = await self._get(init_url)
 
             safety_counter = 0
@@ -834,7 +816,7 @@ class OutlookMailSource(BaseSource):
                 else:
                     self.logger.warning("No deltaLink or nextLink while initializing folders delta")
                     break
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(f"Failed to initialize folders delta link: {e}")
@@ -864,7 +846,7 @@ class OutlookMailSource(BaseSource):
                     cursor.update(folders_delta_link=new_delta_link)
                     self.logger.debug("Updated folders_delta_link for next incremental run")
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(f"Error processing folders delta changes: {e}")
@@ -873,7 +855,7 @@ class OutlookMailSource(BaseSource):
         """Iterate delta/next pages starting from a delta or nextLink URL."""
         url = start_url
         while url:
-            self.logger.debug(f"Fetching folders delta changes from: {url}")
+            self.logger.debug("Reading Microsoft Graph page")
             data = await self._get(url)
             yield data
             url = data.get("@odata.nextLink")
@@ -1006,7 +988,7 @@ class OutlookMailSource(BaseSource):
                     msg_delta_data = await self._get(next_link)
                 else:
                     break
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(f"Failed to initialize message delta for folder {folder_id}: {e}")
@@ -1025,7 +1007,7 @@ class OutlookMailSource(BaseSource):
         try:
             url = delta_url
             while url:
-                self.logger.debug(f"Fetching delta changes from: {url}")
+                self.logger.debug("Reading Microsoft Graph page")
                 data = await self._get(url)
 
                 changes = data.get("value", [])
@@ -1079,7 +1061,7 @@ class OutlookMailSource(BaseSource):
                     )
                 break
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(
@@ -1135,6 +1117,7 @@ class OutlookMailSource(BaseSource):
         Supports both full sync (first run) and incremental sync (subsequent runs)
         using Microsoft Graph delta API.
         """
+        await self.graph.verify_principal()
         self.logger.debug("===== STARTING OUTLOOK MAIL ENTITY GENERATION =====")
         entity_count = 0
 
@@ -1178,7 +1161,7 @@ class OutlookMailSource(BaseSource):
                     )
                     yield entity
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(f"Error in entity generation: {str(e)}", exc_info=True)
@@ -1190,6 +1173,7 @@ class OutlookMailSource(BaseSource):
 
     async def validate(self) -> None:
         """Validate credentials by pinging the mailFolders endpoint."""
+        await self.graph.verify_principal()
         await self._get(
             f"{self.GRAPH_BASE_URL}/me/mailFolders",
             params={"$top": "1"},
