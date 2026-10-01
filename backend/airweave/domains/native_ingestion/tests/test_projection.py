@@ -211,3 +211,134 @@ async def test_inactive_import_and_invalid_text_are_not_successful_empty_indexin
     with pytest.raises(ValueError):
         async with map_record(record, "almanac", AsyncMock()):
             pass
+
+
+async def test_person_fields_enter_index_without_rewriting_native_body(database, source, tmp_path):
+    _, fence = source
+    await bind(database, fence)
+    item = knowledge(
+        type="person",
+        emails=["sam@example.org"],
+        roles=[
+            {
+                "organisation": {"type": "organisation", "id": "opaque-id"},
+                "title": "Research engineer",
+                "start": "2024",
+                "end": None,
+            }
+        ],
+        links=[{"label": "Profile", "url": "https://example.org/sam", "handle": "samdev"}],
+        metadata={"secret": "UNSELECTED_METADATA"},
+    )
+    captured = await ingest(database, fence, item)
+    storage = FilesystemBackend(tmp_path)
+    projection = projector(database, storage)
+    indexed = []
+
+    async def fixed_chunks(entities, context, runtime):
+        indexed.extend(entity.textual_representation for entity in entities)
+        return projection._processor._multiply_entities(
+            entities, [[{"text": entity.textual_representation}] for entity in entities], context
+        )
+
+    projection._processor._chunk_entities = fixed_chunks
+    async with database() as db:
+        work = (await CanonicalProjectionStore().pending(db, fence.organization_id, fence.sync_id))[
+            0
+        ]
+    assert await projection.project_one(work, "almanac", destination(), MagicMock())
+    assert "sam@example.org" in indexed[0] and "Research engineer" in indexed[0]
+    assert "samdev" in indexed[0] and "2024" in indexed[0]
+    assert "UNSELECTED_METADATA" not in indexed[0] and "opaque-id" not in indexed[0]
+    assert captured.changes[0].record.payload["original"] == item.original
+    reader = CanonicalTextReader(
+        CanonicalQueryService(CanonicalRecordStore(), CanonicalQueryStore(), "test-key"), storage
+    )
+    async with database() as db:
+        representations = await reader.list(
+            db, fence.organization_id, fence.sync_id, work.record.id, 1
+        )
+        ref = representations.representations[0]
+        content = await reader.read(
+            db,
+            fence.organization_id,
+            fence.sync_id,
+            work.record.id,
+            1,
+            ref.generation,
+            ref.id,
+            view="content",
+        )
+        prepared = await reader.read(
+            db,
+            fence.organization_id,
+            fence.sync_id,
+            work.record.id,
+            1,
+            ref.generation,
+            ref.id,
+            view="index",
+        )
+    assert content.text == item.original["body"]
+    assert "sam@example.org" in prepared.text
+
+
+@pytest.mark.parametrize(
+    "kind,fields,expected",
+    [
+        (
+            "organisation",
+            {"domains": ["example.org"], "industry": ["Robotics"], "founded": "2020"},
+            "Robotics",
+        ),
+        (
+            "place",
+            {"place_kind": "Office", "address": {"locality": "मुंबई", "country": "India"}},
+            "मुंबई",
+        ),
+        ("creative_work", {"work_kind": "Book", "published_on": "2025-01-01"}, "2025-01-01"),
+    ],
+)
+def test_selected_knowledge_fields_preserve_native_text(kind, fields, expected):
+    from airweave.domains.native_ingestion.knowledge_fields import knowledge_details
+
+    text = knowledge_details(kind, fields | {"metadata": {"private": "UNSELECTED"}})
+    assert expected in text and "UNSELECTED" not in text
+
+
+def test_invalid_selected_field_fails_instead_of_stringifying_json():
+    from pydantic import ValidationError
+
+    from airweave.domains.native_ingestion.knowledge_fields import knowledge_details
+
+    with pytest.raises(ValidationError):
+        knowledge_details("person", {"emails": [{"unexpected": "value"}]})
+
+
+def test_event_and_relationship_values_are_searchable_without_resolving_references():
+    from airweave.domains.native_ingestion.knowledge_fields import knowledge_details
+
+    assert "2026-10-01" in knowledge_details(
+        "event",
+        {
+            "schedule": {
+                "kind": "all_day",
+                "start_on": "2026-10-01",
+                "end_on_exclusive": "2026-10-02",
+            }
+        },
+    )
+    details = knowledge_details(
+        "person",
+        {
+            "related_people": [
+                {"person": {"type": "person", "id": "hidden-id"}, "relationship": "Co-founder"}
+            ],
+            "education": [{"institution": {"type": "organisation", "id": "hidden-school"}}],
+        },
+    )
+    assert details == "related people: relationship: Co-founder"
+    coordinates = knowledge_details(
+        "place", {"coordinates": {"latitude": 19.07, "longitude": 72.87}}
+    )
+    assert "19.07" in coordinates and "72.87" in coordinates

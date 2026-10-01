@@ -77,8 +77,11 @@ It validates original IDs, revisions and timestamps against their snapshot,
 then selects native text without replacing the retained original JSON:
 
 - Knowledge: body, title, description and user notes. Path is a locator; renaming
-  it keeps record identity. Other structured knowledge fields are retained but
-  do not yet have a curated searchable representation.
+  it keeps record identity. Selected structured fields also enter index metadata: person contacts, roles,
+  education and relationship labels; organisation domains/industry; place address
+  and coordinates; event schedule; creative-work kind/date; profile links.
+  Reference IDs are retained but never resolved into invented searchable names.
+  Citation metadata and arbitrary extra JSON remain outside the text projection.
 - Sessions: title and description. Archived sessions remain included, matching
   current Almanac session search; archived knowledge is excluded.
 - Messages: original string content or `type=text` blocks, with session/message
@@ -212,3 +215,15 @@ No new table, migration, scheduler or source credential exists here. NativeImpor
 owns the transaction; NativeAccessStore composes native admission and shared
 canonical revision/journal/visibility machinery. The trusted publisher remains
 responsible for obtaining actual source evidence and scheduling revalidation.
+
+
+### Structured-field projection rollout
+
+Changes to this mapper do not recapture or revise originals. Existing unchanged
+records need a scoped pipeline-version increment using the existing
+`backend/scripts/reproject_canonical.py` dry-run/apply workflow. Read the source's
+current version first; target exactly the next version and retry the same pair
+on uncertain delivery. Apply only to selected native sources after installing the
+new mapper in their worker. Wait for publication completion before claiming those
+fields are searchable. Fresh captures use the current mapper. The content read
+continues to return the original body; the index read includes prepared metadata.

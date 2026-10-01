@@ -7,6 +7,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, Str
 from airweave.domains.entities.canonical.extraction_models import ExtractionPart
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_inputs import ProjectionInput, ProjectionInputs
+from airweave.domains.native_ingestion.knowledge_fields import knowledge_details
 from airweave.domains.native_ingestion.models import NativeSnapshot
 from airweave.domains.sync_pipeline.pipeline.text_models import NativeTextBody
 from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
@@ -80,6 +81,7 @@ class NativeContentEntity(BaseEntity):
     title: str = AirweaveField(..., is_name=True, embeddable=True)
     description: str | None = AirweaveField(None, embeddable=True)
     user_notes: str | None = AirweaveField(None, embeddable=True)
+    details: str | None = AirweaveField(None, embeddable=True)
     native_type: str = AirweaveField(..., embeddable=False)
     path: str | None = AirweaveField(None, embeddable=False)
     session_id: str | None = AirweaveField(None, embeddable=False)
@@ -170,6 +172,7 @@ def map_native(record: SourceRecord) -> ProjectionInputs:
             title=original.title,
             description=original.description,
             user_notes=original.user_notes,
+            details=knowledge_details(original.type, snapshot.original),
             path=original.path,
             native_type=original.type,
             **common,
