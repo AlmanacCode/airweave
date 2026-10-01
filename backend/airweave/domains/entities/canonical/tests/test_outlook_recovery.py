@@ -9,13 +9,15 @@ from sqlalchemy import select
 
 from airweave.adapters.storage.filesystem import FilesystemBackend
 from airweave.domains.entities.canonical.blob_materializer import read_blob
-from airweave.domains.entities.canonical.cycle_models import CompleteCycle
+from airweave.domains.entities.canonical.cycle_models import CompleteCycle, TerminalCheckpoint
 from airweave.domains.entities.canonical.projection_mappers import map_record
+from airweave.domains.entities.canonical.requests import CompletedScope
 from airweave.domains.sources.token_providers.static import StaticTokenProvider
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.sync_pipeline.canonical_scan import CanonicalScanDriver
 from airweave.models.capture_scan import CaptureScan
 from airweave.models.entity import Entity
+from airweave.models.sync_job import SyncJob
 from airweave.platform.configs.config import OutlookMailConfig
 from airweave.platform.sources.outlook_graph import OutlookGraphClient
 from airweave.platform.sources.outlook_mail_capture import OutlookMailCapture
@@ -34,6 +36,21 @@ class Mailbox:
         self.fail_next_page = True
         self.calls = []
         self.moved = False
+        self.incremental = False
+        self.fail_incremental = True
+
+    def incremental_page(self, request):
+        """One new delta round interrupted after the first folder."""
+        assert request.url.params.get("$deltatoken") == "one"
+        if "/sent/" in request.url.path and self.fail_incremental:
+            raise httpx.ConnectError("Synthetic incremental interruption", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "value": [{"id": "a", "@removed": {"reason": "deleted"}}],
+                "@odata.deltaLink": str(request.url.copy_with(query=b"$deltatoken=two")),
+            },
+        )
 
     async def handle(self, request):
         path = request.url.path
@@ -41,17 +58,38 @@ class Mailbox:
             return httpx.Response(200, json={"id": "mailbox"})
         assert request.headers["Prefer"] == 'IdType="ImmutableId"'
         self.calls.append((path, str(request.url.query)))
-        if path == "/v1.0/me/messages":
+        if path == "/v1.0/me/mailFolders":
+            return httpx.Response(200, json={"value": [{"id": "inbox"}, {"id": "sent"}]})
+        if path.endswith("/childFolders"):
+            return httpx.Response(200, json={"value": []})
+        if self.incremental and path.endswith("/messages/delta"):
+            return self.incremental_page(request)
+        if path == "/v1.0/me/mailFolders/sent/messages/delta":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [],
+                    "@odata.deltaLink": BASE + "/mailFolders/sent/messages/delta?$deltatoken=one",
+                },
+            )
+        if path == "/v1.0/me/mailFolders/inbox/messages/delta":
             if request.url.params.get("$skiptoken") == "second":
                 if self.fail_next_page:
                     raise httpx.ConnectError("Synthetic page interruption", request=request)
                 self.moved = True
-                return httpx.Response(200, json={"value": [{"id": "a"}, {"id": "b"}]})
+                return httpx.Response(
+                    200,
+                    json={
+                        "value": [{"id": "a"}, {"id": "b"}],
+                        "@odata.deltaLink": BASE
+                        + "/mailFolders/inbox/messages/delta?$deltatoken=one",
+                    },
+                )
             return httpx.Response(
                 200,
                 json={
                     "value": [{"id": "a"}],
-                    "@odata.nextLink": BASE + "/messages?$skiptoken=second",
+                    "@odata.nextLink": BASE + "/mailFolders/inbox/messages/delta?$skiptoken=second",
                 },
             )
         if path.endswith("/$value"):
@@ -62,8 +100,12 @@ class Mailbox:
             200,
             json={
                 "id": identity,
-                "changeKey": "moved" if self.moved and identity == "a" else "original",
-                "parentFolderId": "sent" if self.moved and identity == "a" else "inbox",
+                "changeKey": "returned"
+                if self.incremental
+                else ("moved" if self.moved and identity == "a" else "original"),
+                "parentFolderId": "sent"
+                if self.moved and identity == "a" and not self.incremental
+                else "inbox",
                 "subject": "Original",
                 "body": {"contentType": "text", "content": "Original retained bytes"},
                 "createdDateTime": "2026-09-01T00:00:00Z",
@@ -93,6 +135,24 @@ async def run_capture(database, service, fence, mailbox, storage):
             await files.cleanup_sync_directory(MagicMock())
 
 
+async def complete(database, service, fence, cycle):
+    """Match production terminal publication using the exact committed root scan."""
+    async with database() as db:
+        scan = await service.read_scan(db, fence, CompletedScope(record_type="message"))
+        return await service.complete_cycle(
+            db,
+            CompleteCycle(
+                fence=fence,
+                expected=cycle.version,
+                terminal_checkpoint=TerminalCheckpoint(
+                    record_type="message",
+                    expected=scan.version,
+                    checkpoint=scan.provider_checkpoint,
+                ),
+            ),
+        )
+
+
 async def test_resumed_mailbox_page_preserves_original_and_updates_move_in_place(
     database, source, tmp_path
 ):
@@ -120,15 +180,16 @@ async def test_resumed_mailbox_page_preserves_original_and_updates_move_in_place
     mailbox.fail_next_page = False
     split = len(mailbox.calls)
     after = await run_capture(database, service, renewed, mailbox, storage)
-    async with database() as db:
-        after = await service.complete_cycle(
-            db, CompleteCycle(fence=renewed, expected=after.version)
-        )
+    after = await complete(database, service, renewed, after)
     assert after.phase == "complete"
     assert after.last_full_capture.discovery == "incomplete"
-    assert after.promoted_checkpoint is None
+    assert after.promoted_checkpoint is not None
     assert after.version.cycle_id == before.version.cycle_id
-    listing = [query for path, query in mailbox.calls[split:] if path == "/v1.0/me/messages"]
+    listing = [
+        query
+        for path, query in mailbox.calls[split:]
+        if path == "/v1.0/me/mailFolders/inbox/messages/delta"
+    ]
     assert len(listing) == 1 and "second" in listing[0]
     async with database() as db:
         rows = list((await db.scalars(select(Entity))).all())
@@ -141,6 +202,55 @@ async def test_resumed_mailbox_page_preserves_original_and_updates_move_in_place
         assert retained.parent is None and retained.identity.container_id is None
         assert retained.completeness == "partial" and len(retained.blobs) == 1
         assert await read_blob(retained, retained.blobs[0], storage) == MIME
+    # A new job consumes the promoted folder tokens, never re-enumerates messages.
+    async with database() as db:
+        previous_job = await db.get(SyncJob, renewed.job_id)
+        previous_job.status = "completed"
+        job_id = uuid4()
+        db.add(
+            SyncJob(
+                id=job_id,
+                organization_id=fence.organization_id,
+                sync_id=fence.sync_id,
+                status="running",
+            )
+        )
+        await db.commit()
+        next_fence = await service.activate_writer(
+            db,
+            fence.organization_id,
+            fence.sync_id,
+            job_id,
+            attempt_id=uuid4(),
+            attempt_number=1,
+        )
+    mailbox.incremental = True
+    with pytest.raises(httpx.RequestError):
+        await run_capture(database, service, next_fence, mailbox, storage)
+    async with database() as db:
+        partial = await service.read_cycle(db, next_fence)
+        assert partial.mode == "changes" and partial.phase == "active"
+        assert partial.promoted_checkpoint == after.promoted_checkpoint
+        rows = list((await db.scalars(select(Entity))).all())
+        assert len(rows) == 2 and all(row.deleted_at is None for row in rows)
+    mailbox.fail_incremental = False
+    split = len(mailbox.calls)
+    changed = await run_capture(database, service, next_fence, mailbox, storage)
+    changed = await complete(database, service, next_fence, changed)
+    async with database() as db:
+        rows = list((await db.scalars(select(Entity))).all())
+        moved = next(row for row in rows if row.native_id == "a")
+        assert moved.id == initial_id and moved.deleted_at is None
+        assert moved.source_payload["parentFolderId"] == "inbox"
+        retained = await service.store.read(db, fence.organization_id, fence.sync_id, moved.id)
+        assert await read_blob(retained, retained.blobs[0], storage) == MIME
+    assert changed.mode == "changes"
+    assert all(
+        "two" in value
+        for value in changed.promoted_checkpoint.checkpoint.value["folder_links"].values()
+    )
+    delta_requests = [path for path, _ in mailbox.calls[split:] if path.endswith("/delta")]
+    assert delta_requests == ["/v1.0/me/mailFolders/sent/messages/delta"]
     # Actual mapper dispatch consumes retained bytes after the provider client has closed.
     async with map_record(retained, "outlook_mail", storage) as projected:
         assert len(projected.entities) == 1

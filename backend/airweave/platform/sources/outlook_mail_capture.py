@@ -1,30 +1,46 @@
-"""Opt-in mailbox-owned full Outlook capture; no legacy cursor or activation changes."""
+"""Mailbox-owned Outlook originals with bounded per-folder delta progress."""
 
 import hashlib
 import json
 from datetime import datetime, timezone
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
-from airweave.domains.entities.canonical.cycle_models import CaptureCycle, CycleConfiguration
+from airweave.domains.entities.canonical.cycle_models import (
+    CaptureCycle,
+    CycleConfiguration,
+    ProviderCheckpoint,
+)
 from airweave.domains.entities.canonical.models import SourceRecord
-from airweave.domains.entities.canonical.page_source import CapturePage, CapturePlan
+from airweave.domains.entities.canonical.page_source import (
+    CapturePage,
+    CapturePlan,
+    InvalidCaptureCheckpoint,
+)
 from airweave.domains.entities.canonical.requests import (
     CaptureRecord,
     CompletedScope,
     RecordIdentity,
 )
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
+from airweave.domains.sources.exceptions import SourceGoneError
 from airweave.domains.storage.exceptions import FileSkippedException
 from airweave.domains.storage.file_service import FileService
 from airweave.platform.configs.config import OutlookMailConfig
-from airweave.platform.sources.outlook_graph import OutlookBoundaryError, OutlookGraphClient
+from airweave.platform.sources.outlook_graph import (
+    OutlookBoundaryError,
+    OutlookDeltaExpiredError,
+    OutlookGraphClient,
+)
 from airweave.platform.sources.outlook_mail_models import (
+    OutlookDeltaPage,
+    OutlookFolder,
+    OutlookFolderPage,
+    OutlookMailCheckpoint,
     OutlookMailContinuation,
     OutlookMessage,
     OutlookMessageID,
-    OutlookMessagePage,
 )
 
 BASE = "https://graph.microsoft.com/v1.0/me"
@@ -34,7 +50,7 @@ class OutlookMailCapture:
     """One root scan uses shared page commits, blobs and exact omission validation.
 
     MIME-backed schema1 originals are partial until native attachment inventory is
-    qualified. Incremental folder deltas remain a required, unimplemented follow-up.
+    qualified. Folder removals are signals, never proof of mailbox deletion.
     """
 
     canonical_record_types = ("message",)
@@ -60,7 +76,7 @@ class OutlookMailCapture:
         self.fingerprint = hashlib.sha256(
             json.dumps(
                 {
-                    "version": 1,
+                    "version": 2,
                     "id_type": "ImmutableId",
                     "config": self.config.model_dump(mode="json"),
                     "included_ids": sorted(included_ids),
@@ -121,45 +137,217 @@ class OutlookMailCapture:
         )
 
     async def prepare_cycle(self, previous: CaptureCycle | None) -> CapturePlan:
-        """Every cycle is explicitly full; no delta completion is implied."""
+        """Only a compatible promoted mailbox checkpoint authorizes changes mode."""
         await self.graph.verify_principal()
         self._require_principal()
-        return CapturePlan()
+        if (
+            previous is None
+            or previous.configuration != self.capture_cycle_configuration
+            or previous.promoted_checkpoint is None
+        ):
+            # An explicit empty starting map opts into terminal checkpoint publication.
+            # It is not a completed native baseline and full mode never reuses its tokens.
+            return CapturePlan(
+                starting_checkpoint=ProviderCheckpoint(
+                    value=OutlookMailCheckpoint(fingerprint=self.fingerprint).model_dump(
+                        mode="json"
+                    )
+                )
+            )
+        checkpoint = previous.promoted_checkpoint.checkpoint
+        self._checkpoint(checkpoint)
+        return CapturePlan(mode="changes", starting_checkpoint=checkpoint)
 
     def initial_continuation(self, cycle: CaptureCycle) -> ScanContinuation:
-        """Bind a fresh scan to its persisted principal, selection and ID format."""
+        """Bind progress to the persisted principal, selection and immutable ID format."""
         self._require_principal()
         if cycle.configuration != self.capture_cycle_configuration:
-            raise OutlookBoundaryError(
-                "Outlook capture configuration changed", source_short_name="outlook_mail"
+            raise self._error("Outlook capture configuration changed")
+        links = {}
+        if cycle.mode == "changes":
+            if cycle.starting_checkpoint is None:
+                raise self._error("Outlook changes require a complete mailbox checkpoint")
+            links = self._checkpoint(cycle.starting_checkpoint).folder_links
+        elif cycle.mode != "full":
+            raise self._error("Unsupported Outlook capture mode")
+        return self._continuation(
+            OutlookMailContinuation(
+                fingerprint=self.fingerprint, mode=cycle.mode, folder_links=links
             )
-        return self._continuation(OutlookMailContinuation(fingerprint=self.fingerprint))
+        )
 
     @staticmethod
-    def _continuation(state: OutlookMailContinuation) -> ScanContinuation:
-        return ScanContinuation(value=state.model_dump(mode="json"))
+    def _error(message: str) -> OutlookBoundaryError:
+        return OutlookBoundaryError(message, source_short_name="outlook_mail")
+
+    def _checkpoint(self, checkpoint: ProviderCheckpoint) -> OutlookMailCheckpoint:
+        try:
+            state = OutlookMailCheckpoint.model_validate(checkpoint.value)
+        except ValidationError:
+            raise self._error("Invalid Outlook mailbox checkpoint") from None
+        if state.fingerprint != self.fingerprint:
+            raise self._error("Outlook checkpoint belongs to another capture scope")
+        for folder, link in state.folder_links.items():
+            self._collection_url(link, self._delta_url(folder))
+        return state
+
+    def _continuation(self, state: OutlookMailContinuation) -> ScanContinuation:
+        try:
+            return ScanContinuation(value=state.model_dump(mode="json"))
+        except ValidationError:
+            raise self._error("Outlook continuation exceeds the 64 KiB capacity") from None
 
     def _state(self, continuation: ScanContinuation) -> OutlookMailContinuation:
         try:
             state = OutlookMailContinuation.model_validate(continuation.value)
         except ValidationError:
-            raise OutlookBoundaryError(
-                "Invalid Outlook capture continuation", source_short_name="outlook_mail"
-            ) from None
+            raise self._error("Invalid Outlook capture continuation") from None
         if state.fingerprint != self.fingerprint:
-            raise OutlookBoundaryError(
-                "Outlook continuation belongs to another capture scope",
-                source_short_name="outlook_mail",
-            )
+            raise self._error("Outlook continuation belongs to another capture scope")
         return state
 
-    def _list_url(self, url: str) -> None:
+    @staticmethod
+    def _delta_url(folder: str) -> str:
+        return f"{BASE}/mailFolders/{quote(folder, safe='')}/messages/delta"
+
+    def _collection_url(self, url: str, expected: str) -> None:
+        """Opaque queries remain unchanged, but cannot redirect to another collection."""
         self.graph._validate_url(url)
-        if urlsplit(url).path != "/v1.0/me/messages":
-            raise OutlookBoundaryError(
-                "Outlook continuation changed the message collection",
-                source_short_name="outlook_mail",
+        path = unquote(urlsplit(url).path).replace("/mailfolders", "/mailFolders")
+        expected_path = unquote(urlsplit(expected).path)
+        allowed = {expected_path}
+        prefix = "/v1.0/me/mailFolders/"
+        if expected_path.startswith(prefix):
+            folder, suffix = expected_path[len(prefix) :].split("/", 1)
+            allowed.add(f"/v1.0/me/mailFolders('{folder}')/{suffix}")
+        if path.rstrip("/") not in allowed:
+            raise self._error("Outlook continuation changed the native collection")
+
+    def _physical_folder(self, folder: OutlookFolder) -> bool:
+        """Virtual views duplicate physical messages but may contain real child folders."""
+        if folder.odata_type == "#microsoft.graph.mailSearchFolder":
+            if folder.id in self.included_ids or folder.id in self.excluded_ids:
+                raise self._error("Outlook search-folder selections are not supported")
+            return False
+        if folder.odata_type != "#microsoft.graph.mailFolder":
+            raise self._error("Outlook unknown folder type is not qualified for delta capture")
+        return True
+
+    async def _topology_page(self, state: OutlookMailContinuation) -> OutlookMailContinuation:
+        """Enumerate each folder's hidden children; topology never owns message visibility."""
+        folder = state.folders_to_visit[0]
+        collection = (
+            f"{BASE}/mailFolders/{quote(folder, safe='')}/childFolders"
+            if folder
+            else f"{BASE}/mailFolders"
+        )
+        url = state.next_link or collection
+        self._collection_url(url, collection)
+        raw = await self.graph.get(
+            url,
+            params=None
+            if state.next_link
+            else {"includeHiddenFolders": "true", "$select": "id", "$top": 25},
+            immutable_ids=True,
+        )
+        try:
+            page = OutlookFolderPage.model_validate(raw)
+        except ValidationError:
+            raise self._error("Invalid Outlook folder inventory") from None
+        discovered = list(state.discovered_folders)
+        physical = list(state.remaining_folders)
+        queue = list(state.folders_to_visit)
+        for item in page.value:
+            if self._physical_folder(item):
+                physical.append(item.id)
+            if item.id in discovered:
+                raise InvalidCaptureCheckpoint("Outlook folder topology repeated an identity")
+            discovered.append(item.id)
+            queue.append(item.id)
+        if page.next_link:
+            self._collection_url(page.next_link, collection)
+            if page.next_link == url:
+                raise self._error("Outlook topology continuation did not advance")
+        else:
+            queue.pop(0)
+        if queue:
+            return state.model_copy(
+                update={
+                    "folders_to_visit": tuple(queue),
+                    "discovered_folders": tuple(discovered),
+                    "remaining_folders": tuple(physical),
+                    "next_link": page.next_link,
+                }
             )
+        if set(state.folder_links) - set(physical):
+            raise InvalidCaptureCheckpoint("Outlook folder disappeared; mailbox baseline required")
+        return state.model_copy(
+            update={
+                "phase": "messages",
+                "folders_to_visit": (),
+                "discovered_folders": (),
+                "remaining_folders": tuple(sorted(physical)),
+                "next_link": None,
+            }
+        )
+
+    def _page(
+        self, state: OutlookMailContinuation, records: tuple[CaptureRecord, ...] = ()
+    ) -> CapturePage:
+        continuation = self._continuation(state)
+        final = state.phase == "messages" and not state.remaining_folders
+        # Check the final encoding as well: checkpoints escape Unicode while cursors do not.
+        try:
+            checkpoint = ProviderCheckpoint(
+                value=OutlookMailCheckpoint(
+                    fingerprint=self.fingerprint, folder_links=state.folder_links
+                ).model_dump(mode="json")
+            )
+        except ValidationError:
+            raise self._error("Outlook checkpoint exceeds the 64 KiB capacity") from None
+        return CapturePage(
+            records=records,
+            continuation=continuation,
+            final=final,
+            provider_checkpoint=checkpoint if final else None,
+        )
+
+    async def _delta_page(self, state: OutlookMailContinuation) -> OutlookMailContinuation:
+        """Interpret one opaque folder delta page before exact hydration."""
+        folder = state.remaining_folders[0]
+        collection = self._delta_url(folder)
+        url = state.next_link or state.folder_links.get(folder) or collection
+        self._collection_url(url, collection)
+        try:
+            raw = await self.graph.get(
+                url,
+                params={"$select": "id"} if url == collection else None,
+                immutable_ids=True,
+            )
+        except (OutlookDeltaExpiredError, SourceGoneError):
+            raise InvalidCaptureCheckpoint(
+                "Outlook folder delta requires a fresh baseline"
+            ) from None
+        try:
+            page = OutlookDeltaPage.model_validate(raw)
+        except ValidationError:
+            raise self._error("Invalid Outlook message delta") from None
+        link = page.next_link or page.delta_link
+        self._collection_url(link, collection)
+        if page.next_link == url:
+            raise self._error("Outlook delta continuation did not advance")
+        links = dict(state.folder_links)
+        if page.delta_link:
+            links[folder] = page.delta_link
+        state = state.model_copy(
+            update={
+                "folder_links": links,
+                "next_link": page.next_link,
+                "pending_ids": tuple(dict.fromkeys(item.id for item in page.value)),
+            }
+        )
+        self._page(state)  # Enforce working-state capacity before MIME/blob work.
+        return state
 
     async def capture_page(
         self,
@@ -169,54 +357,27 @@ class OutlookMailCapture:
         files: FileService,
         parent: SourceRecord | None = None,
     ) -> CapturePage:
-        """Capture one complete message; durable pending IDs avoid refetching inventory."""
+        """One topology page or exact message observation shares its atomic cursor commit."""
         self._require_principal()
         if scope != CompletedScope(record_type="message") or parent is not None:
-            raise OutlookBoundaryError(
-                "Outlook requires the mailbox message root", source_short_name="outlook_mail"
-            )
+            raise self._error("Outlook requires the mailbox message root")
         state = self._state(continuation)
+        if state.phase == "topology":
+            return self._page(await self._topology_page(state))
+        if not state.remaining_folders:
+            return self._page(state)
         if not state.pending_ids:
-            if state.started and state.next_link is None:
-                return CapturePage(records=(), continuation=continuation, final=True)
-            url = state.next_link or f"{BASE}/messages"
-            self._list_url(url)
-            raw = await self.graph.get(
-                url,
-                params=None if state.started else {"$select": "id", "$top": 25},
-                immutable_ids=True,
-            )
-            try:
-                page = OutlookMessagePage.model_validate(raw)
-            except ValidationError:
-                raise OutlookBoundaryError(
-                    "Invalid Outlook message inventory", source_short_name="outlook_mail"
-                ) from None
-            if page.next_link:
-                self._list_url(page.next_link)
-                if page.next_link == url:
-                    raise OutlookBoundaryError(
-                        "Outlook continuation did not advance", source_short_name="outlook_mail"
-                    )
-            state = OutlookMailContinuation(
-                fingerprint=self.fingerprint,
-                started=True,
-                pending_ids=tuple(dict.fromkeys(item.id for item in page.value)),
-                next_link=page.next_link,
-            )
-            self._continuation(state)  # Validate the byte bound before hydrating any originals.
+            state = await self._delta_page(state)
         records = ()
         if state.pending_ids:
             observation = await self.message(state.pending_ids[0], files=files)
-            # New out-of-selection objects are not stored as synthetic tombstones.
-            # Existing objects are checked by the shared exact omission phase.
-            records = (observation,) if observation.kind == "upsert" else ()
+            # Full omissions exact-refresh known roots. Changes must carry scope withdrawals.
+            if observation.kind == "upsert" or state.mode == "changes":
+                records = (observation,)
             state = state.model_copy(update={"pending_ids": state.pending_ids[1:]})
-        return CapturePage(
-            records=records,
-            continuation=self._continuation(state),
-            final=not state.pending_ids and state.next_link is None,
-        )
+        if not state.pending_ids and state.next_link is None:
+            state = state.model_copy(update={"remaining_folders": state.remaining_folders[1:]})
+        return self._page(state, records)
 
     @staticmethod
     def _date(raw: str | None) -> datetime | None:

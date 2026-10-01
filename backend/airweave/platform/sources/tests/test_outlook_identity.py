@@ -290,3 +290,30 @@ async def test_source_creation_selects_capture_adapter_without_replacing_auth(ca
             assert source.capture_page_source.graph is source.graph
         else:
             assert source.capture_page_source is None
+
+
+async def test_delta_expiry_classification_requires_structured_code_and_delta_endpoint():
+    from airweave.domains.sources.exceptions import SourceEntityNotFoundError
+    from airweave.platform.sources.outlook_graph import OutlookDeltaExpiredError, OutlookGraphClient
+
+    code = "syncStateNotFound"
+
+    def graph(request):
+        if request.url.path == "/v1.0/me":
+            return httpx.Response(200, json={"id": "principal"})
+        return httpx.Response(404, json={"error": {"code": code, "message": "private-value"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(graph)) as client:
+        source = OutlookGraphClient(
+            StaticTokenProvider("secret"), client, "outlook_mail", "principal"
+        )
+        await source.verify_principal()
+        delta = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta"
+        with pytest.raises(OutlookDeltaExpiredError) as error:
+            await source.get(delta)
+        assert "private-value" not in str(error.value)
+        with pytest.raises(SourceEntityNotFoundError):
+            await source.get("https://graph.microsoft.com/v1.0/me/messages/message")
+        code = "ErrorItemNotFound"
+        with pytest.raises(SourceEntityNotFoundError):
+            await source.get(delta)

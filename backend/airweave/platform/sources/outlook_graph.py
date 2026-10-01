@@ -22,6 +22,24 @@ class OutlookBoundaryError(SourceError):
     """Unsafe mailbox scope or invalid principal evidence; never a skipped object."""
 
 
+class OutlookDeltaExpiredError(SourceError):
+    """Documented native delta expiration, without retaining private error bodies."""
+
+
+class GraphError(BaseModel):
+    """Only the native error code is interpreted; messages are never exposed."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+    code: str
+
+
+class GraphErrorEnvelope(BaseModel):
+    """Structured expiry evidence, distinct from transport and authentication errors."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+    error: GraphError
+
+
 class GraphPrincipal(BaseModel):
     """Only the native, case-sensitive principal ID establishes mailbox identity."""
 
@@ -78,6 +96,8 @@ class OutlookGraphClient:
     ) -> httpx.Response:
         self._validate_url(url)
         headers = await authorization_headers(self.auth)
+        # Derived folder types remain explicit even when the request selects only id.
+        headers["Accept"] = "application/json;odata.metadata=minimal"
         if immutable_ids:
             headers["Prefer"] = 'IdType="ImmutableId"'
         try:
@@ -143,6 +163,19 @@ class OutlookGraphClient:
                 response = await self._request(url, params, immutable_ids=immutable_ids)
         if response.status_code == 401:
             self.verified_principal_id = None
+        if urlsplit(url).path.lower().endswith("/messages/delta") and response.status_code in (
+            400,
+            404,
+            410,
+        ):
+            try:
+                error = GraphErrorEnvelope.model_validate(response.json())
+            except ValueError:
+                error = None
+            if error is not None and error.error.code == "syncStateNotFound":
+                raise OutlookDeltaExpiredError(
+                    "Microsoft Graph delta state expired", source_short_name=self.source_name
+                )
         self._check_response(response)
         try:
             data = TypeAdapter(dict[str, JsonValue]).validate_python(response.json())
