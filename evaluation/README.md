@@ -112,3 +112,16 @@ snippet evaluation and corpus-freezing automation are still separate work.
 The four focused synthetic tests verify evaluator behavior, not search quality.
 
 Reference: [ir-measures interfaces and formats](https://ir-measur.es/en/latest/getting-started.html).
+
+## Bounded native publishing helper
+
+`evaluation.native_import.publish_native` publishes already-staged `NativeSnapshot`
+values through the authenticated native HTTP API; it neither discovers nor fetches
+source content. Run with the backend environment and `PYTHONPATH=backend:.` from the
+repository root. The injected `httpx.AsyncClient` base URL must target the API root
+with a trailing slash. Retain the exact input and request key after a transport error:
+reinvoking resumes the durable cursor; changed input with that key conflicts. The
+returned terminal summary certifies bounded capture, not search publication.
+
+Tests live in the backend native-ingestion suite and require disposable PostgreSQL.
+The standalone retrieval-metrics test environment does not import this helper.
