@@ -1,5 +1,6 @@
 """Stripe provider interpretation only; no live account or SQL qualification."""
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -187,6 +188,13 @@ async def test_managed_source_wires_capture_without_exposing_credentials():
     )
     client = AsyncMock()
     client.get.side_effect = [httpx.Response(200, json=value) for value in identity()]
+
+    @asynccontextmanager
+    async def stream(method, url, **kwargs):
+        assert method == "GET" and kwargs["follow_redirects"] is False
+        yield await client.get(url, **kwargs)
+
+    client.stream = MagicMock(side_effect=stream)
     source = await StripeSource.create(
         auth=auth,
         logger=MagicMock(),
@@ -212,3 +220,56 @@ async def test_managed_source_wires_capture_without_exposing_credentials():
             http_client=client,
             config=StripeConfig(),
         )
+
+
+@pytest.mark.parametrize("status", [200, 403])
+def test_stream_limit_and_error_status_close_response_without_reading_private_tail(status):
+    import asyncio
+
+    # Own this loop so the standard runner also finalizes HTTPX's nested async
+    # generators before closing it; no timing sleep or warning suppression.
+    asyncio.run(_stream_failure_scenario(status))
+
+
+async def _stream_failure_scenario(status):
+    from uuid import uuid4
+
+    import httpx
+
+    from airweave.domains.sources.exceptions import SourceError
+    from airweave.domains.sources.token_providers.protocol import ManagedAuthProvider
+    from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+    from airweave.platform.sources.stripe import StripeSource
+
+    class Body(httpx.AsyncByteStream):
+        reads = 0
+        closed = False
+
+        async def __aiter__(self):
+            for _ in range(3):
+                self.reads += 1
+                yield b"x" * (64 * 1024)
+            raise AssertionError("Private tail must not be consumed")
+
+        async def aclose(self):
+            self.closed = True
+
+    body = Body()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, stream=body))
+    ) as client:
+        source = StripeSource(
+            auth=ManagedAuthProvider(
+                api_key="fixture",
+                connected_account_id="fixture",
+                allowed_hosts=frozenset({"api.stripe.com"}),
+            ),
+            logger=MagicMock(),
+            http_client=AirweaveHttpClient(client, uuid4(), "stripe"),
+        )
+        source.MAX_CAPTURE_RESPONSE_BYTES = 64 * 1024
+        with pytest.raises(SourceError) as exc:
+            await source._read_original("/v1/customers", params={}, headers={})
+        assert body.reads == (2 if status == 200 else 0)
+        assert body.closed
+        assert "xxxxx" not in str(exc.value)

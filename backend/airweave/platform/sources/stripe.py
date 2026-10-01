@@ -19,6 +19,8 @@ Then, we yield them as entities using the respective entity schemas defined in e
 from __future__ import annotations
 
 import base64
+import json
+from contextlib import aclosing
 from datetime import datetime
 from functools import partial
 from typing import AsyncGenerator, Optional
@@ -92,6 +94,7 @@ class StripeSource(BaseSource):
     """
 
     canonical_record_types = StripeCapture.canonical_record_types
+    MAX_CAPTURE_RESPONSE_BYTES = 16 * 1024 * 1024
 
     @classmethod
     async def create(
@@ -137,26 +140,42 @@ class StripeSource(BaseSource):
             auth_headers = {"Authorization": f"Bearer {credentials.api_key}"}
         else:
             auth_headers = await authorization_headers(self.auth)
-        response = await self.http_client.get(
+        async with self.http_client.stream(
+            "GET",
             "https://api.stripe.com" + path,
             params=params,
             headers={**headers, **auth_headers},
             timeout=20.0,
-        )
-        if not response.is_success:
-            # Provider error messages can echo submitted private fields. Retain only
-            # status and retry timing when translating into existing typed errors.
-            safe_response = httpx.Response(
-                response.status_code,
-                headers={k: v for k, v in response.headers.items() if k == "retry-after"},
-                request=httpx.Request("GET", "https://api.stripe.com/v1/"),
-            )
-            raise_for_status(
-                safe_response,
-                source_short_name="stripe",
-                token_provider_kind=self.auth.provider_kind,
-            )
-        return response.json()
+            follow_redirects=False,
+        ) as response:
+            if not response.is_success:
+                # Do not read provider error bodies, which may echo private fields.
+                safe_response = httpx.Response(
+                    response.status_code,
+                    headers={k: v for k, v in response.headers.items() if k == "retry-after"},
+                    request=httpx.Request("GET", "https://api.stripe.com/v1/"),
+                )
+                raise_for_status(
+                    safe_response,
+                    source_short_name="stripe",
+                    token_provider_kind=self.auth.provider_kind,
+                )
+            content = bytearray()
+            async with aclosing(response.aiter_bytes(chunk_size=64 * 1024)) as chunks:
+                async for chunk in chunks:
+                    if len(content) + len(chunk) > self.MAX_CAPTURE_RESPONSE_BYTES:
+                        raise SourceError(
+                            "Stripe capture response exceeds the 16 MiB decoded-body limit; "
+                            "the page was not committed",
+                            source_short_name="stripe",
+                        )
+                    content.extend(chunk)
+            try:
+                return json.loads(content)
+            except (ValueError, UnicodeError):
+                raise SourceError(
+                    "Stripe returned invalid JSON", source_short_name="stripe"
+                ) from None
 
     @retry(
         stop=stop_after_attempt(5),

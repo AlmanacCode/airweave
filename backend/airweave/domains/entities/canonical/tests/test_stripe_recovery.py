@@ -1,5 +1,6 @@
 """Stripe source composition and durable recovery; synthetic HTTP, real PostgreSQL."""
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -49,6 +50,13 @@ async def connector(calls, *, fail=False):
 
     http = AsyncMock()
     http.get.side_effect = get
+
+    @asynccontextmanager
+    async def stream(method, url, **kwargs):
+        assert method == "GET"
+        yield await get(url, **kwargs)
+
+    http.stream = MagicMock(side_effect=stream)
     source = await StripeSource.create(
         auth=ManagedAuthProvider(
             api_key="fixture",
