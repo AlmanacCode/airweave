@@ -191,26 +191,28 @@ class CanonicalProjectionStore:
         )
         if sync is None or sync.index_pipeline_version != work.pipeline_version:
             return None
-        entity = await db.scalar(
-            select(Entity)
-            .where(
-                Entity.id == work.record.id,
-                Entity.sync_id == work.record.sync_id,
-                Entity.organization_id == work.organization_id,
+        row = (
+            await db.execute(
+                select(Entity, content_is_available())
+                .where(
+                    Entity.id == work.record.id,
+                    Entity.sync_id == work.record.sync_id,
+                    Entity.organization_id == work.organization_id,
+                )
+                .with_for_update(of=Entity)
+                .execution_options(populate_existing=True)
             )
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
+        ).one_or_none()
+        if row is None:
+            return None
+        entity, visible = row
         if (
-            entity is None
-            or entity.record_revision != work.record.revision
+            entity.record_revision != work.record.revision
             or entity.indexed_generation != work.previous_generation
         ):
             return None
-        if entity.deleted_at is None:
-            visible = await db.scalar(select(content_is_available()).where(Entity.id == entity.id))
-            if not visible:
-                return None
+        if entity.deleted_at is None and not visible:
+            return None
         return entity
 
     async def prepare(
