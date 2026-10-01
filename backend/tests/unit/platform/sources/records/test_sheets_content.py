@@ -247,3 +247,50 @@ def test_native_search_groups_sheet_titles_and_preserves_sparse_row_addresses():
     )
     assert "A49: unique-value-0" in text
     assert "'First sheet'!A1:A100" in text
+
+
+@pytest.mark.asyncio
+async def test_distinct_blank_ranges_share_bytes_without_losing_coverage(tmp_path, monkeypatch):
+    from airweave.platform.sources.records.sheets_manifest import parse_sheet_manifest
+    from airweave.platform.sources.records.sheets_models import validate_partition
+
+    monkeypatch.setattr(
+        "airweave.domains.storage.file_service.paths.temp_sync_dir", lambda _: str(tmp_path / "tmp")
+    )
+    files = FileService(uuid4(), FilesystemBackend(tmp_path / "store"), sync_id=uuid4())
+    empty = metadata(rows=200, columns=1)
+    requested = []
+
+    async def latest(*args, **kwargs):
+        return {"version": "7"}
+
+    def response(request):
+        if request.url.path.endswith("/export"):
+            return httpx.Response(200, content=b"empty-workbook-export")
+        if "ranges" in request.url.params:
+            requested.append(request.url.params["ranges"])
+        return httpx.Response(200, json=empty)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+        captured = await capture_file_content(
+            file_record({"id": "book", "version": "7", "mimeType": SHEETS_MIME}),
+            files=files,
+            get=latest,
+            client=client,
+            auth=StaticTokenProvider("synthetic"),
+            logger=MagicMock(),
+            capture_native_sheets=True,
+        )
+    assert requested == ["'A''B'!A1:A100", "'A''B'!A101:A200"]
+    assert len(captured.blobs) == 3
+    marked = next(blob for blob in captured.blobs if blob.role == "representation_manifest")
+    manifest = parse_sheet_manifest(
+        await files.storage.read_file(marked.key),
+        file_id="book",
+        drive_version="7",
+        blobs=captured.blobs,
+    )
+    assert len(manifest.native.parts) == 2
+    assert {part.blob for part in manifest.native.parts} == {manifest.native.metadata_blob}
+    assert manifest.native.parts[0].bounds != manifest.native.parts[1].bounds
+    validate_partition(manifest, empty)
