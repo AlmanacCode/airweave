@@ -227,6 +227,42 @@ def membership_ready(fence: WriterFence, state: CaptureCycle):
     return and_(inventory_complete(Entity, fence, state), ~stale_ancestor)
 
 
+def work_membership_ready(fence: WriterFence, state: CaptureCycle):
+    """Early work needs a seen exact-read owner; completion still requires full inventories."""
+    if state.mode != "full" or not state.configuration.exact_parent_validation:
+        return membership_ready(fence, state)
+    owner = aliased(Entity)
+    early = exists(
+        select(CaptureScan.id)
+        .join(owner, owner.id == CaptureScan.parent_record_id)
+        .where(
+            Entity.entity_definition_short_name.in_(state.configuration.exact_parent_validation),
+            CaptureScan.organization_id == fence.organization_id,
+            CaptureScan.sync_id == fence.sync_id,
+            CaptureScan.cycle_id == state.version.cycle_id,
+            CaptureScan.record_type == Entity.entity_definition_short_name,
+            CaptureScan.container_id.is_not_distinct_from(Entity.container_id),
+            CaptureScan.phase.in_(("collecting", "reconciling")),
+            Entity.last_seen_run_id == CaptureScan.sweep_id,
+            owner.organization_id == Entity.organization_id,
+            owner.sync_id == Entity.sync_id,
+            owner.entity_definition_short_name == Entity.parent_record_type,
+            owner.native_id == Entity.parent_native_id,
+            owner.container_id.is_not_distinct_from(Entity.parent_container_id),
+            CaptureScan.parent_visibility_epoch == owner.visibility_epoch,
+            Entity.parent_visibility_epoch == owner.visibility_epoch,
+        )
+    )
+    chain = ancestor_chain()
+    ancestor = aliased(Entity)
+    stale_ancestor = exists(
+        select(chain.c.id)
+        .join(ancestor, ancestor.id == chain.c.id)
+        .where(~inventory_complete(ancestor, fence, state))
+    )
+    return and_(or_(inventory_complete(Entity, fence, state), early), ~stale_ancestor)
+
+
 async def root_ready(db: AsyncSession, fence: WriterFence, state: CaptureCycle) -> bool:
     """Every declared root inventory completes before descendant work."""
     for kind in state.configuration.root_record_types:
@@ -302,7 +338,7 @@ async def attest_scope(
         raise CycleConflict("Child scope no longer has a visible parent")
     ready = await db.scalar(
         select(Entity.id).where(
-            Entity.id == parent.id, content_is_available(), membership_ready(fence, state)
+            Entity.id == parent.id, content_is_available(), work_membership_ready(fence, state)
         )
     )
     if ready is None or not await root_ready(db, fence, state):
@@ -353,10 +389,12 @@ def child_scope_complete(fence: WriterFence, state: CaptureCycle, record_type: s
     return exists(select(CaptureScan.id).where(*predicates))
 
 
-async def next_scope_work(db: AsyncSession, fence: WriterFence, cycle_id: UUID) -> ScopeWork | None:
+async def next_scope_work(
+    db: AsyncSession, fence: WriterFence, cycle_id: UUID, *, within: CompletedScope | None = None
+) -> ScopeWork | None:
     """Reevaluate SQL frontier each time; newly discovered earlier UUIDs cannot be skipped."""
     _, state = await attest_cycle(db, fence, cycle_id)
-    for kind in state.configuration.root_record_types:
+    for kind in () if within is not None else state.configuration.root_record_types:
         predicates = [
             CaptureScan.organization_id == fence.organization_id,
             CaptureScan.sync_id == fence.sync_id,
@@ -370,6 +408,22 @@ async def next_scope_work(db: AsyncSession, fence: WriterFence, cycle_id: UUID) 
             predicates.append(CaptureScan.membership_attempt_id == fence.attempt_id)
         if await db.scalar(select(CaptureScan.id).where(*predicates).limit(1)) is None:
             return ScopeWork(record_type=kind)
+    selection = []
+    if within is not None:
+        await attest_scope(db, fence, state, within)
+        owner = await scope_owner(db, fence, state, within)
+        identity = source_record(owner).identity if owner is not None else None
+        selection = [
+            Entity.entity_definition_short_name == within.record_type,
+            Entity.container_id.is_not_distinct_from(within.container_id),
+            Entity.parent_record_type.is_not_distinct_from(
+                identity.record_type if identity else None
+            ),
+            Entity.parent_native_id.is_not_distinct_from(identity.native_id if identity else None),
+            Entity.parent_container_id.is_not_distinct_from(
+                identity.container_id if identity else None
+            ),
+        ]
     for child_type, allowed in state.configuration.parents.items():
         parent_types = tuple(kind for kind in allowed if kind is not None)
         if not parent_types:
@@ -381,7 +435,8 @@ async def next_scope_work(db: AsyncSession, fence: WriterFence, cycle_id: UUID) 
                 Entity.sync_id == fence.sync_id,
                 Entity.entity_definition_short_name.in_(parent_types),
                 content_is_available(),
-                membership_ready(fence, state),
+                work_membership_ready(fence, state),
+                *selection,
                 ~child_scope_complete(fence, state, child_type),
             )
             .order_by(Entity.id)

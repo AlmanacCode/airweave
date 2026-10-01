@@ -7,7 +7,12 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from airweave.domains.entities.canonical.cycle_models import BeginCycle, CaptureCycle, RestartCycle
+from airweave.domains.entities.canonical.cycle_models import (
+    BeginCycle,
+    CaptureCycle,
+    RestartCycle,
+    ScopeWork,
+)
 from airweave.domains.entities.canonical.cycle_store import CycleConflict
 from airweave.domains.entities.canonical.models import CaptureResult, SourceRecord
 from airweave.domains.entities.canonical.page_source import (
@@ -42,6 +47,14 @@ from airweave.domains.entities.canonical.service import CanonicalCaptureService
 from airweave.domains.storage.file_service import FileService
 
 
+class _ChildScopeAccessLost(Exception):
+    """A required child failure whose owner has already been withdrawn."""
+
+    def __init__(self, error: RequiredScopeAccessLost) -> None:
+        super().__init__(str(error))
+        self.error = error
+
+
 class CanonicalScanDriver:
     """Provider calls occur between existing fenced service transactions, never within one."""
 
@@ -62,6 +75,7 @@ class CanonicalScanDriver:
         self.files = files
         self.force_full = force_full
         self.progress, self.check_limits = progress, check_limits
+        self._restarted_scopes: set[tuple[UUID, CompletedScope]] = set()
 
     async def run(self) -> CaptureCycle:
         """Refresh membership first, then resume its currently visible child scopes."""
@@ -159,44 +173,68 @@ class CanonicalScanDriver:
 
     async def run_cycle(self, cycle: CaptureCycle) -> CaptureCycle:
         """Process the current frontier; every acknowledgement remains in the existing SQL store."""
-        configuration = cycle.configuration
         while True:
             async with self.sessions() as db:
                 work = await self.service.next_scope_work(db, self.fence, cycle.version.cycle_id)
             if work is None:
                 break
-            scope = (
-                CompletedScope(record_type=work.record_type)
-                if work.parent is None
-                else self.source.child_scope(work.parent, work.record_type)
-            )
-            if scope.record_type != work.record_type or scope.parent != (
-                work.parent.identity if work.parent else None
-            ):
-                raise CycleConflict("Source returned a scope with the wrong exact owner")
             try:
-                await self.scan(
-                    cycle,
-                    scope,
-                    parent=work.parent,
-                    parent_epoch=work.parent_visibility_epoch,
-                    refresh_membership=bool(configuration.children_of(work.record_type)),
-                )
-            except ScopeAccessLost as error:
-                if work.parent is None:
-                    raise
-                if work.parent_visibility_epoch is None:
-                    raise CycleConflict("Scope owner epoch is missing") from error
-                await self.withdraw_parent(
-                    work.parent, work.parent_visibility_epoch, error.removal_reason
-                )
-                if isinstance(error, RequiredScopeAccessLost):
-                    raise
+                await self.scan_work(cycle, work)
+            except _ChildScopeAccessLost as failure:
+                # Preserve the provider failure without withdrawing its enclosing scope.
+                raise failure.error from failure
         async with self.sessions() as db:
             current = await self.service.read_cycle(db, self.fence)
         if current is None:
             raise CycleConflict("Capture cycle disappeared before finalization")
         return current
+
+    async def scan_work(
+        self, cycle: CaptureCycle, work: ScopeWork, *, max_pages: int | None = None
+    ) -> None:
+        """Ordinary and interleaved work share exact-owner and withdrawal handling."""
+        scope = (
+            CompletedScope(record_type=work.record_type)
+            if work.parent is None
+            else self.source.child_scope(work.parent, work.record_type)
+        )
+        if scope.record_type != work.record_type or scope.parent != (
+            work.parent.identity if work.parent else None
+        ):
+            raise CycleConflict("Source returned a scope with the wrong exact owner")
+        try:
+            await self.scan(
+                cycle,
+                scope,
+                parent=work.parent,
+                parent_epoch=work.parent_visibility_epoch,
+                refresh_membership=bool(cycle.configuration.children_of(work.record_type)),
+                max_pages=max_pages,
+            )
+        except ScopeAccessLost as error:
+            if work.parent is None:
+                raise
+            if work.parent_visibility_epoch is None:
+                raise CycleConflict("Scope owner epoch is missing") from error
+            await self.withdraw_parent(
+                work.parent, work.parent_visibility_epoch, error.removal_reason
+            )
+            if isinstance(error, RequiredScopeAccessLost):
+                raise
+
+    async def advance_children(self, cycle: CaptureCycle, scope: CompletedScope) -> None:
+        """Give freshly observed, exactly verified owners one child page of progress."""
+        if scope.record_type not in cycle.configuration.exact_parent_validation:
+            return
+        async with self.sessions() as db:
+            work = await self.service.next_scope_work(
+                db, self.fence, cycle.version.cycle_id, within=scope
+            )
+        if work is not None:
+            try:
+                await self.scan_work(cycle, work, max_pages=1)
+            except RequiredScopeAccessLost as error:
+                raise _ChildScopeAccessLost(error) from error
 
     async def scan(
         self,
@@ -206,6 +244,7 @@ class CanonicalScanDriver:
         refresh_membership: bool = False,
         parent: SourceRecord | None = None,
         parent_epoch: int | None = None,
+        max_pages: int | None = None,
     ) -> None:
         """Only a provider invalid-cursor response permits one explicit sweep restart."""
         admission = await self.begin_scope(cycle, scope, parent, parent_epoch)
@@ -213,7 +252,8 @@ class CanonicalScanDriver:
             return
         state = admission.state
         parent = admission.parent
-        restarts = 0
+        restart_key = (cycle.version.cycle_id, scope)
+        pages = 0
         while state.phase == "collecting":
             await self.check_limits()
             try:
@@ -221,9 +261,9 @@ class CanonicalScanDriver:
                     scope, state.continuation, files=self.files, parent=parent
                 )
             except (InvalidScanContinuation, InvalidScopeCheckpoint) as error:
-                if restarts >= 1:
+                if restart_key in self._restarted_scopes:
                     raise
-                restarts += 1
+                self._restarted_scopes.add(restart_key)
                 state = await self.restart_scope(cycle, scope, state, parent, error)
                 continue
             # Never split a page or retry an uncertain commit with this old version.
@@ -244,6 +284,10 @@ class CanonicalScanDriver:
                 )
             state = result.state
             await self.progress(result.capture, (*page.records, *page.discovered_records))
+            pages += 1
+            await self.advance_children(cycle, scope)
+            if max_pages is not None and pages >= max_pages and state.phase == "collecting":
+                return
         if state.phase == "reconciling":
             if state.completion_policy == "discovery_with_validation" or (
                 state.scope.record_type in cycle.configuration.known_object_validation

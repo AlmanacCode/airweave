@@ -1,5 +1,6 @@
 """Actual child frontier commits/retry with synthetic Slack HTTP and original bytes."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -7,6 +8,10 @@ import pytest
 from sqlalchemy import select
 
 from airweave.adapters.storage.filesystem import FilesystemBackend
+from airweave.domains.entities.canonical.page_source import (
+    InvalidScanContinuation,
+    RequiredScopeAccessLost,
+)
 from airweave.domains.entities.canonical.requests import CaptureBatch, RecordIdentity
 from airweave.domains.entities.canonical.tests.test_capture_pipeline import components, orchestrator
 from airweave.domains.entities.canonical.tests.test_slack_recovery import run
@@ -14,7 +19,9 @@ from airweave.domains.sources.token_providers.static import StaticTokenProvider
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
 from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
+from airweave.models.capture_scan import CaptureScan
 from airweave.models.entity import Entity
+from airweave.models.sync_cursor import SyncCursor
 from airweave.platform.configs.config import SlackConfig
 from airweave.platform.sources.slack import SlackPrincipal, SlackSource
 
@@ -170,3 +177,119 @@ async def test_omitted_accessible_message_does_not_remove_retained_file_children
             assert stored.deleted_at is None and stored.content_access == "available"
             if row.entity_definition_short_name == "file":
                 assert stored.blobs
+
+
+async def test_files_progress_before_history_finishes_and_resume_both_cursors(
+    database, source, tmp_path
+):
+    storage = FilesystemBackend(tmp_path)
+    downloads = []
+    histories = []
+    interrupt = True
+
+    async def respond(url, params):
+        if url.endswith("conversations.list"):
+            return ROOT
+        if "oldest" in params:
+            return {"messages": [MESSAGE]}
+        cursor = params.get("cursor")
+        histories.append(cursor)
+        if cursor is None:
+            return {"messages": [MESSAGE], "response_metadata": {"next_cursor": "H2"}}
+        if cursor == "H2":
+            if interrupt:
+                raise asyncio.CancelledError()
+            return {"messages": [], "response_metadata": {"next_cursor": "H3"}}
+        assert cursor == "H3"
+        return {"messages": []}
+
+    with pytest.raises(asyncio.CancelledError):
+        await attempt(database, source, storage, downloads, number=1, responses=respond)
+    assert downloads == ["F1"]
+    async with database() as db:
+        scans = (await db.scalars(select(CaptureScan))).all()
+        history = next(row for row in scans if row.record_type == "message")
+        files = next(row for row in scans if row.record_type == "file")
+        assert history.phase == files.phase == "collecting"
+        assert history.continuation["history_cursor"] == "H2"
+        sweeps = (history.sweep_id, files.sweep_id)
+        assert "canonical_checkpoint" not in (await db.scalar(select(SyncCursor))).cursor_data
+
+    interrupt = False
+    await attempt(database, source, storage, downloads, number=2, responses=respond)
+    assert downloads == ["F1", "F2", "F3"]
+    assert histories == [None, "H2", "H2", "H3"]
+    async with database() as db:
+        scans = (await db.scalars(select(CaptureScan))).all()
+        history = next(row for row in scans if row.record_type == "message")
+        files = next(row for row in scans if row.record_type == "file")
+        assert (history.sweep_id, files.sweep_id) == sweeps
+        assert history.phase == files.phase == "complete"
+        rows = (await db.scalars(select(Entity))).all()
+        assert next(row for row in rows if row.native_id == "1").source_payload == MESSAGE
+        assert all(row.record_revision == 1 for row in rows if row.native_id.startswith("F"))
+        cursor = (await db.scalar(select(SyncCursor))).cursor_data
+        assert cursor["canonical_cycle"]["phase"] == "complete"
+
+
+async def test_child_cursor_restart_bound_survives_interleaved_turns(
+    database, source, tmp_path, monkeypatch
+):
+    original = SlackSource.capture_page
+    file_calls = 0
+
+    async def capture(connector, scope, continuation, **kwargs):
+        nonlocal file_calls
+        if scope.record_type == "file":
+            file_calls += 1
+            if file_calls != 2:
+                raise InvalidScanContinuation("Synthetic child cursor expiry")
+        return await original(connector, scope, continuation, **kwargs)
+
+    monkeypatch.setattr(SlackSource, "capture_page", capture)
+
+    async def respond(url, params):
+        if url.endswith("conversations.list"):
+            return ROOT
+        if "oldest" in params:
+            return {"messages": [MESSAGE]}
+        return {
+            "messages": [MESSAGE] if "cursor" not in params else [],
+            "response_metadata": {"next_cursor": "H3" if "cursor" in params else "H2"},
+        }
+
+    downloads = []
+    with pytest.raises(InvalidScanContinuation, match="child cursor"):
+        await attempt(
+            database, source, FilesystemBackend(tmp_path), downloads, number=1, responses=respond
+        )
+    assert file_calls == 3 and downloads == ["F1"]
+    async with database() as db:
+        cursor = (await db.scalar(select(SyncCursor))).cursor_data
+        assert "canonical_checkpoint" not in cursor
+        assert cursor["canonical_cycle"]["phase"] == "active"
+
+
+async def test_required_child_access_loss_does_not_withdraw_enclosing_channel(
+    database, source, tmp_path, monkeypatch
+):
+    original = SlackSource.capture_page
+
+    async def capture(connector, scope, continuation, **kwargs):
+        if scope.record_type == "file":
+            # Exercise the shared driver contract; Slack does not currently emit this subtype.
+            raise RequiredScopeAccessLost("Synthetic required child access loss")
+        return await original(connector, scope, continuation, **kwargs)
+
+    monkeypatch.setattr(SlackSource, "capture_page", capture)
+    with pytest.raises(RequiredScopeAccessLost, match="required child"):
+        await attempt(database, source, FilesystemBackend(tmp_path), [], number=1)
+    service, fence = source
+    async with database() as db:
+        rows = (await db.scalars(select(Entity))).all()
+        assert {row.native_id for row in rows} == {"C1", "1"}
+        for row in rows:
+            stored = await service.store.read(db, fence.organization_id, fence.sync_id, row.id)
+            expected = "available" if row.native_id == "C1" else "unavailable"
+            assert stored.content_access == expected
+        assert "canonical_checkpoint" not in (await db.scalar(select(SyncCursor))).cursor_data

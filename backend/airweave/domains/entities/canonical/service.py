@@ -119,12 +119,17 @@ class CanonicalCaptureService:
             await self.store.save_checkpoint(db, fence, cursor_data)
 
     async def next_scope_work(
-        self, db: AsyncSession, fence: WriterFence, cycle_id: UUID
+        self,
+        db: AsyncSession,
+        fence: WriterFence,
+        cycle_id: UUID,
+        *,
+        within: CompletedScope | None = None,
     ) -> ScopeWork | None:
         """Read the next eligible incomplete scope under the existing writer fence."""
         async with UnitOfWork(db):
             await self.store._fenced_sync(db, fence)
-            return await next_scope_work(db, fence, cycle_id)
+            return await next_scope_work(db, fence, cycle_id, within=within)
 
     async def withdraw_scan_parent(
         self,
