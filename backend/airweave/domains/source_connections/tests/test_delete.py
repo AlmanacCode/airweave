@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
 from airweave.api.context import ApiContext
 from airweave.core.exceptions import NotFoundException
@@ -212,3 +213,16 @@ async def test_delete_sync_service_failure_propagates():
 
     with pytest.raises(RuntimeError, match="sync delete boom"):
         await svc.delete(_unmanaged_db(), id=sc.id, ctx=_make_ctx())
+
+
+async def test_native_delete_rejected_before_cleanup():
+    sc = _make_sc(short_name="almanac")
+    repo = FakeSourceConnectionRepository()
+    repo.seed(sc.id, sc)
+    sync_service = AsyncMock()
+    with pytest.raises(HTTPException) as error:
+        await _build_service(sc_repo=repo, sync_service=sync_service).delete(
+            _unmanaged_db(), id=sc.id, ctx=_make_ctx()
+        )
+    assert error.value.status_code == 409
+    sync_service.delete.assert_not_awaited()

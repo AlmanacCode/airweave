@@ -50,7 +50,9 @@ class SourceConnectionDeletionService(SourceConnectionDeletionServiceProtocol):
         if not source_conn:
             raise NotFoundException("Source connection not found")
 
-        await require_unmanaged_source(db, id, ctx.organization.id)
+        await require_unmanaged_source(
+            db, id, ctx.organization.id, short_name=source_conn.short_name
+        )
 
         sync_id = source_conn.sync_id
         collection_orm = await self._collection_repo.get_by_readable_id(

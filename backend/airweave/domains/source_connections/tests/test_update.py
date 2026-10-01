@@ -656,3 +656,18 @@ async def test_credential_update_unpause_failure_is_nonfatal():
     obj_in = SourceConnectionUpdate(authentication={"credentials": {"token": "new_secret"}})
     result = await svc.update(_unmanaged_db(), id=sc.id, obj_in=obj_in, ctx=_make_ctx())
     assert result.id == sc.id
+
+
+async def test_native_update_cannot_rebind_identity():
+    sc = _make_sc(short_name="almanac")
+    repo = FakeSourceConnectionRepository()
+    repo.seed(sc.id, sc)
+    db = _unmanaged_db()
+    with pytest.raises(HTTPException) as error:
+        await _build_service(sc_repo=repo).update(
+            db, id=sc.id, obj_in=SourceConnectionUpdate(config={"owner_id": "other"}),
+            ctx=_make_ctx(),
+        )
+    assert error.value.status_code == 409
+    db.commit.assert_not_awaited()
+    db.scalar.assert_not_awaited()

@@ -1117,3 +1117,13 @@ async def test_reinitiate_oauth_preserves_byoc_credentials(monkeypatch):
     assert init_kwargs["template_configs"] == {"subdomain": "acme"}
     # Verify payload was reused from old init session
     assert init_kwargs["payload"]["name"] == "My GitHub"
+
+
+async def test_native_source_cannot_start_provider_oauth():
+    svc = _service(_entry(oauth_type="access_only"))
+    sc = _shell_source_conn()
+    sc.short_name = "almanac"
+    svc._sc_repo.seed(sc.id, sc)
+    with pytest.raises(HTTPException) as error:
+        await svc.reinitiate_oauth(AsyncMock(), id=sc.id, ctx=_ctx())
+    assert error.value.status_code == 409

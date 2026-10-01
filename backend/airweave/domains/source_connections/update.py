@@ -94,7 +94,9 @@ class SourceConnectionUpdateService(SourceConnectionUpdateServiceProtocol):
             if not source_conn:
                 raise NotFoundException("Source connection not found")
 
-            await require_unmanaged_source(db, id, ctx.organization.id)
+            await require_unmanaged_source(
+                db, id, ctx.organization.id, short_name=source_conn.short_name
+            )
 
             # Update fields
             update_data = obj_in.model_dump(exclude_unset=True)

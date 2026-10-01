@@ -9,8 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from airweave.models.owned_provisioning import OwnedProvisioning
 
 
-async def require_unmanaged_source(db: AsyncSession, source_id: UUID, organization: UUID) -> None:
+def require_provider_source(short_name: str) -> None:
+    """Native imports cannot use provider configuration, OAuth or pull-sync routes."""
+    if short_name == "almanac":
+        raise HTTPException(status_code=409, detail="Manage this source through its native import")
+
+
+async def require_unmanaged_source(
+    db: AsyncSession, source_id: UUID, organization: UUID, *, short_name: str
+) -> None:
     """Owned source identity/configuration is writable only through ensure."""
+    require_provider_source(short_name)
     owned = await db.scalar(
         select(OwnedProvisioning.id).where(
             OwnedProvisioning.source_connection_id == source_id,

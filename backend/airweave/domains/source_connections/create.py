@@ -23,6 +23,7 @@ from airweave.domains.collections.protocols import CollectionRepositoryProtocol
 from airweave.domains.connections.protocols import ConnectionRepositoryProtocol
 from airweave.domains.credentials.protocols import IntegrationCredentialServiceProtocol
 from airweave.domains.oauth.protocols import OAuthFlowServiceProtocol
+from airweave.domains.owned_provisioning.guard import require_provider_source
 from airweave.domains.source_connections.protocols import (
     ResponseBuilderProtocol,
     SourceConnectionCreateServiceProtocol,
@@ -198,6 +199,7 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
         source_conn = await self._sc_repo.get(db, id=id, ctx=ctx)
         if not source_conn:
             raise NotFoundException("Source connection not found")
+        require_provider_source(source_conn.short_name)
         if source_conn.is_authenticated and not await self._has_credential_error(db, source_conn):
             raise HTTPException(
                 status_code=400,

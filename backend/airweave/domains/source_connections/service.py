@@ -16,6 +16,7 @@ from airweave.domains.auth_provider.protocols import AuthProviderRegistryProtoco
 from airweave.domains.collections.protocols import CollectionRepositoryProtocol
 from airweave.domains.connections.protocols import ConnectionRepositoryProtocol
 from airweave.domains.oauth.protocols import OAuthRedirectSessionRepositoryProtocol
+from airweave.domains.owned_provisioning.guard import require_provider_source
 from airweave.domains.source_connections.protocols import (
     ResponseBuilderProtocol,
     SourceConnectionCreateServiceProtocol,
@@ -170,6 +171,7 @@ class SourceConnectionService(SourceConnectionServiceProtocol):
     ) -> SourceConnectionJob:
         """Trigger a sync run for this source connection."""
         source_conn = await self._resolve_source_connection(db, id, ctx)
+        require_provider_source(source_conn.short_name)
         sync_id = source_conn.sync_id
         assert sync_id is not None
 
