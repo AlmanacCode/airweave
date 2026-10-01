@@ -191,3 +191,25 @@ payloads, keys, file paths or destination URLs. Exit codes: 0 completed capture;
 or inconsistent import progress (including cross-record preflight rejection);
 130 interrupted; 1 unexpected failure. Failed commands may have committed earlier
 pages: a nonzero exit is not evidence of rollback.
+
+## Grouped conversation results
+
+Judge the unit the user actually sees. A conversation card can be relevant even
+when its displayed message is not the answer. Keep these two experiments separate:
+
+- **Card ranking:** stable conversation identity for a session/thread card, and
+  original record identity for an ungrouped result. Judge the conversation as a
+  whole. Use a separately fingerprinted dataset tagged `unit:card`.
+- **Displayed-original ranking:** representative original followed by the explicitly
+  returned additional matches, preserving card order and within-card order. Judge
+  those exact original identities in a separate dataset tagged `unit:original`.
+  Do not add unreturned members merely because they belong to a returned group.
+  This is a ranking of inspectable originals, not the number of visible cards.
+
+Both use the existing evaluator; no second scoring implementation is needed.
+A card hit does not prove passage recall, and `matched_records` is not a list of
+answers or evidence that every member is relevant. Keep query filters, corpus
+revisions, model settings and assessment provenance fixed for both experiments.
+The one-session trial in the product worklog is diagnostic, not a judged benchmark:
+it found the session in every mode, but the expected passage only in keyword and
+hybrid mode. More diverse sessions and independently judged queries are required.
