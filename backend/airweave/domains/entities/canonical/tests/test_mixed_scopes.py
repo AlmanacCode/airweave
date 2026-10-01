@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from airweave.domains.entities.canonical.coverage import capture_coverage
+from airweave.domains.entities.canonical.coverage import capture_coverage, mixed_scope_summary
 from airweave.domains.entities.canonical.cycle_models import CycleConfiguration, ProviderCheckpoint
 from airweave.domains.entities.canonical.page_source import (
     CapturePage,
@@ -541,3 +541,49 @@ async def test_completed_coverage_survives_job_completion_but_not_new_writer(dat
         coverage = await capture_coverage(db, fence.organization_id, (fence.sync_id,))
         assert coverage[fence.sync_id].phase == "active"
         assert coverage[fence.sync_id].scope_summary.unfinished == 1
+
+
+@pytest.mark.parametrize(
+    "change", ["stale_root_inventory", "unknown_root_mode", "parent_epoch", "leaf_attempt"]
+)
+async def test_coverage_root_batch_preserves_scope_evidence(database, source, change):
+    pipeline, ctx, runtime = await setup(database, source, MixedSource())
+    await run(pipeline, ctx, runtime)
+    service, fence = source
+    async with database() as db:
+        cycle = await service.read_cycle(db, fence)
+        root = await db.scalar(
+            select(CaptureScan).where(
+                CaptureScan.sync_id == fence.sync_id, CaptureScan.record_type == "calendar"
+            )
+        )
+        if change == "stale_root_inventory":
+            root.membership_attempt_id = uuid4()
+        elif change == "unknown_root_mode":
+            root.execution_state = None
+        elif change == "parent_epoch":
+            parent = await db.scalar(
+                select(Entity).where(
+                    Entity.sync_id == fence.sync_id,
+                    Entity.entity_definition_short_name == "calendar",
+                )
+            )
+            parent.visibility_epoch += 1
+        else:
+            leaf = await db.scalar(
+                select(CaptureScan).where(
+                    CaptureScan.sync_id == fence.sync_id, CaptureScan.record_type == "event"
+                )
+            )
+            leaf.membership_attempt_id = uuid4()
+        await db.flush()
+
+        summary = await mixed_scope_summary(db, fence.organization_id, fence.sync_id, cycle)
+        if change == "stale_root_inventory":
+            assert summary is None
+        else:
+            expected_unfinished = {"unknown_root_mode": 1, "parent_epoch": 2, "leaf_attempt": 0}
+            assert summary.eligible == 3
+            assert summary.unfinished == expected_unfinished[change]
+            assert summary.completed_full == 3 - summary.unfinished
+        assert await mixed_scope_summary(db, uuid4(), fence.sync_id, cycle) is None

@@ -4,7 +4,7 @@ from typing import Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, model_validator
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.cycle_models import (
@@ -12,7 +12,6 @@ from airweave.domains.entities.canonical.cycle_models import (
     CaptureCycle,
     CompletionPolicy,
 )
-from airweave.domains.entities.canonical.cycle_store import root_ready
 from airweave.domains.entities.canonical.requests import WriterFence
 from airweave.domains.entities.canonical.store import content_is_available
 from airweave.models.capture_scan import CaptureScan
@@ -77,27 +76,37 @@ async def mixed_scope_summary(
         attempt_id=sync.writer_attempt_id,
         attempt_number=sync.writer_attempt_number,
     )
-    if not await root_ready(db, fence, cycle):
-        return None
-    eligible = full = changes = 0
     common = (
         CaptureScan.organization_id == organization_id,
         CaptureScan.sync_id == sync_id,
         CaptureScan.cycle_id == cycle.version.cycle_id,
         CaptureScan.phase == "complete",
     )
-    for kind in cycle.configuration.root_record_types:
-        eligible += 1
-        mode = await db.scalar(
-            select(CaptureScan.execution_state["plan"]["mode"].astext).where(
+    roots = cycle.configuration.root_record_types
+    inventory_roots = tuple(kind for kind in roots if cycle.configuration.children_of(kind))
+    modes: dict[str, str | None] = {}
+    if roots:
+        rows = await db.execute(
+            select(
+                CaptureScan.record_type,
+                CaptureScan.execution_state["plan"]["mode"].astext,
+            ).where(
                 *common,
-                CaptureScan.record_type == kind,
+                CaptureScan.record_type.in_(roots),
                 CaptureScan.parent_record_id.is_(None),
                 CaptureScan.container_id.is_(None),
+                or_(
+                    CaptureScan.record_type.not_in(inventory_roots),
+                    CaptureScan.membership_attempt_id == fence.attempt_id,
+                ),
             )
         )
-        full += int(mode == "full")
-        changes += int(mode == "changes")
+        modes = dict(rows.tuples().all())
+    if not set(roots).issubset(modes):
+        return None
+    eligible = len(roots)
+    full = sum(mode == "full" for mode in modes.values())
+    changes = sum(mode == "changes" for mode in modes.values())
     for kind, parents in cycle.configuration.parents.items():
         parent_types = tuple(parent for parent in parents if parent is not None)
         if not parent_types:
