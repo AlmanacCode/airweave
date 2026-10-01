@@ -5,7 +5,8 @@ from collections import defaultdict
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select, tuple_
+from pydantic import AwareDatetime, BaseModel, ConfigDict
+from sqlalchemy import and_, case, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api.context import ApiContext
@@ -34,6 +35,25 @@ from airweave.models.entity import Entity
 from airweave.models.projection_generation import ProjectionGeneration
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
+
+
+class _EnrichmentRecord(BaseModel):
+    """Detached search-card fields; original payloads and blob manifests stay in the store."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    sync_id: UUID
+    record_revision: int
+    indexed_generation: UUID
+    indexed_pipeline_version: int
+    entity_definition_short_name: str
+    native_id: str
+    container_id: str | None
+    observed_at: AwareDatetime
+    source_created_at: AwareDatetime | None
+    source_updated_at: AwareDatetime | None
+    completeness: str
+    email_thread_id: str | None
 
 
 class OwnedSearchService:
@@ -238,19 +258,37 @@ class OwnedSearchService:
         hits, scores, exclusions, postfiltered = {}, {}, 0, 0
         # Recheck current publication while obtaining native identity. Never enrich
         # from an unvalidated cached hit after a concurrent capture/permission change.
-        records = (
-            await db.scalars(
-                select(Entity)
-                .join(Sync, Sync.id == Entity.sync_id)
-                .where(
-                    Entity.organization_id == ctx.organization.id,
-                    Sync.organization_id == ctx.organization.id,
-                    Entity.sync_id.in_(sync_ids),
-                    publications_match(locators),
-                )
-                .execution_options(populate_existing=True)
+        rows = await db.execute(
+            select(
+                Entity.id,
+                Entity.sync_id,
+                Entity.record_revision,
+                Entity.indexed_generation,
+                Entity.indexed_pipeline_version,
+                Entity.entity_definition_short_name,
+                Entity.native_id,
+                Entity.container_id,
+                Entity.observed_at,
+                Entity.source_created_at,
+                Entity.source_updated_at,
+                Entity.completeness,
+                case(
+                    (
+                        func.jsonb_typeof(Entity.source_payload["threadId"]) == "string",
+                        Entity.source_payload["threadId"].astext,
+                    ),
+                    else_=None,
+                ).label("email_thread_id"),
             )
-        ).all()
+            .join(Sync, Sync.id == Entity.sync_id)
+            .where(
+                Entity.organization_id == ctx.organization.id,
+                Sync.organization_id == ctx.organization.id,
+                Entity.sync_id.in_(sync_ids),
+                publications_match(locators),
+            )
+        )
+        records = [_EnrichmentRecord.model_validate(row) for row in rows.mappings()]
         by_id = {record.id: record for record in records}
         extraction_rows = await db.execute(
             select(ProjectionGeneration.id, ProjectionGeneration.extraction_coverage).where(
@@ -307,7 +345,7 @@ class OwnedSearchService:
                         thread_id
                         if scopes[row.sync_id].short_name == "gmail"
                         and row.entity_definition_short_name == "message"
-                        and isinstance(thread_id := (row.source_payload or {}).get("threadId"), str)
+                        and (thread_id := row.email_thread_id) is not None
                         and re.fullmatch(r"[A-Za-z0-9_-]{1,512}", thread_id)
                         else None
                     ),
@@ -376,7 +414,7 @@ class OwnedSearchService:
             return None
 
     @staticmethod
-    def _matches(row: Entity, request: OwnedSearchRequest) -> bool:
+    def _matches(row: _EnrichmentRecord, request: OwnedSearchRequest) -> bool:
         if request.record_types and row.entity_definition_short_name not in request.record_types:
             return False
         for value, after, before in (

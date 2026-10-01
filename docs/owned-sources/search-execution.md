@@ -144,3 +144,38 @@ nor reconstruct the earlier unlogged 503 and 13-second response.
 Instrumentation lives only in the private launcher, preserving general log suppression.
 Its copied query body adds `presentation.timing` only; result selection, ranking,
 authorization and the 200-candidate bound remain unchanged.
+
+## Narrow enrichment projection
+
+Search enrichment now selects only the scalar identity/publication/date/completeness
+fields used by a result card, plus the potential Gmail thread ID. A frozen typed row
+replaces the live `Entity` ORM object. Native payloads and blob manifests are no longer
+transferred or decoded into the search process merely to build cards. PostgreSQL may
+still read the JSON value to extract the thread ID; this is not a claim of eliminating
+all database JSON work or a measured latency improvement.
+
+The thread expression returns text only when the native JSON value is a string.
+Numbers, objects, missing keys and JSON null remain unavailable. Existing provider,
+record-kind and allowed-ID checks still apply. Exact publication predicates, indexed
+part coverage, exclusions and the final fresh authorization check are unchanged.
+
+The phase-session proposal remains separate. Installed FastAPI 0.115.14 does not
+provide an early function-scoped yield dependency. A dedicated non-yield owned-search
+auth dependency could resolve the same `ContextResolver` inside an owned read context,
+close that context, and return the detached `ApiContext`. Generic `get_context` remains
+unchanged. The search service could then receive the existing session factory and
+own its read contexts, carrying only typed source snapshots between them. Preserve
+the current read route's Auth0 last-active rollback semantics explicitly; do not add
+an implicit commit or close a caller's borrowed transaction. Qualify a one-connection
+pool while embeddings/Vespa are paused, plus revocation and record changes between
+phases, before adopting this separate proposal.
+
+Projection qualification: 20 owned-search/visibility PostgreSQL tests passed against
+an isolated archive of `a539e40979871f5ba23428b802845b5f1329f6c9` with only the
+search implementation and its test file overlaid. Existing card checks now assert
+identity, dates, completeness and excerpt parity and inspect actual DBAPI result
+columns to reject transfer of full payloads/blob manifests. Thread-ID cases cover
+missing/null/numeric/object/invalid strings and non-Gmail records. Existing stale,
+foreign-source, unsupported-part and later-collection mutation fences also passed.
+This is scoped correctness/resource-boundary qualification, not a measured speedup
+or a claim that the candidate runtime has been updated with this change.

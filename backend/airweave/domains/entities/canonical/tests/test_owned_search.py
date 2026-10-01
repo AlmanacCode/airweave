@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, update
+from sqlalchemy import event, select, update
 
 from airweave.api import deps
 from airweave.api.v1.endpoints.records import router
@@ -134,16 +134,36 @@ async def test_owned_http_deduplicates_and_preserves_partial_engine(database, in
     vector.seed_results(
         SearchResults(results=[first, second], engine_partial=True, engine_coverage_percent=75)
     )
-    response = await client.post(
-        "/sync/search",
-        json={"query": "budget", "sync_ids": [str(fence.sync_id)], "mode": "keyword"},
-    )
+    transferred_columns = set()
+
+    def columns_received(connection, cursor, statement, parameters, context, executemany):
+        if cursor.description:
+            transferred_columns.update(column[0] for column in cursor.description)
+
+    async with database() as db:
+        engine = db.bind.sync_engine
+    event.listen(engine, "after_cursor_execute", columns_received)
+    try:
+        response = await client.post(
+            "/sync/search",
+            json={"query": "budget", "sync_ids": [str(fence.sync_id)], "mode": "keyword"},
+        )
+    finally:
+        event.remove(engine, "after_cursor_execute", columns_received)
+    assert not transferred_columns.intersection({"source_payload", "blob_references"})
     assert response.status_code == 200, response.text
     body = response.json()
     assert len(body["items"]) == 1
     item = body["items"][0]
     assert item["identity"] == {"record_type": "event", "native_id": "one", "container_id": None}
     assert item["source_connection_id"] == str(connection.id)
+    assert item["record_id"] == str(locator.record_id)
+    assert item["revision"] == locator.revision and item["sync_id"] == str(fence.sync_id)
+    assert item["provider"] == "gmail" and item["title"] == first.name
+    assert item["completeness"] == "complete" and item["observed_at"]
+    assert item["source_created_at"] is None and item["source_updated_at"] is None
+    assert item["email_thread_id"] is None
+    assert item["excerpts"] == [first.textual_representation, "Other evidence"]
     assert len(item["excerpts"]) == 2 and "payload" not in item
     assert body["engine_partial"] and body["retrieval_incomplete"]
     assert body["coverage"] == "bounded_candidates" and "next_cursor" not in body
@@ -382,17 +402,19 @@ async def test_final_gate_drops_early_hit_changed_during_later_collection(
 
 
 @pytest.mark.parametrize(
-    "provider,thread_id,expected",
+    "provider,payload,expected",
     [
-        ("gmail", "thread-1", "thread-1"),
-        ("slack", "thread-1", None),
-        ("gmail", None, None),
-        ("gmail", "bad/id", None),
-        ("gmail", {"bad": "value"}, None),
+        ("gmail", {"threadId": "thread-1"}, "thread-1"),
+        ("slack", {"threadId": "thread-1"}, None),
+        ("gmail", {}, None),
+        ("gmail", {"threadId": None}, None),
+        ("gmail", {"threadId": 12345}, None),
+        ("gmail", {"threadId": "bad/id"}, None),
+        ("gmail", {"threadId": {"bad": "value"}}, None),
     ],
 )
 async def test_email_route_uses_visible_canonical_provider_payload(
-    database, indexed, http_search, provider, thread_id, expected
+    database, indexed, http_search, provider, payload, expected
 ):
     from airweave.models.entity import Entity
 
@@ -401,9 +423,7 @@ async def test_email_route_uses_visible_canonical_provider_payload(
     async with database() as db:
         await db.execute(update(SourceConnection).values(short_name=provider))
         await db.execute(
-            update(Entity).values(
-                entity_definition_short_name="message", source_payload={"threadId": thread_id}
-            )
+            update(Entity).values(entity_definition_short_name="message", source_payload=payload)
         )
         await db.commit()
     candidate = hit(fence, locator.encode())
