@@ -4,7 +4,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from airweave.domains.auth_provider.exceptions import AuthProviderConfigError
+from airweave.domains.auth_provider.exceptions import (
+    AuthProviderAuthError,
+    AuthProviderConfigError,
+)
 from airweave.domains.auth_provider.providers.composio import ComposioAuthProvider
 
 
@@ -108,3 +111,44 @@ async def test_wispr_still_requires_configured_user(monkeypatch):
     )
     with pytest.raises(AuthProviderConfigError, match="explicit Composio user"):
         await provider.get_auth_result("wispr", [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "account_disabled,config_disabled,error",
+    [
+        (False, False, None),
+        (True, False, AuthProviderAuthError),
+        (False, True, AuthProviderAuthError),
+        ("false", False, AuthProviderConfigError),
+        (False, 0, AuthProviderConfigError),
+        (None, False, AuthProviderConfigError),
+    ],
+)
+async def test_managed_binding_validates_disabled_flags(
+    monkeypatch, account_disabled, config_disabled, error
+):
+    provider = await ComposioAuthProvider.create(
+        credentials={"api_key": "secret"},
+        config={"account_id": "selected", "user_id": "owner", "auth_config_id": "cfg"},
+    )
+    monkeypatch.setattr(
+        provider,
+        "_get_with_auth",
+        AsyncMock(
+            return_value={
+                "id": "selected",
+                "user_id": "owner",
+                "toolkit": {"slug": "wispr_flow_mcp"},
+                "status": "ACTIVE",
+                "is_disabled": account_disabled,
+                "auth_config": {"id": "cfg", "is_disabled": config_disabled},
+            }
+        ),
+    )
+    if error is None:
+        result = await provider.get_auth_result("wispr", [])
+        assert result.managed_auth.connected_account_id == "selected"
+    else:
+        with pytest.raises(error):
+            await provider.get_auth_result("wispr", [])

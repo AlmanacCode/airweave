@@ -5,6 +5,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 import httpx
+from pydantic import BaseModel, Field, StrictBool, ValidationError
 
 from airweave.core.credential_sanitizer import (
     safe_log_credentials,
@@ -13,6 +14,7 @@ from airweave.core.credential_sanitizer import (
 from airweave.domains.auth_provider._base import BaseAuthProvider
 from airweave.domains.auth_provider.exceptions import (
     AuthProviderAccountNotFoundError,
+    AuthProviderConfigError,
     AuthProviderMissingFieldsError,
     AuthProviderRateLimitError,
     AuthProviderTemporaryError,
@@ -23,6 +25,29 @@ from airweave.platform.decorators import auth_provider
 
 if TYPE_CHECKING:
     from airweave.domains.auth_provider.auth_result import AuthResult
+
+
+class _AuthConfigAvailability(BaseModel):
+    """Read the optional broker flag; unrelated provider fields remain opaque."""
+
+    is_disabled: StrictBool = False
+
+
+class _AccountAvailability(BaseModel):
+    """Missing flags preserve compatibility; present flags must be actual booleans."""
+
+    is_disabled: StrictBool = False
+    auth_config: _AuthConfigAvailability = Field(default_factory=_AuthConfigAvailability)
+
+    @classmethod
+    def from_response(cls, account: dict) -> "_AccountAvailability":
+        """Reject malformed flags without exposing provider data in validation errors."""
+        try:
+            return cls.model_validate(account)
+        except ValidationError:
+            raise AuthProviderConfigError(
+                "Connected account availability is invalid", provider_name="composio"
+            ) from None
 
 
 @auth_provider(
@@ -105,7 +130,6 @@ class ComposioAuthProvider(BaseAuthProvider):
     ) -> "AuthResult":
         """Bind managed access without requesting or extracting OAuth tokens."""
         from airweave.domains.auth_provider.auth_result import AuthResult
-        from airweave.domains.auth_provider.exceptions import AuthProviderConfigError
         from airweave.domains.sources.token_providers.protocol import (
             ManagedAuthProvider,
             ManagedToolAuthProvider,
@@ -140,6 +164,7 @@ class ComposioAuthProvider(BaseAuthProvider):
                 "https://backend.composio.dev/api/v3/connected_accounts/"
                 + quote(self.account_id, safe=""),
             )
+        availability = _AccountAvailability.from_response(account)
         if account.get("id") != self.account_id:
             raise AuthProviderConfigError(
                 "Connected account identity does not match", provider_name="composio"
@@ -158,7 +183,11 @@ class ComposioAuthProvider(BaseAuthProvider):
             raise AuthProviderConfigError(
                 "Connected account auth config does not match", provider_name="composio"
             )
-        if account.get("status", "").upper() != "ACTIVE":
+        if (
+            account.get("status", "").upper() != "ACTIVE"
+            or availability.is_disabled
+            or availability.auth_config.is_disabled
+        ):
             from airweave.domains.auth_provider.exceptions import AuthProviderAuthError
 
             raise AuthProviderAuthError(

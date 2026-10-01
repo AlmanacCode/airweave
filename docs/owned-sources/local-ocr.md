@@ -19,6 +19,11 @@ Without the path, local OCR stays disabled. Missing configured models fail start
 Inference does not download models. Other languages require provisioning their
 model files and explicitly adding their language codes.
 
+Changing OCR configuration does not automatically rebuild published generations.
+Retry failed projections explicitly; use the existing source reprojection/version
+operation when replacing already-published text. Do not silently mix a changed
+extraction configuration into a claim that an old generation was reprocessed.
+
 The configured chain is local OCR, then Mistral, then Docling. Only unresolved
 files reach the next configured provider; successful files are not processed
 again. A configured cloud fallback can incur its normal charges. Local OCR uses
