@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from evaluation.retrieval import (
     Dataset,
+    DuplicateGroup,
     Judgment,
     Query,
     Result,
@@ -79,6 +80,7 @@ def test_failed_query_counts_and_unjudged_is_not_labeled_irrelevant():
     assert report.queries[0].unjudged_in_top_10 == 1
     assert report.queries[2].correctly_empty is False
     assert any("synthetic" in warning for warning in report.warnings)
+    assert report.queries[0].duplicates is None
 
 
 def test_latency_conditions_failures_and_tail_are_separate():
@@ -154,3 +156,77 @@ def test_no_answer_success_is_separate_from_answerable_metrics():
     report = summarize(dataset, observation)
     assert report.aggregate == {}
     assert report.queries[0].correctly_empty is True
+
+
+def test_redundant_originals_remain_in_scores_and_unknown_diversity_stays_unknown():
+    query = Query(
+        id="copies",
+        text="Find the original note",
+        expectation="relevant_records",
+        expectation_assessor="human",
+        judgments=tuple(
+            Judgment(record_id=record, relevance=3, assessor="human")
+            for record in ("a", "b", "c")
+        ),
+        duplicate_groups=(
+            DuplicateGroup(record_ids=("a", "b", "c"), assessor="agent"),
+        ),
+    )
+    dataset = Dataset(corpus_id="copies", version="v1", queries=(query,))
+    observation = Run(
+        system="copies",
+        corpus_id=dataset.corpus_id,
+        dataset_sha256=dataset.fingerprint(),
+        results=(
+            Result(
+                query_id=query.id,
+                status="partial",
+                record_ids=("a", "b", "c", "unknown"),
+            ),
+        ),
+    )
+    report = summarize(dataset, observation)
+    row = report.queries[0]
+    assert row.scores["nDCG@10"] == 1
+    assert row.scores["Precision@5"] == 0.6
+    assert row.returned == 4 and row.status == "partial"
+    assert row.duplicates.grouped_records == 3
+    assert row.duplicates.duplicate_slots == 2
+    assert row.duplicates.unassigned_records == 1
+    assert row.assessors == ("agent", "human")
+    assert any("not exclusively human" in warning for warning in report.warnings)
+    outside = observation.model_copy(
+        update={
+            "results": (
+                Result(
+                    query_id=query.id,
+                    status="success",
+                    record_ids=tuple(f"unassigned-{i}" for i in range(20)) + ("a", "b"),
+                ),
+            )
+        }
+    )
+    cutoff = summarize(dataset, outside).queries[0].duplicates
+    assert (
+        cutoff.grouped_records,
+        cutoff.duplicate_slots,
+        cutoff.unassigned_records,
+    ) == (0, 0, 20)
+    unlabeled = query.model_copy(update={"duplicate_groups": ()})
+    assert (
+        dataset.fingerprint()
+        != dataset.model_copy(update={"queries": (unlabeled,)}).fingerprint()
+    )
+
+
+@pytest.mark.parametrize(
+    "members",
+    [(("meeting", "meeting"),), (("meeting", "missing"),), (("meeting", "spam"),)],
+)
+def test_duplicate_labels_cannot_repeat_invent_or_contradict_judgments(members):
+    fields = corpus().queries[0].model_dump()
+    fields["duplicate_groups"] = [
+        {"record_ids": records, "assessor": "synthetic"} for records in members
+    ]
+    with pytest.raises(ValidationError):
+        Query.model_validate(fields)

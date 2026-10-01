@@ -35,6 +35,13 @@ class Judgment(Value):
     assessor: Literal["human", "agent", "synthetic"]
 
 
+class DuplicateGroup(Value):
+    """Distinct originals judged redundant for this query's intent and filters."""
+
+    record_ids: tuple[Identifier, ...] = Field(min_length=2)
+    assessor: Literal["human", "agent", "synthetic"]
+
+
 class Query(Value):
     """A fixed intent with explicit known-answer or no-answer expectation."""
 
@@ -44,6 +51,7 @@ class Query(Value):
     expectation: Literal["relevant_records", "no_answer"]
     expectation_assessor: Literal["human", "agent", "synthetic"]
     judgments: tuple[Judgment, ...]
+    duplicate_groups: tuple[DuplicateGroup, ...] = ()
 
     @model_validator(mode="after")
     def validate_judgments(self):
@@ -56,6 +64,21 @@ class Query(Value):
             raise ValueError("Query expectation conflicts with positive judgments")
         if not self.text.strip() or len(self.tags) != len(set(self.tags)):
             raise ValueError("Query text must be nonblank and tags unique")
+        grades = {j.record_id: j.relevance for j in self.judgments}
+        assigned = set()
+        for group in self.duplicate_groups:
+            for record in group.record_ids:
+                if record in assigned:
+                    raise ValueError(
+                        "Duplicate-group members must be disjoint and unique"
+                    )
+                if record not in grades:
+                    raise ValueError(
+                        "Duplicate-group members require relevance judgments"
+                    )
+                assigned.add(record)
+            if len({grades[record] for record in group.record_ids}) != 1:
+                raise ValueError("Duplicate-group members must have equal relevance")
         return self
 
 
@@ -136,6 +159,15 @@ class Run(Value):
         return self
 
 
+class DuplicateReport(Value):
+    """Known redundant slots; unassigned records are not declared unique."""
+
+    cutoff: Literal[20] = 20
+    grouped_records: int
+    duplicate_slots: int
+    unassigned_records: int
+
+
 class QueryReport(Value):
     """Scores retain failures and label provenance, without copying private query text."""
 
@@ -149,6 +181,7 @@ class QueryReport(Value):
     judged_in_top_10: int
     unjudged_in_top_10: int
     correctly_empty: bool | None
+    duplicates: DuplicateReport | None
 
 
 class LatencyReport(Value):
@@ -219,6 +252,13 @@ def summarize(dataset: Dataset, run: Run) -> Report:
             }
         judged = {j.record_id for j in query.judgments}
         top = result.record_ids[:10]
+        membership = {
+            record: index
+            for index, group in enumerate(query.duplicate_groups)
+            for record in group.record_ids
+        }
+        duplicate_window = result.record_ids[:20]
+        assigned = [membership[r] for r in duplicate_window if r in membership]
         reports.append(
             QueryReport(
                 query_id=query.id,
@@ -229,6 +269,7 @@ def summarize(dataset: Dataset, run: Run) -> Report:
                     sorted(
                         {query.expectation_assessor}
                         | {j.assessor for j in query.judgments}
+                        | {g.assessor for g in query.duplicate_groups}
                     )
                 ),
                 scores=scores,
@@ -237,6 +278,13 @@ def summarize(dataset: Dataset, run: Run) -> Report:
                 unjudged_in_top_10=sum(record not in judged for record in top),
                 correctly_empty=(result.status == "success" and not result.record_ids)
                 if query.expectation == "no_answer"
+                else None,
+                duplicates=DuplicateReport(
+                    grouped_records=len(assigned),
+                    duplicate_slots=len(assigned) - len(set(assigned)),
+                    unassigned_records=len(duplicate_window) - len(assigned),
+                )
+                if query.duplicate_groups
                 else None,
             )
         )
@@ -265,6 +313,8 @@ def summarize(dataset: Dataset, run: Run) -> Report:
         "Recall is against judged relevant records, not all connected-account content.",
         "Unjudged records receive no relevance credit; pool and judge them before conclusions.",
         "Latency uses nearest-rank percentiles; small samples do not establish tail reliability.",
+        "Duplicate counts use explicit query-specific labels; unassigned records may also repeat.",
+        "Relevance metrics score the delivered ranking unchanged, including distinct redundant originals.",
     ]
     if any(assessor != "human" for q in reports for assessor in q.assessors):
         warnings.append(

@@ -58,6 +58,37 @@ empty-success outcome is reported separately, not averaged into nDCG/recall.
 An error returning nothing is not a correct abstention. No-answer labels need
 evidence; merely failing to find an item does not establish absence.
 
+### Duplicate crowding
+
+Distinct record IDs may contain redundant answers. A session trial returned19
+identical messages in20 keyword slots; ordinary record-level relevance metrics
+can reward every copy. Optionally label redundant originals per query:
+
+```json
+"duplicate_groups": [
+  {"record_ids": ["session:message-a", "session:message-b"], "assessor": "human"}
+]
+```
+
+Members must be distinct, disjoint across groups, and have explicit equal
+relevance judgments. Judge redundancy for the query's intent and filters:
+identical text at different dates need not answer a date-specific query equally.
+Sharing a session, mailbox or channel alone does not establish redundancy.
+Agent-generated labels must use `assessor: "agent"`, even when computed from
+exact original text. Keep authoritative message identities intact.
+
+The per-query `duplicates` report counts labeled records, extra slots after the
+first member of each group, and unassigned records in the delivered top20.
+Unassigned records are not claimed unique. Without duplicate labels the report
+is null, not zero. Counts are descriptive; a failed/empty request is not proof of
+good diversity. Existing nDCG/MRR/precision/recall scores use the unchanged ranking;
+the evaluator never silently collapses results to improve scores.
+
+Duplicate labels participate in the dataset fingerprint and assessor provenance.
+This schema revision also changes fingerprints for previously parsed datasets;
+regenerate the fingerprint and bind runs to the validated dataset deliberately.
+Do not copy a hash from a different set of labels to make a comparison pass.
+
 ## Run
 
 ```json
@@ -109,7 +140,7 @@ the denominator. Inspect per-query and tagged regressions alongside aggregates.
 
 Real-corpus collection, request timing instrumentation, reviewed judgments,
 snippet evaluation and corpus-freezing automation are still separate work.
-The four focused synthetic tests verify evaluator behavior, not search quality.
+The focused synthetic tests verify evaluator behavior, not search quality.
 
 Reference: [ir-measures interfaces and formats](https://ir-measur.es/en/latest/getting-started.html).
 
