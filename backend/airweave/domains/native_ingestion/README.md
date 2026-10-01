@@ -1,16 +1,16 @@
 # Native snapshot admission
 
-This internal service retains versioned Almanac snapshots in the existing
-canonical store. It does not provision sources, authenticate callers, enumerate
-Almanac data, or provide a public import endpoint.
-Almanac remains the authority for content and access.
+This service retains versioned Almanac snapshots in the existing canonical
+store. Backend-key HTTP endpoints own source provisioning and the import
+lifecycle; they do not enumerate Almanac data. Almanac remains the authority
+for content and access.
 
-The future trusted publisher must bind a source connection with
-`short_name=almanac` and `config_fields={owner_id, dataset}`. Datasets are
-`knowledge` and `sessions`. The service checks that binding against the fenced
-organization/sync and every snapshot. It does not accept a fabricated Composio
-account. A future API must issue the fence after authenticating the publisher;
-the internal command itself is not an authorization credential.
+The source API binds `short_name=almanac` and
+`config_fields={owner_id, dataset}`. Datasets are `knowledge` and `sessions`.
+The service checks that binding against the authenticated organization, stored
+writer fence and every snapshot. It does not require a fabricated Composio
+account. Internal commands are not authorization credentials; HTTP callers
+cannot supply writer fences.
 
 `NativeIngestionService` owns one existing `UnitOfWork`.
 `NativeIngestionStore` composes `CanonicalRecordStore._fenced_sync` and
@@ -65,10 +65,10 @@ changes-feed contract. Empty pages are valid; only `final=true` begins the exist
 reconciliation phase, and source completion remains a separate cycle barrier.
 Admission, capture, sightings and continuation either commit together or roll back.
 
-HTTP authentication, request receipts, import provisioning, explicit renewal and
-publisher completeness attestation remain unfinished. Cancellation must resolve
-the job's actual bound source; a caller-supplied source ID is insufficient evidence
-for authorizing a job cancellation.
+HTTP authentication, receipts, provisioning and completion/cancellation are
+implemented below. Explicit access renewal and authoritative publisher
+completeness remain pending. Native jobs cannot be cancelled through the generic
+provider route: the guard checks the actual job's sync identity.
 
 ## Native search projection
 
@@ -92,8 +92,8 @@ or make them downloadable; attachment acquisition is still separate work.
 
 Native indexed sources use the same publication and access validation as provider
 sources, without a provider registry entry or fabricated OAuth connection. This
-is an index capability, not an authentication grant. The trusted publisher and
-owner-binding API must still be implemented before exposing native ingestion.
+is an index capability, not an authentication grant. The source API binds the
+owner; a trusted authoritative publisher is still required for real ingestion.
 
 ## Trusted source and import identity
 
@@ -103,8 +103,7 @@ Concurrent requests serialize through the existing Sync primary key. Collection
 changes and unexplained partial state conflict; an exact ensure never reopens
 withdrawn availability. This setup is not proof of imported or indexed content.
 
-`NativeImportStore` is the internal start/read transaction primitive, not yet an
-HTTP publisher API. A bounded request key derives an existing SyncJob primary
+`NativeImportStore` owns the start/read transaction behind the import HTTP API. A bounded request key derives an existing SyncJob primary
 key. Exact retries recover the original state, even after cancellation or source
 withdrawal; they never activate another writer. A changed body conflicts. New
 imports require an available source and cannot replace another active writer.
@@ -115,8 +114,9 @@ remain until the subsequent declared scans reconcile them.
 
 Publisher-declared bounded snapshots use discovery-only completion policies;
 complete dataset snapshots use exhaustive policies. This declaration does not
-itself certify completeness: final scopes, stable export boundaries, receipts,
-renewal and import completion/cancellation still need their HTTP lifecycle.
+itself certify completeness. The HTTP lifecycle verifies final scopes and
+receipts; the publisher must establish stable export boundaries. Explicit access
+renewal remains a separate unfinished capability.
 
 ## Import HTTP and page receipts
 
@@ -126,8 +126,8 @@ analytics redact native paths/parameters, but infrastructure access logs may
 still record request URLs. Validation and unexpected exceptions do not log
 native request contents through the application middleware.
 
-`NativePageStore.commit` remains an internal transaction primitive until scope
-endpoints and completion are wired. It resolves stored writer authority, admits
+`NativePageStore.commit` is the transaction behind PUT `/pages`.
+It resolves stored writer authority, admits
 the page, advances its cursor and retains one bounded receipt in the existing
 scan continuation. No second journal or original-content copy is created. Exact
 retries of the current page return its acknowledgement. Changed bodies, old CAS
