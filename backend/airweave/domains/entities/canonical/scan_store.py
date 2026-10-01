@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timezone
+from typing import Protocol
 from uuid import UUID, uuid4
 
 from pydantic import JsonValue
@@ -55,6 +56,7 @@ from airweave.domains.entities.canonical.store import (
 )
 from airweave.models.capture_scan import CaptureScan
 from airweave.models.entity import Entity
+from airweave.models.sync import Sync
 from airweave.models.sync_cursor import SyncCursor
 
 
@@ -214,6 +216,20 @@ def attest_planned_owner(cycle: CaptureCycle, request: BeginScan, parent: Entity
         raise ScanConflict("Scope owner changed during plan selection")
 
 
+class LockedPageCapture(Protocol):
+    """Internal composition: capture the entire page under the caller's writer lock.
+
+    Implementations must not commit. This is code-owned behavior, never HTTP data.
+    The surrounding scan transaction owns scope checks and continuation advancement.
+    """
+
+    async def __call__(
+        self, db: AsyncSession, sync: Sync, batch: CaptureBatch, *, seen_id: UUID
+    ) -> CaptureResult:
+        """Capture changes and sightings atomically using the existing sweep identity."""
+        ...
+
+
 class CanonicalScanStore:
     """Reuse record capture, lock ordering and journal semantics for recoverable scans."""
 
@@ -368,7 +384,13 @@ class CanonicalScanStore:
         await db.flush()
         return await self._state(db, row)
 
-    async def page(self, db: AsyncSession, request: CommitScanPage) -> ScanResult:
+    async def page(
+        self,
+        db: AsyncSession,
+        request: CommitScanPage,
+        *,
+        capture_page: LockedPageCapture | None = None,
+    ) -> ScanResult:
         """Capture and advance the page as one transaction, never a partial acknowledgement."""
         sync = await self.records._fenced_sync(db, request.fence)
         _, cycle = await attest_cycle(db, request.fence, request.cycle_id)
@@ -414,7 +436,8 @@ class CanonicalScanStore:
             for record in request.discovered_records
         ):
             raise ScanConflict("Discovered originals must be verified independent declared roots")
-        captured = await self.records._capture_locked(
+        capture = capture_page or self.records._capture_locked
+        captured = await capture(
             db,
             sync,
             CaptureBatch(fence=request.fence, records=request.records),

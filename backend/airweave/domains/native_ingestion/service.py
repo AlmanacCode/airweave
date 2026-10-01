@@ -4,7 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.models import CaptureResult
-from airweave.domains.native_ingestion.models import IngestNativeBatch
+from airweave.domains.entities.canonical.scan_models import ScanResult
+from airweave.domains.native_ingestion.models import IngestNativeBatch, IngestNativePage
 from airweave.domains.native_ingestion.store import NativeIngestionStore
 
 
@@ -19,3 +20,8 @@ class NativeIngestionService:
         """Admit one bounded snapshot batch under its current writer fence."""
         async with UnitOfWork(db):
             return await self.store.ingest(db, request)
+
+    async def page(self, db: AsyncSession, request: IngestNativePage) -> ScanResult:
+        """Commit admitted originals, sweep sightings and continuation together."""
+        async with UnitOfWork(db):
+            return await self.store.page(db, request)

@@ -1,10 +1,18 @@
 """Versioned native snapshots, distinct from provider observations and originals."""
 
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from airweave.domains.entities.canonical.requests import RecordIdentity, WriterFence
+from airweave.domains.entities.canonical.requests import (
+    CaptureRecord,
+    CompletedScope,
+    RecordIdentity,
+    ScanVersion,
+    WriterFence,
+)
+from airweave.domains.entities.canonical.scan_models import ScanContinuation
 
 
 class NativeModel(BaseModel):
@@ -92,3 +100,21 @@ class IngestNativeBatch(NativeModel):
         if len(set(keys)) != len(keys):
             raise ValueError("A native batch must contain unique record identities")
         return self
+
+
+class NativeAdmission(NativeModel):
+    """Admitted changes and exact retained retries under the current writer lock."""
+
+    records: tuple[CaptureRecord, ...]
+    unchanged_ids: tuple[UUID, ...]
+
+
+class IngestNativePage(IngestNativeBatch):
+    """Native originals plus the existing scan CAS; empty final pages are valid."""
+
+    snapshots: tuple[NativeSnapshot, ...] = Field(max_length=500)
+    scope: CompletedScope
+    cycle_id: UUID
+    expected: ScanVersion
+    continuation: ScanContinuation
+    final: bool = False

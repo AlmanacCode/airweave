@@ -47,6 +47,29 @@ The publisher must not invent a version from capture time or an observation coun
 Tests use the existing disposable PostgreSQL fixture, including actual migration
 schemas and transaction rollback. They do not contact a provider or production.
 
+## Atomic snapshot pages
+
+`IngestNativePage` composes native admission with the existing canonical scan
+transaction. `CanonicalScanStore.page` accepts an internal `LockedPageCapture`
+implementation; it is code-owned behavior, never a request-supplied callback.
+The scan still owns scope validation, CAS, continuation and final-page state.
+Native `admit_locked` returns typed changed observations and unchanged record IDs.
+An unchanged record in a new sweep must pass current parent-version and active
+visibility checks before its sighting is stamped. This changes neither its
+canonical revision nor its payload and never restores withdrawn content.
+
+Ordinary exact `ingest` retries still acknowledge retained data without claiming
+fresh membership. Snapshot pages enumerate active upserts only; authoritative
+tombstones continue through ordinary ingestion. This page operation is not a
+changes-feed contract. Empty pages are valid; only `final=true` begins the existing
+reconciliation phase, and source completion remains a separate cycle barrier.
+Admission, capture, sightings and continuation either commit together or roll back.
+
+HTTP authentication, request receipts, import provisioning, explicit renewal and
+publisher completeness attestation remain unfinished. Cancellation must resolve
+the job's actual bound source; a caller-supplied source ID is insufficient evidence
+for authorizing a job cancellation.
+
 ## Native search projection
 
 `projection.py` supplies offline inputs to the existing canonical projector.
