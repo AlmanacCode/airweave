@@ -135,3 +135,22 @@ versions, changed reconciliation state and cancelled writers conflict rather
 than reapply writes. Cursors are bounded to32KiB, leaving receipt space inside
 the existing64KiB continuation limit. Capture acknowledgement is distinct from
 index publication or whole-import completion.
+
+## Scope HTTP workflow
+
+Under an active import, PUT `/scopes` begins or resumes an exact scope;
+POST `/scopes/read` reads its composite identity from the body without mutation;
+PUT `/pages` commits a page; POST `/scopes/reconcile` advances bounded
+reconciliation after the final page. Responses use `bounded`/`complete` coverage
+and an independent phase, hide writer credentials and internal receipt digests,
+and retain the caller cursor plus last acknowledgement for recovery. Parent
+epochs are resolved under the server's writer lock. A new import can replace a
+prior-cycle scan using its locked version; same-cycle restarts require explicit CAS.
+
+Bounded native imports use observed membership: only parents seen in their
+current completed inventory can admit child scopes or require transcripts for
+completion. Unseen retained sessions remain available but are not fresh members.
+Default provider membership and checkpoint digests are unchanged. Bounded scope
+completion never becomes evidence of exhaustive account discovery. Scope reads
+currently require an active import; durable terminal summaries and historical
+scope availability are still part of import finalization work.

@@ -22,8 +22,8 @@ from airweave.models import Collection, Organization, SyncJob
 from airweave.models.vector_db_deployment_metadata import VectorDbDeploymentMetadata
 
 
-@pytest.fixture
-async def native_api(database, monkeypatch):
+@pytest.fixture(params=["knowledge"])
+async def native_api(database, monkeypatch, request):
     org = uuid4()
     async with database() as db:
         db.add(Organization(id=org, name="Native API"))
@@ -46,7 +46,7 @@ async def native_api(database, monkeypatch):
         source = await NativeSources(sources).ensure(
             db,
             org,
-            EnsureNativeSource(owner_id="owner", dataset="knowledge", collection="native-api"),
+            EnsureNativeSource(owner_id="owner", dataset=request.param, collection="native-api"),
         )
     service = NativeImports(NativeImportStore(sources, CanonicalRecordStore()))
     ctx = SimpleNamespace(is_api_key_auth=True, organization=SimpleNamespace(id=org))
