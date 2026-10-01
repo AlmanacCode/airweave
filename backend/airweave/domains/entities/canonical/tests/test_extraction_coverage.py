@@ -92,6 +92,10 @@ async def test_message_pdf_video_and_missing_part_publish_truthful_coverage(
         },
         completeness="partial",
     )
+    item.payload["payload"]["parts"][0] = part(
+        "Intact fundraising email body: नमस्ते — café".encode(),
+        headers=[{"name": "Content-Type", "value": "text/plain; charset=gb2312"}],
+    )
     await capture(database, service, fence, item)
     store = CanonicalProjectionStore()
     target = destination()
@@ -112,6 +116,9 @@ async def test_message_pdf_video_and_missing_part_publish_truthful_coverage(
             "unavailable_original",
         ]
         assert coverage.parts[1].key == "/payload/parts/1"
+        recovery = coverage.parts[0].charset_recoveries[0]
+        assert recovery.source_path == "/payload/parts/0"
+        assert recovery.from_charset == "gb2312" and recovery.to_charset == "utf-8"
         assert (
             coverage.parts[1].kind == "file" and coverage.parts[1].media_type == "application/pdf"
         )

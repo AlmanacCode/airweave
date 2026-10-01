@@ -84,6 +84,24 @@ async def test_plain_charset_body_and_quoted_address_are_preserved(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_mislabeled_utf8_body_is_recovered_without_changing_original(tmp_path):
+    text = "<p>नमस्ते — café</p>"
+    source = record(
+        part(
+            text.encode(),
+            "text/html",
+            headers=[{"name": "Content-Type", "value": "text/html; charset=gb2312"}],
+        )
+    )
+    before = source.model_dump()
+    result = await map_gmail(source, AsyncMock(), tmp_path)
+    assert next(tmp_path.glob("*.html")).read_text() == text
+    assert result.parts[0].part.charset_recoveries[0].source_path == "/payload"
+    assert result.parts[0].part.charset_recoveries[0].from_charset == "gb2312"
+    assert source.model_dump() == before
+
+
+@pytest.mark.asyncio
 async def test_alternative_prefers_full_html_not_plain_duplicate_or_snippet(tmp_path):
     source = record(
         {

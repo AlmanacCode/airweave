@@ -106,6 +106,23 @@ async def test_mixed_related_alternative_preserves_unicode_metadata_and_attachme
 
 
 @pytest.mark.asyncio
+async def test_mislabeled_utf8_mime_retains_original_and_discloses_recovery(tmp_path):
+    text = "नमस्ते — café"
+    raw = (
+        b"Content-Type: text/plain; charset=gb2312\r\nContent-Transfer-Encoding: 8bit\r\n\r\n"
+        + text.encode()
+    )
+    record, storage = source(raw)
+    before = record.model_dump()
+    result = await map_outlook(record, storage, tmp_path)
+    assert text in Path(result.entities[0].local_path).read_text()
+    recovery = result.parts[0].part.charset_recoveries[0]
+    assert recovery.source_path == "/mime" and recovery.from_charset == "gb2312"
+    assert record.model_dump() == before
+    assert storage.read_file.return_value == raw
+
+
+@pytest.mark.asyncio
 async def test_latin_charset_and_explicit_related_root_are_respected(tmp_path):
     message = EmailMessage()
     message.set_content("café <full text>", charset="iso-8859-1")

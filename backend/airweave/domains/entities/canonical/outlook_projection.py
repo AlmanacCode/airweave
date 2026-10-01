@@ -13,7 +13,8 @@ from email.utils import quote
 from pathlib import Path
 
 from airweave.domains.entities.canonical.blob_materializer import read_blob, write_blob
-from airweave.domains.entities.canonical.extraction_models import ExtractionPart
+from airweave.domains.entities.canonical.extraction_models import CharsetRecovery, ExtractionPart
+from airweave.domains.entities.canonical.mime_text import decode_mime_text
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_inputs import ProjectionInput, ProjectionInputs
 from airweave.domains.storage.protocols import StorageBackend
@@ -114,6 +115,7 @@ class OutlookProjection:
         self.native = native
         self.parts: list[ProjectionInput] = []
         self.fragments: list[str] = []
+        self.charset_recoveries: list[CharsetRecovery] = []
 
     def unsupported(self, part: EmailMessage, path: str) -> None:
         """Account for retained content whose semantics are not yet extractable."""
@@ -210,7 +212,12 @@ class OutlookProjection:
         if _file(part) or (not body and part.get("Content-ID")):
             await self.attachment(part, path)
         elif body:
-            text = _decoded(part).decode(part.get_content_charset() or "us-ascii", errors="strict")
+            decoded = decode_mime_text(
+                _decoded(part), part.get_content_charset() or "us-ascii", path
+            )
+            if decoded.recovery is not None:
+                self.charset_recoveries.append(decoded.recovery)
+            text = decoded.text
             self.fragments.append(
                 text if mime == "text/html" else "<pre>" + html.escape(text) + "</pre>"
             )
@@ -227,6 +234,7 @@ class OutlookProjection:
                 kind="body",
                 media_type="text/html",
                 extension=".html",
+                charset_recoveries=tuple(self.charset_recoveries),
             ),
             entity=OutlookMessageEntity(
                 id=native.id,

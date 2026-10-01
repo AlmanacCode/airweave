@@ -10,7 +10,8 @@ from email.utils import formataddr, getaddresses
 from pathlib import Path
 
 from airweave.domains.entities.canonical.blob_materializer import read_blob, write_blob
-from airweave.domains.entities.canonical.extraction_models import ExtractionPart
+from airweave.domains.entities.canonical.extraction_models import CharsetRecovery, ExtractionPart
+from airweave.domains.entities.canonical.mime_text import DecodedText, decode_mime_text
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_inputs import ProjectionInput, ProjectionInputs
 from airweave.domains.storage.protocols import StorageBackend
@@ -63,10 +64,10 @@ async def _body(
     return content
 
 
-def _decode_text(content: bytes, part: dict) -> str:
+def _decode_text(content: bytes, part: dict, path: str) -> DecodedText:
     header = Message()
     header["Content-Type"] = _header(part, "Content-Type") or part["mimeType"]
-    return content.decode(header.get_content_charset() or "utf-8", errors="strict")
+    return decode_mime_text(content, header.get_content_charset() or "utf-8", path)
 
 
 class GmailProjection:
@@ -78,6 +79,7 @@ class GmailProjection:
         self.storage = storage
         self.directory = directory
         self.attachments: list[ProjectionInput] = []
+        self.charset_recoveries: list[CharsetRecovery] = []
 
     async def attachment(self, part: dict, path: str) -> None:
         """Project retained attachment bytes; keep missing bytes explicit on the original."""
@@ -139,7 +141,10 @@ class GmailProjection:
             await self.attachment(part, path)
             return ""
         content = await _body(part, path, self.record, self.storage)
-        text = _decode_text(content, part)
+        decoded = _decode_text(content, part, path)
+        if decoded.recovery is not None:
+            self.charset_recoveries.append(decoded.recovery)
+        text = decoded.text
         return text if mime == "text/html" else "<pre>" + html.escape(text) + "</pre>"
 
     async def map(self) -> ProjectionInputs:
@@ -174,6 +179,7 @@ class GmailProjection:
                         kind="body",
                         media_type="text/html",
                         extension=".html",
+                        charset_recoveries=tuple(self.charset_recoveries),
                     ),
                     entity=entity,
                 ),

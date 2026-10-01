@@ -5,6 +5,15 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
+class CharsetRecovery(BaseModel):
+    """A disclosed strict UTF-8 recovery after the attempted charset rejected bytes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    source_path: str = Field(min_length=1, max_length=2048)
+    from_charset: str = Field(min_length=1, max_length=256)
+    to_charset: Literal["utf-8"] = "utf-8"
+
+
 class ExtractionPart(BaseModel):
     """Stable source-local identity and format; no private content or download URLs."""
 
@@ -14,6 +23,7 @@ class ExtractionPart(BaseModel):
     kind: Literal["body", "file", "record"]
     media_type: str | None = Field(default=None, max_length=256)
     extension: str | None = Field(default=None, max_length=32)
+    charset_recoveries: tuple[CharsetRecovery, ...] = ()
 
 
 class ExtractionOutcome(ExtractionPart):
