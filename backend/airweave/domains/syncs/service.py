@@ -32,6 +32,7 @@ from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.page_source import CanonicalPageSource
 from airweave.domains.entities.canonical.search_metadata import SEARCH_METADATA_PIPELINE_VERSION
 from airweave.domains.entities.canonical.source import CanonicalSource
+from airweave.domains.owned_provisioning.guard import require_provider_sync
 from airweave.domains.sources.exceptions.classifier import classify_error
 from airweave.domains.sources.types import SourceRegistryEntry
 from airweave.domains.sync_pipeline.config import SyncConfig
@@ -314,6 +315,8 @@ class SyncService(SyncServiceProtocol):
                 status_code=400,
                 detail=f"Cannot cancel job in {sync_job.status} state",
             )
+
+        await require_provider_sync(db, sync_job.sync_id, ctx.organization.id)
 
         if sync_job.status == SyncJobStatus.PENDING:
             # PENDING → CANCELLED directly (PENDING → CANCELLING is invalid)

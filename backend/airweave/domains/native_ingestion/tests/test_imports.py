@@ -139,3 +139,16 @@ async def test_cycle_failure_rolls_back_job_and_fence(database, native, monkeypa
                 db, uuid4(), native.source_connection_id, "request-one"
             )
         assert error.value.status_code == 404
+
+
+async def test_legacy_cancellation_uses_actual_native_sync_identity(database, native, source):
+    from fastapi import HTTPException
+
+    from airweave.domains.owned_provisioning.guard import require_provider_sync
+
+    async with database() as db:
+        with pytest.raises(HTTPException) as error:
+            await require_provider_sync(db, native.sync_id, native.organization_id)
+        assert error.value.status_code == 409
+        _, provider = source
+        await require_provider_sync(db, provider.sync_id, provider.organization_id)

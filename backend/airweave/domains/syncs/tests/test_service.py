@@ -825,7 +825,9 @@ async def test_cancel_job_not_found():
 
     svc = _build_svc(sync_job_repo=job_repo)
     with pytest.raises(HTTPException) as exc_info:
-        await svc.cancel_job(AsyncMock(), job_id=uuid4(), ctx=_mock_ctx())
+        await svc.cancel_job(
+            AsyncMock(scalar=AsyncMock(return_value=None)), job_id=uuid4(), ctx=_mock_ctx()
+        )
     assert exc_info.value.status_code == 404
 
 
@@ -838,7 +840,9 @@ async def test_cancel_job_wrong_status():
 
     svc = _build_svc(sync_job_repo=job_repo)
     with pytest.raises(HTTPException) as exc_info:
-        await svc.cancel_job(AsyncMock(), job_id=uuid4(), ctx=_mock_ctx())
+        await svc.cancel_job(
+            AsyncMock(scalar=AsyncMock(return_value=None)), job_id=uuid4(), ctx=_mock_ctx()
+        )
     assert exc_info.value.status_code == 400
 
 
@@ -856,7 +860,7 @@ async def test_cancel_job_success():
     }
 
     job_sm = AsyncMock()
-    db = AsyncMock()
+    db = AsyncMock(scalar=AsyncMock(return_value=None))
 
     svc = _build_svc(
         sync_job_repo=job_repo,
@@ -880,7 +884,7 @@ async def test_cancel_pending_job_transitions_directly_to_cancelled():
 
     temporal = AsyncMock()
     job_sm = AsyncMock()
-    db = AsyncMock()
+    db = AsyncMock(scalar=AsyncMock(return_value=None))
 
     svc = _build_svc(
         sync_job_repo=job_repo,
@@ -909,7 +913,7 @@ async def test_cancel_job_workflow_not_found_marks_cancelled():
     }
 
     job_sm = AsyncMock()
-    db = AsyncMock()
+    db = AsyncMock(scalar=AsyncMock(return_value=None))
 
     svc = _build_svc(
         sync_job_repo=job_repo,
@@ -942,7 +946,9 @@ async def test_cancel_job_temporal_failure():
 
     svc = _build_svc(sync_job_repo=job_repo, temporal_workflow_service=temporal)
     with pytest.raises(HTTPException) as exc_info:
-        await svc.cancel_job(AsyncMock(), job_id=job_id, ctx=_mock_ctx())
+        await svc.cancel_job(
+            AsyncMock(scalar=AsyncMock(return_value=None)), job_id=job_id, ctx=_mock_ctx()
+        )
     assert exc_info.value.status_code == 502
 
 
@@ -1215,3 +1221,19 @@ async def test_schedule_cleanup_handles_error():
     ctx = _mock_ctx()
     await svc._schedule_cleanup(uuid4(), uuid4(), uuid4(), ctx)
     ctx.logger.error.assert_called_once()
+
+
+async def test_provider_cancellation_rejects_native_job_before_external_actions():
+    job_repo, temporal, state = AsyncMock(), AsyncMock(), AsyncMock()
+    job = _orm_sync_job(job_id=uuid4(), status=SyncJobStatus.RUNNING)
+    job_repo.get.return_value = job
+    svc = _build_svc(
+        sync_job_repo=job_repo, temporal_workflow_service=temporal, job_state_machine=state
+    )
+    with pytest.raises(HTTPException) as error:
+        await svc.cancel_job(
+            AsyncMock(scalar=AsyncMock(return_value=uuid4())), job_id=job.id, ctx=_mock_ctx()
+        )
+    assert error.value.status_code == 409
+    state.transition.assert_not_awaited()
+    temporal.cancel_sync_job_workflow.assert_not_awaited()
