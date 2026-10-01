@@ -8,6 +8,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any, AsyncGenerator, Dict, List, Optional
+from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -36,6 +37,7 @@ from airweave.domains.entities.canonical.requests import (
     CaptureRecord,
     CompletedScope,
     RecordIdentity,
+    parent_container_key,
 )
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
 from airweave.domains.sources.exceptions import SourceAuthError, SourceError, SourceRateLimitError
@@ -58,7 +60,7 @@ from airweave.platform.http_client.retry_helpers import (
 )
 from airweave.platform.sources._base import BaseSource
 from airweave.platform.sources.http_helpers import _parse_retry_after, raise_for_status
-from airweave.platform.sources.slack_content import capture_slack_files
+from airweave.platform.sources.slack_content import SlackMessageFiles, capture_slack_file
 from airweave.platform.sources.slack_errors import SlackApiError
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 
@@ -176,6 +178,15 @@ class SlackMessageContinuation(BaseModel):
     reply_recent: tuple[str, ...] = Field(default=(), max_length=16)
 
 
+class SlackFileContinuation(BaseModel):
+    """Position only in the retained parent inventory, never a mutable provider page."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    parent_id: UUID
+    inventory: str = Field(pattern=r"^[a-f0-9]{64}$")
+    next_index: int = Field(ge=0, le=100)
+
+
 @source(
     name="Slack",
     short_name="slack",
@@ -195,9 +206,28 @@ class SlackMessageContinuation(BaseModel):
 class SlackSource(BaseSource):
     """Capture all accessible conversation history and replies without search truncation."""
 
-    canonical_record_types = ("channel", "message")
-    canonical_container_parents = {"message": "channel"}
-    slack_config: SlackConfig | None = None
+    # Class-level capabilities remain available to the search source registry.
+    canonical_record_types = ("channel", "message", "file")
+    canonical_container_parents = {"message": "channel", "file": "message"}
+    _slack_config: SlackConfig | None = None
+
+    @property
+    def slack_config(self) -> SlackConfig | None:
+        """The source configuration fixes its capture topology before a cycle starts."""
+        return self._slack_config
+
+    @slack_config.setter
+    def slack_config(self, config: SlackConfig) -> None:
+        self._slack_config = config
+        self.canonical_record_types = (
+            ("channel", "message", "file") if config.capture_files else ("channel", "message")
+        )
+        self.canonical_container_parents = (
+            {"message": "channel", "file": "message"}
+            if config.capture_files
+            else {"message": "channel"}
+        )
+
     _verified_principal: SlackPrincipal | None = None
 
     def _require_principal(self) -> SlackPrincipal:
@@ -218,7 +248,7 @@ class SlackSource(BaseSource):
         principal = self._require_principal()
         material = {"version": 2, "team_id": principal.team_id, "user_id": principal.user_id}
         if self.slack_config.capture_files:
-            material["capture_files"] = True
+            material["capture_files"] = "message_owned_children_v1"
         fingerprint = hashlib.sha256(
             json.dumps(
                 material,
@@ -307,8 +337,14 @@ class SlackSource(BaseSource):
 
     def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
         """Keep the established native container identity for this flat provider."""
+        if self.canonical_container_parents.get(record_type) != parent.identity.record_type:
+            raise ValueError("Unsupported Slack child scope")
         return CompletedScope(
-            record_type=record_type, container_id=parent.identity.native_id, parent=parent.identity
+            record_type=record_type,
+            container_id=parent_container_key(parent.identity)
+            if record_type == "file"
+            else parent.identity.native_id,
+            parent=parent.identity,
         )
 
     async def capture_page(
@@ -322,16 +358,86 @@ class SlackSource(BaseSource):
         """Fetch one page; record and nested reply progress are committed by the pipeline."""
         self._require_principal()
         try:
+            if scope.record_type == "file":
+                return await self._file_page(scope, continuation, files, parent)
             page = await self._validated_capture_page(scope, continuation)
             if self.slack_config.capture_files and scope.record_type == "message":
-                records = tuple(
-                    [await capture_slack_files(self, record, files) for record in page.records]
+                for record in page.records:
+                    self._file_inventory(record.payload)
+                page = page.model_copy(
+                    update={
+                        "records": tuple(
+                            record.model_copy(
+                                update={
+                                    "payload_schema_version": 2,
+                                    "descendant_visibility_fields": ("files",),
+                                    "completeness": "complete",
+                                }
+                            )
+                            for record in page.records
+                        )
+                    }
                 )
-                page = page.model_copy(update={"records": records})
             return page
         except ValidationError:
             # Validation diagnostics may contain private provider values.
             raise ValueError("Slack capture returned invalid page or continuation data") from None
+
+    @staticmethod
+    def _file_inventory(payload: dict[str, JsonValue]) -> list[dict[str, JsonValue]]:
+        metadata = SlackMessageFiles.model_validate(payload).files
+        if len({file.id for file in metadata}) != len(metadata):
+            raise ValueError("Slack message contains duplicate file identities")
+        return payload.get("files", [])
+
+    async def _file_page(
+        self,
+        scope: CompletedScope,
+        continuation: ScanContinuation,
+        files: FileService,
+        parent: SourceRecord | None,
+    ) -> CapturePage:
+        if (
+            not self.slack_config.capture_files
+            or parent is None
+            or parent.identity.record_type != "message"
+            or parent.payload_schema_version != 2
+            or parent.content_access != "available"
+            or parent.deleted_at is not None
+            or scope != self.child_scope(parent, "file")
+        ):
+            raise ValueError("Slack file scope requires its current retained message")
+        inventory = self._file_inventory(parent.payload)
+        digest = hashlib.sha256(
+            json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        state = (
+            SlackFileContinuation.model_validate(continuation.value)
+            if continuation.value
+            else SlackFileContinuation(parent_id=parent.id, inventory=digest, next_index=0)
+        )
+        if state.parent_id != parent.id or state.inventory != digest:
+            raise InvalidScanContinuation("Slack retained file inventory changed")
+        if state.next_index > len(inventory):
+            raise InvalidScanContinuation("Slack file continuation exceeds retained inventory")
+        if state.next_index == len(inventory):
+            return CapturePage(records=(), continuation=continuation, final=True)
+        native = inventory[state.next_index]
+        item = CaptureRecord(
+            identity=RecordIdentity(
+                record_type="file", native_id=native["id"], container_id=scope.container_id
+            ),
+            parent=parent.identity,
+            payload=native,
+            observed_at=datetime.now(timezone.utc),
+        )
+        captured = await capture_slack_file(self, item, files)
+        following = state.model_copy(update={"next_index": state.next_index + 1})
+        return CapturePage(
+            records=(captured,),
+            continuation=ScanContinuation(value=following.model_dump(mode="json")),
+            final=following.next_index == len(inventory),
+        )
 
     async def _validated_capture_page(
         self, scope: CompletedScope, continuation: ScanContinuation

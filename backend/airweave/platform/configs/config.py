@@ -805,8 +805,8 @@ class SlackConfig(SourceConfig):
 
     capture_files: bool = Field(
         default=False,
-        description="Opt in to original file acquisition before each complete page commits; "
-        "aggregate page byte and duration budgets remain unqualified.",
+        description="Opt in to message-owned file children, each committed independently; "
+        "leave disabled until reader and migration qualification complete.",
     )
 
     expected_team_id: str | None = Field(default=None, min_length=1, pattern=r"^\S+$")

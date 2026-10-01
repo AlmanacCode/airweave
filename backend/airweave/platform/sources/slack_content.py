@@ -67,40 +67,37 @@ def _original_url(file: SlackFileMetadata) -> str | None:
     return url
 
 
-async def capture_slack_files(
+async def capture_slack_file(
     source: "SlackSource", record: CaptureRecord, files: FileService
 ) -> CaptureRecord:
-    """Whole-page caller commits only after every message acquisition succeeds."""
-    metadata = SlackMessageFiles.model_validate(record.payload).files
-    if not metadata:
-        return record
-    if len({file.id for file in metadata}) != len(metadata):
-        raise ValueError("Slack message contains duplicate file identities")
-    outcomes = []
+    """Acquire one message-owned file; the caller commits its child page atomically."""
+    file = SlackFileMetadata.model_validate(record.payload)
+    if record.identity.record_type != "file" or record.identity.native_id != file.id:
+        raise ValueError("Slack file payload does not match its record identity")
+    file, native, reason = await _enrich(source, file)
     blobs = []
-    for index, file in enumerate(metadata):
-        file, native, reason = await _enrich(source, file)
-        if reason is None:
-            if file.is_external or file.mode == "external":
-                reason = "unsupported_external"
-            elif file.size is not None and file.size > files.MAX_FILE_SIZE_BYTES:
-                reason = "oversized"
-            elif file.size is None or not file.mimetype or (url := _original_url(file)) is None:
-                reason = "missing_metadata"
-            else:
-                blob, reason = await _download(source, file, url, files)
-                if blob is not None:
-                    blobs.append(blob.model_copy(update={"source_path": f"/files/{index}"}))
-        outcomes.append(
+    if reason is None:
+        if file.is_external or file.mode == "external":
+            reason = "unsupported_external"
+        elif file.size is not None and file.size > files.MAX_FILE_SIZE_BYTES:
+            reason = "oversized"
+        elif file.size is None or not file.mimetype or (url := _original_url(file)) is None:
+            reason = "missing_metadata"
+        else:
+            blob, reason = await _download(source, file, url, files)
+            if blob is not None:
+                blobs.append(blob.model_copy(update={"source_path": ""}))
+    manifest = SlackFileManifest(
+        files=(
             SlackFileOutcome(
-                index=index,
+                index=0,
                 native_id=file.id,
                 outcome="captured" if reason is None else "unavailable",
                 reason=reason,
                 file=native,
-            )
+            ),
         )
-    manifest = SlackFileManifest(files=tuple(outcomes))
+    )
     reference = await files.store_canonical_blob(
         manifest.model_dump_json().encode(), media_type="application/json"
     )
@@ -108,7 +105,7 @@ async def capture_slack_files(
     return record.model_copy(
         update={
             "blobs": tuple(blobs),
-            "completeness": "partial" if any(item.reason for item in outcomes) else "complete",
+            "completeness": "partial" if reason else "complete",
         }
     )
 
