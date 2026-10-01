@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 from sqlalchemy import and_, case, func, or_, select, tuple_
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from airweave.api.context import ApiContext
 from airweave.domains.entities.canonical.coverage import capture_coverage
@@ -35,6 +35,18 @@ from airweave.models.entity import Entity
 from airweave.models.projection_generation import ProjectionGeneration
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
+
+
+class _SourceScope(BaseModel):
+    """Detached authorization/index snapshot; revalidated before returning any hit."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: UUID
+    sync_id: UUID
+    short_name: str
+    readable_collection_id: str
+    collection_id: UUID
+    index_pipeline_version: int
 
 
 class _EnrichmentRecord(BaseModel):
@@ -65,26 +77,25 @@ class OwnedSearchService:
         self._registry = registry
 
     async def search(
-        self, db: AsyncSession, ctx: ApiContext, request: OwnedSearchRequest
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        ctx: ApiContext,
+        request: OwnedSearchRequest,
     ) -> OwnedSearchResponse:
         """Resolve exact authorized scopes before any embedding/index request."""
-        scopes, groups = await self._resolve_scopes(db, ctx, request)
-        if self._filtered(request):
-            versions = (
-                await db.scalars(
-                    select(Sync.index_pipeline_version).where(
-                        Sync.organization_id == ctx.organization.id, Sync.id.in_(request.sync_ids)
-                    )
-                )
-            ).all()
-            if any(version < SEARCH_METADATA_PIPELINE_VERSION for version in versions):
-                raise HTTPException(
-                    409,
-                    {
-                        "code": "reindex_required",
-                        "message": "Selected sources need canonical search metadata re-projection",
-                    },
-                )
+        async with sessions() as db:
+            scopes, groups = await self._resolve_scopes(db, ctx, request)
+        if self._filtered(request) and any(
+            scope.index_pipeline_version < SEARCH_METADATA_PIPELINE_VERSION
+            for scope in scopes.values()
+        ):
+            raise HTTPException(
+                409,
+                {
+                    "code": "reindex_required",
+                    "message": "Selected sources need canonical search metadata re-projection",
+                },
+            )
         scope_snapshot = self._scope_identity(scopes)
         hits, scores, exclusions, postfiltered = {}, {}, 0, 0
         engine_partial, full = False, False
@@ -96,31 +107,35 @@ class OwnedSearchService:
         )
         prepared_query = await self._executor.prepare_query(plan) if groups else None
         for (collection_id, readable_id), sync_ids in groups.items():
-            results = await self._executor.execute(
-                plan=plan,
-                prepared_query=prepared_query,
-                user_filter=[FilterGroup(conditions=self._prefilters(request, sync_ids))],
-                collection_id=str(collection_id),
-                db=db,
-                ctx=ctx,
-                collection_readable_id=readable_id,
-                indexed_only=True,
-            )
+            # A new session has no checked-out connection before indexed retrieval:
+            # this path has neither principal ACL discovery nor provider federation.
+            async with sessions() as db:
+                results = await self._executor.execute(
+                    plan=plan,
+                    prepared_query=prepared_query,
+                    user_filter=[FilterGroup(conditions=self._prefilters(request, sync_ids))],
+                    collection_id=str(collection_id),
+                    db=db,
+                    ctx=ctx,
+                    collection_readable_id=readable_id,
+                    indexed_only=True,
+                )
+                group_hits, group_scores, rejected, filtered = await self._enrich(
+                    db, ctx, request, sync_ids, scopes, results
+                )
             engine_partial |= results.engine_partial
             exclusions += results.excluded_candidates
             full |= len(results.results) + results.excluded_candidates >= 200
-            group_hits, group_scores, rejected, filtered = await self._enrich(
-                db, ctx, request, sync_ids, scopes, results
-            )
             hits.update(group_hits)
             scores.update(group_scores)
             exclusions += rejected
             postfiltered += filtered
-        sources = await self._coverage(db, ctx, request)
-        fresh_scopes, _ = await self._resolve_scopes(db, ctx, request)
-        if self._scope_identity(fresh_scopes) != scope_snapshot:
-            raise HTTPException(404, "Requested indexed sources changed during retrieval")
-        eligible = await self._final_publications(db, ctx, request, scores, scope_snapshot)
+        async with sessions() as db:
+            sources = await self._coverage(db, ctx, request)
+            fresh_scopes, _ = await self._resolve_scopes(db, ctx, request)
+            if self._scope_identity(fresh_scopes) != scope_snapshot:
+                raise HTTPException(404, "Requested indexed sources changed during retrieval")
+            eligible = await self._final_publications(db, ctx, request, scores, scope_snapshot)
         exclusions += len(hits.keys() - eligible)
         ranked = sorted(hits.keys() & eligible, key=lambda key: (-scores[key][0], str(key)))
         return OwnedSearchResponse(
@@ -196,40 +211,51 @@ class OwnedSearchService:
 
     async def _resolve_scopes(
         self, db: AsyncSession, ctx: ApiContext, request: OwnedSearchRequest
-    ) -> tuple[dict[UUID, SourceConnection], dict[tuple[UUID, str], list[UUID]]]:
+    ) -> tuple[dict[UUID, _SourceScope], dict[tuple[UUID, str], list[UUID]]]:
         rows = (
-            await db.execute(
-                select(SourceConnection, Collection.id)
-                .join(
-                    Collection,
-                    and_(
-                        Collection.readable_id == SourceConnection.readable_collection_id,
-                        Collection.organization_id == ctx.organization.id,
-                    ),
+            (
+                await db.execute(
+                    select(
+                        SourceConnection.id,
+                        SourceConnection.sync_id,
+                        SourceConnection.short_name,
+                        SourceConnection.readable_collection_id,
+                        Collection.id.label("collection_id"),
+                        Sync.index_pipeline_version,
+                    )
+                    .join(
+                        Collection,
+                        and_(
+                            Collection.readable_id == SourceConnection.readable_collection_id,
+                            Collection.organization_id == ctx.organization.id,
+                        ),
+                    )
+                    .join(
+                        Sync,
+                        and_(
+                            Sync.id == SourceConnection.sync_id,
+                            Sync.organization_id == ctx.organization.id,
+                        ),
+                    )
+                    .where(
+                        SourceConnection.organization_id == ctx.organization.id,
+                        SourceConnection.is_authenticated.is_(True),
+                        SourceConnection.sync_id.in_(request.sync_ids),
+                    )
                 )
-                .join(
-                    Sync,
-                    and_(
-                        Sync.id == SourceConnection.sync_id,
-                        Sync.organization_id == ctx.organization.id,
-                    ),
-                )
-                .where(
-                    SourceConnection.organization_id == ctx.organization.id,
-                    SourceConnection.is_authenticated.is_(True),
-                    SourceConnection.sync_id.in_(request.sync_ids),
-                )
-                .execution_options(populate_existing=True)
             )
-        ).all()
-        if len(rows) != len(request.sync_ids) or {row[0].sync_id for row in rows} != set(
+            .mappings()
+            .all()
+        )
+        snapshots = [_SourceScope.model_validate(row) for row in rows]
+        if len(snapshots) != len(request.sync_ids) or {row.sync_id for row in snapshots} != set(
             request.sync_ids
         ):
             raise HTTPException(404, "Requested indexed sources are unavailable")
-        scopes = {row[0].sync_id: row[0] for row in rows}
+        scopes = {row.sync_id: row for row in snapshots}
         allowed_types = set()
         groups = defaultdict(list)
-        for connection, collection_id in rows:
+        for connection in snapshots:
             types = getattr(
                 self._registry.get(connection.short_name).source_class_ref,
                 "canonical_record_types",
@@ -238,7 +264,9 @@ class OwnedSearchService:
             if not types:
                 raise HTTPException(422, "Source does not support owned indexed records")
             allowed_types.update(types)
-            groups[(collection_id, connection.readable_collection_id)].append(connection.sync_id)
+            groups[(connection.collection_id, connection.readable_collection_id)].append(
+                connection.sync_id
+            )
         if set(request.record_types) - allowed_types:
             raise HTTPException(422, "Record type is unsupported by selected sources")
         return scopes, groups
@@ -249,7 +277,7 @@ class OwnedSearchService:
         ctx: ApiContext,
         request: OwnedSearchRequest,
         sync_ids: list[UUID],
-        scopes: dict[UUID, SourceConnection],
+        scopes: dict[UUID, _SourceScope],
         results: SearchResults,
     ) -> tuple[dict[UUID, OwnedSearchHit], dict[UUID, tuple[float, ProjectionLocator]], int, int]:
         locators = [value for result in results.results if (value := self._locator(result))]
@@ -358,9 +386,16 @@ class OwnedSearchService:
         return hits, scores, exclusions, postfiltered
 
     @staticmethod
-    def _scope_identity(scopes: dict[UUID, SourceConnection]) -> set[tuple]:
+    def _scope_identity(scopes: dict[UUID, _SourceScope]) -> set[tuple]:
         return {
-            (sync, row.id, row.short_name, row.readable_collection_id)
+            (
+                sync,
+                row.id,
+                row.short_name,
+                row.readable_collection_id,
+                row.collection_id,
+                row.index_pipeline_version,
+            )
             for sync, row in scopes.items()
         }
 
@@ -391,6 +426,13 @@ class OwnedSearchService:
                         SourceConnection.is_authenticated.is_(True),
                     ),
                 )
+                .join(
+                    Collection,
+                    and_(
+                        Collection.readable_id == SourceConnection.readable_collection_id,
+                        Collection.organization_id == ctx.organization.id,
+                    ),
+                )
                 .where(
                     Entity.organization_id == ctx.organization.id,
                     Sync.organization_id == ctx.organization.id,
@@ -400,6 +442,8 @@ class OwnedSearchService:
                         SourceConnection.id,
                         SourceConnection.short_name,
                         SourceConnection.readable_collection_id,
+                        Collection.id,
+                        Sync.index_pipeline_version,
                     ).in_(list(scope_snapshot)),
                     publications_match(locator for _, locator in scores.values()),
                 )

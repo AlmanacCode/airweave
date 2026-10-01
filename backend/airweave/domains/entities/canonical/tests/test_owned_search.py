@@ -119,6 +119,8 @@ async def http_search(database, indexed):
     )
     app.dependency_overrides[get_db] = session
     app.dependency_overrides[deps.get_context] = lambda: ctx
+    app.dependency_overrides[deps.get_owned_search_context] = lambda: ctx
+    app.dependency_overrides[deps.get_search_session_factory] = lambda: database
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(owned_search=service)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client, vector, ctx, executor, dense

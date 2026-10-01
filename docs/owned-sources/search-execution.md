@@ -46,10 +46,10 @@ running without OOM/restart. No cause-specific retry or timeout increase is just
 by that evidence. Safe status, exception type and elapsed-stage diagnostics are
 being qualified separately in the Almanac adapter.
 
-The current request-owned database session also holds its connection across
-embedding/index waits after the first SQL query. Separating read phases is a
-follow-up requiring explicit auth/session ownership and retained final fences;
-it is not included in embedding reuse and is not a proven cause of the 503.
+The runtime measured here still used a request-owned database session that held
+its connection across embedding/index waits after the first SQL query. The later
+phase-owned implementation below addresses that ownership separately; this was
+not established as the cause of the 503.
 
 
 ## Repeated actual API qualification after embedding reuse
@@ -75,28 +75,11 @@ queueing, HTTP, native engine work and event-loop scheduling. It is **not** evid
 of a PostgreSQL plan switch. Sample 3 independently had an 831 ms SQL fingerprint
 interval. Neither measurement reconstructs the previous unlogged 503/13-second tail.
 
-## Proposed next diagnostics and session ownership (not implemented)
+## Diagnostic design
 
-The current Vespa adapter invokes the synchronous SDK through `asyncio.to_thread`.
-Measure worker start/end alongside the adapter await, and retain only numeric native
-response timing fields if available. This separates thread queue delay from SDK wall
-time without logging YQL, embeddings, results or identities. Do not change query
-ranking, candidate counts, retries or database plans before attributing the tail.
-
-Database phase separation needs an explicit owner. The search route and its auth
-dependency currently share FastAPI's cached `get_db` session. API context contains
-Pydantic snapshots; Auth0 resolution nevertheless flushes a last-active update into
-that session without committing it. Closing an arbitrary borrowed session inside
-the executor would be an unsafe general contract.
-
-A bounded redesign would finish this route's authentication session explicitly,
-then use existing session-factory read contexts: scopes/version to a typed detached
-snapshot; embedding preparation without SQL; each collection's network retrieval
-before its session performs visibility/enrichment SQL; finally fresh scopes,
-coverage and exact publication checks in one read phase. Generic executor behavior
-and other routes stay unchanged. Test auth side-effect semantics and revocation
-between phases, including a constrained pool, before claiming reduced occupancy.
-No extra service, table, result cache or concurrent `AsyncSession` use is proposed.
+The private instrumentation below measures worker start/end alongside the Vespa
+adapter await and retains only numeric native response timing fields. It does not
+log YQL, embeddings, results or identities or change ranking and candidate limits.
 
 The installed PyVespa `Vespa.query` creates a fresh `VespaSync` HTTP session per
 call, then retains the full decoded response in `VespaQueryResponse.json`. This is
@@ -159,17 +142,6 @@ Numbers, objects, missing keys and JSON null remain unavailable. Existing provid
 record-kind and allowed-ID checks still apply. Exact publication predicates, indexed
 part coverage, exclusions and the final fresh authorization check are unchanged.
 
-The phase-session proposal remains separate. Installed FastAPI 0.115.14 does not
-provide an early function-scoped yield dependency. A dedicated non-yield owned-search
-auth dependency could resolve the same `ContextResolver` inside an owned read context,
-close that context, and return the detached `ApiContext`. Generic `get_context` remains
-unchanged. The search service could then receive the existing session factory and
-own its read contexts, carrying only typed source snapshots between them. Preserve
-the current read route's Auth0 last-active rollback semantics explicitly; do not add
-an implicit commit or close a caller's borrowed transaction. Qualify a one-connection
-pool while embeddings/Vespa are paused, plus revocation and record changes between
-phases, before adopting this separate proposal.
-
 Projection qualification: 20 owned-search/visibility PostgreSQL tests passed against
 an isolated archive of `a539e40979871f5ba23428b802845b5f1329f6c9` with only the
 search implementation and its test file overlaid. Existing card checks now assert
@@ -179,3 +151,36 @@ missing/null/numeric/object/invalid strings and non-Gmail records. Existing stal
 foreign-source, unsupported-part and later-collection mutation fences also passed.
 This is scoped correctness/resource-boundary qualification, not a measured speedup
 or a claim that the candidate runtime has been updated with this change.
+
+
+## Phase-owned search reads
+
+Owned search now closes its own authentication and initial source-scope read
+transactions before embedding preparation. Each collection gets a fresh session:
+it performs no SQL until indexed retrieval returns, then validates publication and
+builds cards. That session closes before the next collection. A final fresh read
+rechecks authorized sources, coverage and every exact publication. Only frozen typed
+source snapshots cross phases. Source collection UUID and pipeline version are part
+of both the scope comparison and final SQL fence, alongside source/account identity.
+A same-name collection replacement or pipeline change cannot reuse the old routing.
+
+The dedicated non-yield dependency calls the existing context resolver. API-key
+checks, Auth0 authentication, rate limiting and caching are unchanged. Closing its
+owned session preserves the existing read route's rollback of Auth0's flushed
+last-active update; this change does not silently commit it. Generic auth dependencies
+and other endpoints remain unchanged. No borrowed session is rolled back or closed.
+
+The session factory is resolved dynamically from the configured database module.
+Local evaluation must keep its isolated factory installed (or explicitly override
+the new dependency); overriding only `get_db` is insufficient. Test fixtures override
+both new dependencies. Runtime activation requires checking this boundary again.
+
+Qualification uses real PostgreSQL with pool size one and no overflow: the sole
+connection is available while sparse inference or Vespa is paused, after cancellation
+there, and after failure/cancellation once enrichment has acquired the connection.
+Actual API-key/Auth0 SQL authentication also releases that pool and leaves persisted
+last-active unchanged. Scope revocation, collection replacement and pipeline changes
+during retrieval reject the response; existing later-collection record mutation
+checks still prevent returning an earlier stale hit. Search/embedding transports are
+fakes in these tests. This is a pool-ownership/correctness proof, not a measured
+latency gain or a claim that the local browser runtime has been activated.

@@ -137,6 +137,8 @@ async def test_captured_blob_to_published_search_and_withdrawal(
 
     app.dependency_overrides[get_db] = session
     app.dependency_overrides[deps.get_context] = lambda: ctx
+    app.dependency_overrides[deps.get_owned_search_context] = lambda: ctx
+    app.dependency_overrides[deps.get_search_session_factory] = lambda: database
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(owned_search=owned)
     request = {"query": "fundraising", "sync_ids": [str(fence.sync_id)], "mode": "keyword"}
     try:
