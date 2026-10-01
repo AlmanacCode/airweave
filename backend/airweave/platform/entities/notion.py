@@ -561,7 +561,9 @@ class NotionFileEntity(FileEntity):
 class NotionOriginalEntity(BaseEntity):
     """Searchable metadata or block-local text from one retained Notion original."""
 
-    native_id: str = AirweaveField(..., description="Native Notion UUID.", is_entity_id=True)
+    native_id: str = AirweaveField(
+        ..., description="Native Notion object or property ID.", is_entity_id=True
+    )
     original_kind: str = AirweaveField(..., description="Native Notion object kind.")
     title: str = AirweaveField(
         ..., description="Retained title or block label.", is_name=True, embeddable=True

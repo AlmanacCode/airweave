@@ -385,7 +385,7 @@ def excluded_from_search(record: SourceRecord, source_name: str) -> bool:
 
 
 @asynccontextmanager
-async def map_record(
+async def map_record(  # noqa: C901 -- explicit provider dispatch keeps mapper ownership visible
     record: SourceRecord,
     source_name: str,
     storage: StorageBackend,
@@ -422,6 +422,13 @@ async def map_record(
             from airweave.domains.entities.canonical.slack_projection import map_slack_files
 
             yield await map_slack_files(record, _slack(record)[0], storage, directory)
+            return
+        elif source_name == "notion" and record.identity.record_type == "page_property":
+            from airweave.domains.entities.canonical.notion_property_projection import (
+                map_notion_property,
+            )
+
+            yield await map_notion_property(record, storage)
             return
         elif source_name == "google_drive":
             yield await _drive(record, storage, directory)
