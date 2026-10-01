@@ -117,3 +117,21 @@ Publisher-declared bounded snapshots use discovery-only completion policies;
 complete dataset snapshots use exhaustive policies. This declaration does not
 itself certify completeness: final scopes, stable export boundaries, receipts,
 renewal and import completion/cancellation still need their HTTP lifecycle.
+
+## Import HTTP and page receipts
+
+Backend-key PUT/GET `/native/sources/{source_id}/imports/{request_key}` expose
+start and recovery. Keys are opaque nonsecret identifiers: application logs and
+analytics redact native paths/parameters, but infrastructure access logs may
+still record request URLs. Validation and unexpected exceptions do not log
+native request contents through the application middleware.
+
+`NativePageStore.commit` remains an internal transaction primitive until scope
+endpoints and completion are wired. It resolves stored writer authority, admits
+the page, advances its cursor and retains one bounded receipt in the existing
+scan continuation. No second journal or original-content copy is created. Exact
+retries of the current page return its acknowledgement. Changed bodies, old CAS
+versions, changed reconciliation state and cancelled writers conflict rather
+than reapply writes. Cursors are bounded to32KiB, leaving receipt space inside
+the existing64KiB continuation limit. Capture acknowledgement is distinct from
+index publication or whole-import completion.

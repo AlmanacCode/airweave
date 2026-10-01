@@ -22,7 +22,7 @@ from airweave.domains.entities.canonical.cycle_store import (
     restart_cycle,
 )
 from airweave.domains.entities.canonical.store import CanonicalRecordStore
-from airweave.domains.native_ingestion.errors import NativeAdmissionError
+from airweave.domains.native_ingestion.errors import NativeAdmissionError, NativeImportNotFound
 from airweave.domains.native_ingestion.import_models import (
     NativeImportReceipt,
     NativeImportState,
@@ -188,5 +188,32 @@ class NativeImportStore:
             )
         )
         if job is None:
-            raise NativeAdmissionError("Native import does not exist")
+            raise NativeImportNotFound("Native import does not exist")
         return import_state(job, receipt(job, source_id, request_key))
+
+    async def active(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        source_id: UUID,
+        request_key: str,
+    ) -> NativeImportReceipt:
+        """Resolve stored authority for a mutation, never a publisher-supplied fence."""
+        bound = await self.sources.require(db, organization_id, source_id)
+        if not bound.source.is_authenticated or bound.sync.status != SyncStatus.ACTIVE:
+            raise NativeAdmissionError("Native source is unavailable for import")
+        job = await db.scalar(
+            select(SyncJob)
+            .where(
+                SyncJob.id == native_import_id(source_id, request_key),
+                SyncJob.sync_id == bound.sync.id,
+                SyncJob.organization_id == organization_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if job is None:
+            raise NativeImportNotFound("Native import does not exist")
+        saved = receipt(job, source_id, request_key)
+        await self.canonical._fenced_sync(db, saved.fence)
+        return saved
