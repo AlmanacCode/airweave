@@ -179,6 +179,7 @@ class CanonicalProjector:
         *,
         after_id: UUID | None = None,
         limit: int = 25,
+        skip_failed: bool = False,
     ) -> ProjectionBatchResult:
         """Failed rows stay pending; other rows in the page continue to make progress."""
         async with self._sessions() as db:
@@ -188,6 +189,7 @@ class CanonicalProjector:
                 sync_id,
                 after_id=after_id,
                 limit=limit,
+                **({"skip_failed": True} if skip_failed else {}),
             )
         published = superseded = failed = 0
         for work in pending[:limit]:

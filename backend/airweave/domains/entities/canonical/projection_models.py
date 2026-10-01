@@ -52,6 +52,22 @@ class ProjectionWork(BaseModel):
     previous_generation: UUID | None
 
 
+class ProjectionSourceRef(BaseModel):
+    """Stored tenant/source identity eligible for recovery, without original payloads."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    organization_id: UUID
+    sync_id: UUID
+
+
+class ProjectionSourcePage(BaseModel):
+    """Bounded source keyset page; a cursor exists only when another row was observed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    sources: tuple[ProjectionSourceRef, ...]
+    next_cursor: UUID | None = None
+
+
 class ProjectionBatchResult(BaseModel):
     """One bounded scan page; failures remain pending for a later retry."""
 

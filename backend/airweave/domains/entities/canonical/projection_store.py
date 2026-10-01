@@ -14,6 +14,8 @@ from airweave.domains.entities.canonical.extraction_models import ExtractionCove
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionDocument,
     ProjectionLocator,
+    ProjectionSourcePage,
+    ProjectionSourceRef,
     ProjectionWork,
     projection_document_locator,
 )
@@ -22,6 +24,7 @@ from airweave.domains.entities.canonical.text_artifacts import text_manifest
 from airweave.domains.entities.canonical.text_models import TextArtifact
 from airweave.models.entity import Entity
 from airweave.models.projection_generation import ProjectionGeneration
+from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
 
 
@@ -77,6 +80,19 @@ def publications_match(locators: Iterable[ProjectionLocator]):
     )
 
 
+def _pending_record():
+    """Shared exact publication/visibility eligibility for discovery and execution."""
+    return and_(
+        Entity.record_revision > 0,
+        or_(
+            Entity.indexed_revision.is_distinct_from(Entity.record_revision),
+            Entity.indexed_pipeline_version.is_distinct_from(Sync.index_pipeline_version),
+            Entity.indexed_generation.is_(None),
+        ),
+        or_(Entity.deleted_at.is_not(None), content_is_available()),
+    )
+
+
 class CanonicalProjectionStore:
     """Optimistic projection computation, serialized CAS against source capture."""
 
@@ -88,6 +104,7 @@ class CanonicalProjectionStore:
         *,
         after_id: UUID | None = None,
         limit: int = 25,
+        skip_failed: bool = False,
     ) -> tuple[ProjectionWork, ...]:
         """One bounded UUID page; deleted records publish an empty generation."""
         if not 1 <= limit <= 100:
@@ -99,15 +116,11 @@ class CanonicalProjectionStore:
                 Entity.organization_id == organization_id,
                 Entity.sync_id == sync_id,
                 Sync.organization_id == organization_id,
-                Entity.record_revision > 0,
-                or_(
-                    Entity.indexed_revision.is_distinct_from(Entity.record_revision),
-                    Entity.indexed_pipeline_version.is_distinct_from(Sync.index_pipeline_version),
-                    Entity.indexed_generation.is_(None),
-                ),
-                or_(Entity.deleted_at.is_not(None), content_is_available()),
+                _pending_record(),
             )
         )
+        if skip_failed:
+            statement = statement.where(Entity.projection_error.is_(None))
         if after_id is not None:
             statement = statement.where(Entity.id > after_id)
         rows = await db.execute(statement.order_by(Entity.id).limit(limit + 1))
@@ -119,6 +132,49 @@ class CanonicalProjectionStore:
                 previous_generation=row.indexed_generation,
             )
             for row, version in rows
+        )
+
+    async def pending_sources(
+        self,
+        db: AsyncSession,
+        source_names: tuple[str, ...],
+        *,
+        after_id: UUID | None = None,
+        limit: int = 20,
+    ) -> ProjectionSourcePage:
+        """Discover fresh pending work fairly; failures require an explicit retry.
+
+        This system-worker query crosses tenants but returns their exact stored
+        scope. Execution must revalidate that scope before reading any originals.
+        """
+        if not 1 <= limit <= 100:
+            raise ValueError("Projection source page size must be between 1 and 100")
+        owned_source = exists(
+            select(SourceConnection.id).where(
+                SourceConnection.sync_id == Sync.id,
+                SourceConnection.organization_id == Sync.organization_id,
+                SourceConnection.short_name.in_(source_names),
+            )
+        )
+        fresh_work = exists(
+            select(Entity.id).where(
+                Entity.sync_id == Sync.id,
+                Entity.organization_id == Sync.organization_id,
+                _pending_record(),
+                Entity.projection_error.is_(None),
+            )
+        )
+        statement = select(Sync.organization_id, Sync.id).where(owned_source, fresh_work)
+        if after_id is not None:
+            statement = statement.where(Sync.id > after_id)
+        rows = (await db.execute(statement.order_by(Sync.id).limit(limit + 1))).all()
+        sources = tuple(
+            ProjectionSourceRef(organization_id=organization, sync_id=sync)
+            for organization, sync in rows[:limit]
+        )
+        return ProjectionSourcePage(
+            sources=sources,
+            next_cursor=sources[-1].sync_id if len(rows) > limit else None,
         )
 
     async def _current(self, db: AsyncSession, work: ProjectionWork) -> Entity | None:
