@@ -234,6 +234,12 @@ class WisprSource(BaseSource):
             raise ValueError("Wispr returned ambiguous continuation markers")
         return int(matches[0].group(1)) if matches else None
 
+    @staticmethod
+    def _require_range_version(version: JsonValue) -> None:
+        """Missing versions cannot establish consistency across separate native reads."""
+        if not isinstance(version, str) or not version.strip():
+            raise ValueError("Wispr paginated body has no usable version; capture is incomplete")
+
     async def _body(
         self, kind: Literal["meeting", "scratchpad_note"], identity: str
     ) -> dict[str, JsonValue]:
@@ -285,6 +291,7 @@ class WisprSource(BaseSource):
                     following[field] = next_offset
             if not following:
                 return {"responses": responses}
+            self._require_range_version(response.get("modified_at"))
             # Request only continuing ranges; complete ranges already remain in responses.
             offsets = following
         raise ValueError("Wispr body exceeds the bounded capture page limit")

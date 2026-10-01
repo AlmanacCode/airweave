@@ -453,6 +453,7 @@ async def test_transcript_disappearing_after_first_range_stays_incomplete(monkey
             side_effect=[
                 {
                     "id": "m",
+                    "modified_at": "2026-10-01T00:00:00Z",
                     "content": "notes",
                     "has_transcript": True,
                     "transcript": (
@@ -460,9 +461,32 @@ async def test_transcript_disappearing_after_first_range_stays_incomplete(monkey
                         "continue with view_transcript.start_char=3...)"
                     ),
                 },
-                {"id": "m", "has_transcript": False, "transcript": None},
+                {
+                    "id": "m",
+                    "modified_at": "2026-10-01T00:00:00Z",
+                    "has_transcript": False,
+                    "transcript": None,
+                },
             ]
         ),
     )
     with pytest.raises(ValueError, match="not a string"):
         await connector._body("meeting", "m")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [{}, {"modified_at": None}, {"modified_at": ""}])
+async def test_multirange_body_requires_version_before_following_continuation(version):
+    connector = await source()
+    connector._execute = AsyncMock(
+        return_value={
+            "id": "m",
+            **version,
+            "content": "notes",
+            "transcript": "abc\n(...truncated, 3 chars remaining; "
+            "continue with view_transcript.start_char=3...)",
+        }
+    )
+    with pytest.raises(ValueError, match="no usable version"):
+        await connector._body("meeting", "m")
+    connector._execute.assert_awaited_once()
