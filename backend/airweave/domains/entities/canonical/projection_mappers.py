@@ -307,6 +307,11 @@ async def map_record(
 
             yield await map_gmail(record, storage, directory)
             return
+        elif source_name == "outlook_mail":
+            from airweave.domains.entities.canonical.outlook_projection import map_outlook
+
+            yield await map_outlook(record, storage, directory)
+            return
         elif source_name == "slack" and record.identity.record_type == "file":
             from airweave.domains.entities.canonical.slack_projection import map_slack_file
 

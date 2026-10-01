@@ -1,5 +1,6 @@
 """Outlook's native mailbox boundary over the existing managed/direct transport."""
 
+from contextlib import aclosing
 from urllib.parse import unquote, urlsplit
 
 import httpx
@@ -11,6 +12,7 @@ from airweave.domains.sources.token_providers.protocol import (
     SourceAuthProvider,
     authorization_headers,
 )
+from airweave.domains.storage.exceptions import FileSkippedException
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
 from airweave.platform.http_client.composio_transport import ComposioProxyError
 from airweave.platform.sources.http_helpers import raise_for_status
@@ -71,9 +73,13 @@ class OutlookGraphClient:
         if not valid:
             raise self._boundary_error("Microsoft Graph URL is outside the bound mailbox")
 
-    async def _request(self, url: str, params: dict | None = None) -> httpx.Response:
+    async def _request(
+        self, url: str, params: dict | None = None, *, immutable_ids: bool = False
+    ) -> httpx.Response:
         self._validate_url(url)
         headers = await authorization_headers(self.auth)
+        if immutable_ids:
+            headers["Prefer"] = 'IdType="ImmutableId"'
         try:
             return await self.http_client.get(
                 url, headers=headers, params=params, follow_redirects=False
@@ -120,19 +126,21 @@ class OutlookGraphClient:
             )
         self.verified_principal_id = principal.id
 
-    async def get(self, url: str, params: dict | None = None) -> dict:
+    async def get(
+        self, url: str, params: dict | None = None, *, immutable_ids: bool = False
+    ) -> dict:
         """Preserve legacy IDs while rejecting requests without current attestation."""
         if self.expected_principal_id is not None and (
             self.verified_principal_id != self.expected_principal_id
         ):
             raise self._boundary_error("Microsoft Graph principal must be attested before reading")
-        response = await self._request(url, params)
+        response = await self._request(url, params, immutable_ids=immutable_ids)
         if response.status_code == 401:
             self.verified_principal_id = None
             if self.auth.supports_refresh:
                 await authorization_headers(self.auth, refresh=True)
                 await self.verify_principal()
-                response = await self._request(url, params)
+                response = await self._request(url, params, immutable_ids=immutable_ids)
         if response.status_code == 401:
             self.verified_principal_id = None
         self._check_response(response)
@@ -145,3 +153,47 @@ class OutlookGraphClient:
             raise self._boundary_error(
                 "Microsoft Graph returned an invalid JSON response"
             ) from None
+
+    async def mime_bytes(self, url: str, *, max_bytes: int) -> bytes:
+        """Bound original MIME reads; canonical requests alone opt into immutable IDs."""
+        if self.expected_principal_id is None or (
+            self.verified_principal_id != self.expected_principal_id
+        ):
+            raise self._boundary_error("Canonical MIME requires an attested principal")
+        self._validate_url(url)
+        for attempt in range(2):
+            headers = await authorization_headers(self.auth)
+            headers["Prefer"] = 'IdType="ImmutableId"'
+            try:
+                async with self.http_client.stream(
+                    "GET", url, headers=headers, follow_redirects=False
+                ) as response:
+                    if response.status_code == 401:
+                        self.verified_principal_id = None
+                        if not attempt and self.auth.supports_refresh:
+                            await authorization_headers(self.auth, refresh=True)
+                            await self.verify_principal()
+                            continue
+                    self._check_response(response)
+                    return await self._read_mime_response(response, max_bytes)
+            except ComposioProxyError:
+                raise
+            except httpx.TimeoutException:
+                raise httpx.TimeoutException("Microsoft Graph MIME request timed out") from None
+            except httpx.RequestError:
+                raise httpx.RequestError("Microsoft Graph MIME request failed") from None
+        raise self._boundary_error("Microsoft Graph MIME authentication failed")
+
+    async def _read_mime_response(self, response: httpx.Response, max_bytes: int) -> bytes:
+        media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if media_type not in ("message/rfc822", "text/plain", "application/octet-stream"):
+            raise self._boundary_error("Microsoft Graph returned a non-MIME response")
+        content = bytearray()
+        async with aclosing(response.aiter_bytes()) as chunks:
+            async for chunk in chunks:
+                if len(content) + len(chunk) > max_bytes:
+                    raise FileSkippedException("Original MIME exceeds byte limit", "message")
+                content.extend(chunk)
+        if not content:
+            raise self._boundary_error("Microsoft Graph returned empty MIME")
+        return bytes(content)

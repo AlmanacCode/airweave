@@ -73,6 +73,10 @@ class OutlookMailSource(BaseSource):
 
     GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 
+    # Offline projection/read capability. This does not opt legacy source instances
+    # into CanonicalPageSource; immutable mailbox capture is composed separately.
+    canonical_record_types = ("message",)
+
     @classmethod
     async def create(
         cls,
