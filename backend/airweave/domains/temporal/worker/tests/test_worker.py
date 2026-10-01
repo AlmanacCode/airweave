@@ -5,6 +5,7 @@ PrometheusWorkerMetrics, PrometheusMetricsRenderer, WorkerControlServer,
 WorkerMetricsRegistry) is constructed for real so tests exercise actual wiring.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,11 +18,11 @@ from airweave.domains.temporal.worker.control_server import WorkerControlServer
 
 def _make_config(**overrides):
     """Build a minimal WorkerConfig for testing."""
-    defaults = dict(
-        task_queue="test-queue",
-        metrics_port=8080,
-        graceful_shutdown_timeout_seconds=30,
-    )
+    defaults = {
+        "task_queue": "test-queue",
+        "metrics_port": 8080,
+        "graceful_shutdown_timeout_seconds": 30,
+    }
     defaults.update(overrides)
     return WorkerConfig(**defaults)
 
@@ -206,3 +207,138 @@ async def test_control_server_binds_only_loopback(mock_runtime_cls):
                 assert await response.text() == "NOT_RUNNING"
     finally:
         await server.stop()
+
+
+@patch("airweave.domains.temporal.client.close", new_callable=AsyncMock)
+@patch("temporalio.runtime.Runtime")
+async def test_concurrent_stop_waits_for_one_complete_shutdown(mock_runtime_cls, mock_client_close):
+    """Signal and main-finally callers share SDK shutdown and subsequent cleanup."""
+    from airweave.domains.temporal.worker import TemporalWorker
+
+    worker = TemporalWorker(_make_config())
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def shutdown():
+        entered.set()
+        await release.wait()
+
+    worker._worker = AsyncMock()
+    worker._worker.shutdown.side_effect = shutdown
+    worker._state.running = True
+    worker._control_server.stop = AsyncMock()
+    first = asyncio.create_task(worker.stop())
+    await entered.wait()
+    second = asyncio.create_task(worker.stop())
+    try:
+        await asyncio.sleep(0)
+        assert not second.done()
+        worker._control_server.stop.assert_not_awaited()
+        mock_client_close.assert_not_awaited()
+    finally:
+        release.set()
+        await asyncio.gather(first, second)
+    await worker.stop()
+    worker._worker.shutdown.assert_awaited_once()
+    worker._control_server.stop.assert_awaited_once()
+    mock_client_close.assert_awaited_once()
+
+
+@patch("airweave.domains.temporal.client.close", new_callable=AsyncMock)
+@patch("temporalio.runtime.Runtime")
+async def test_cancelled_stop_waiter_does_not_cancel_shutdown(mock_runtime_cls, mock_client_close):
+    """Cancellation of one caller leaves shutdown owned by the shared task."""
+    from airweave.domains.temporal.worker import TemporalWorker
+
+    worker = TemporalWorker(_make_config())
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def shutdown():
+        entered.set()
+        await release.wait()
+
+    worker._worker = AsyncMock()
+    worker._worker.shutdown.side_effect = shutdown
+    worker._state.running = True
+    worker._control_server.stop = AsyncMock()
+    caller = asyncio.create_task(worker.stop())
+    await entered.wait()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    release.set()
+    await worker.stop()
+    worker._worker.shutdown.assert_awaited_once()
+    worker._control_server.stop.assert_awaited_once()
+    mock_client_close.assert_awaited_once()
+
+
+@patch("temporalio.runtime.Runtime")
+async def test_stop_failure_remains_observable_to_later_callers(mock_runtime_cls):
+    """A failed shutdown cannot become an apparent successful repeated stop."""
+    from airweave.domains.temporal.worker import TemporalWorker
+
+    worker = TemporalWorker(_make_config())
+    worker._worker = AsyncMock()
+    worker._worker.shutdown.side_effect = RuntimeError("shutdown failed")
+    worker._state.running = True
+    worker._control_server.stop = AsyncMock()
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="shutdown failed"):
+            await worker.stop()
+    worker._worker.shutdown.assert_awaited_once()
+    worker._control_server.stop.assert_not_awaited()
+
+
+@patch("airweave.domains.temporal.worker.create_activities", return_value=[])
+@patch("airweave.domains.temporal.worker.get_workflows", return_value=[])
+@pytest.mark.parametrize("blocked_phase", ["control", "client"])
+@patch("airweave.domains.temporal.client.close", new_callable=AsyncMock)
+@patch("airweave.domains.temporal.worker.Worker")
+@patch("temporalio.runtime.Runtime")
+async def test_stop_during_startup_waits_then_prevents_polling(
+    mock_runtime_cls,
+    mock_worker_cls,
+    mock_client_close,
+    mock_workflows,
+    mock_activities,
+    blocked_phase,
+):
+    """Cleanup waits for resource creation and no SDK worker starts after stop."""
+    from airweave.domains.temporal.worker import TemporalWorker
+
+    worker = TemporalWorker(_make_config())
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return MagicMock()
+
+    worker._control_server.start = AsyncMock(
+        side_effect=blocked if blocked_phase == "control" else None
+    )
+    worker._control_server.stop = AsyncMock()
+    mock_worker_cls.return_value.run = AsyncMock()
+    with patch("airweave.domains.temporal.client.get_client", new_callable=AsyncMock) as client:
+        if blocked_phase == "client":
+            client.side_effect = blocked
+        starting = asyncio.create_task(worker.start())
+        await entered.wait()
+        stopping = asyncio.create_task(worker.stop())
+        try:
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not stopping.done()
+            worker._control_server.stop.assert_not_awaited()
+            mock_client_close.assert_not_awaited()
+        finally:
+            release.set()
+            await asyncio.gather(starting, stopping)
+        mock_worker_cls.assert_not_called()
+        if blocked_phase == "control":
+            client.assert_not_awaited()
+    worker._control_server.stop.assert_awaited_once()
+    mock_client_close.assert_awaited_once()

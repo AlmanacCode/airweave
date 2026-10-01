@@ -1,5 +1,6 @@
 """OCR capability does not prevent the real worker composition from starting."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -61,7 +62,9 @@ async def test_worker_composes_without_ocr_and_starts_supported_activities(
     monkeypatch.setattr(container_mod, "container", None)
     lifecycle = MagicMock(start=AsyncMock(), stop=AsyncMock())
     monkeypatch.setattr(worker, "TemporalWorker", lambda _: lifecycle)
-    monkeypatch.setattr(worker.signal, "signal", lambda *_: None)
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "add_signal_handler", lambda *_: None)
+    monkeypatch.setattr(loop, "remove_signal_handler", lambda *_: True)
     if health_status != 200:
         with pytest.raises(embedding_config.EmbeddingConfigError, match="not reachable"):
             await worker.main()
