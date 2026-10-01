@@ -284,3 +284,32 @@ async def test_wispr_projection_rejects_ambiguous_stored_continuation():
             record("scratchpad_note", payload, native_id="note"), "wispr", AsyncMock()
         ):
             pass
+
+
+@pytest.mark.asyncio
+async def test_wispr_explicitly_absent_transcript_keeps_available_notes():
+    native = {
+        "id": "meeting",
+        "content": "available notes",
+        "has_transcript": False,
+        "transcript": None,
+    }
+    payload = {
+        "responses": [
+            {
+                "requested_ranges": {
+                    "view_content": {"start_char": 0},
+                    "view_transcript": {"start_char": 0},
+                },
+                "response": native,
+            }
+        ]
+    }
+    async with map_record(record("meeting", payload), "wispr", AsyncMock()) as result:
+        assert result.entities[0].notes == "available notes"
+        assert result.entities[0].transcript == ""
+    assert native["transcript"] is None
+    native["has_transcript"] = True
+    with pytest.raises(ProjectionMappingError, match="unavailable or malformed"):
+        async with map_record(record("meeting", payload), "wispr", AsyncMock()):
+            pass

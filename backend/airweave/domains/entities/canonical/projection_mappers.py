@@ -276,6 +276,22 @@ def _slack(record: SourceRecord) -> tuple[BaseEntity, ...]:
     return (entity,)
 
 
+def _wispr_range_text(response: dict[str, JsonValue], field: str, offset: int) -> str:
+    """Explicit provider absence has no transcript text; ambiguous missing data fails."""
+    native = response.get(field)
+    if (
+        field == "transcript"
+        and offset == 0
+        and response.get("has_transcript") is False
+        and "transcript" in response
+        and native is None
+    ):
+        return ""
+    if not isinstance(native, str):
+        raise ProjectionMappingError("Wispr requested text is unavailable or malformed")
+    return native
+
+
 def _wispr_text(responses: list[JsonValue], field: str) -> str:
     """Follow exactly the requested ranges; strip server continuation guidance."""
     expected = 0
@@ -293,7 +309,7 @@ def _wispr_text(responses: list[JsonValue], field: str) -> str:
             continue
         if not isinstance(window, dict) or window.get("start_char") != expected or complete:
             raise ProjectionMappingError("Wispr text ranges overlap or have a gap")
-        text = _string(response.get(field))
+        text = _wispr_range_text(response, field, expected)
         markers = list(
             re.finditer(
                 rf"(?m)^\(\.\.\.truncated, \d+ chars remaining; continue with "

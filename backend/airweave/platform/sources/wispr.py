@@ -269,6 +269,15 @@ class WisprSource(BaseSource):
             responses.append({"requested_ranges": arguments, "response": response})
             following = {}
             for field, offset in offsets.items():
+                if (
+                    field == "transcript"
+                    and offset == 0
+                    and response.get("has_transcript") is False
+                    and "transcript" in response
+                    and response["transcript"] is None
+                ):
+                    # Explicit absence is not a failed range; retain native null unchanged.
+                    continue
                 next_offset = self._next_offset(response.get(field), field)
                 if next_offset is not None:
                     if next_offset <= offset:

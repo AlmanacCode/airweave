@@ -423,3 +423,46 @@ async def test_scratchpad_cap_never_substitutes_meeting_start_for_modified_time(
         await connector.capture_page(
             CompletedScope(record_type="scratchpad_listing"), ScanContinuation(), files=MagicMock()
         )
+
+
+@pytest.mark.asyncio
+async def test_explicit_no_transcript_preserves_notes_and_native_null(monkeypatch):
+    connector = await source()
+    native = {"id": "m", "content": "available notes", "has_transcript": False, "transcript": None}
+    execute = AsyncMock(return_value=native)
+    monkeypatch.setattr(connector, "_execute", execute)
+    result = await connector._body("meeting", "m")
+    assert result["responses"][0]["response"] == native
+    assert execute.await_count == 1
+    for ambiguous in (
+        {**native, "has_transcript": True},
+        {k: v for k, v in native.items() if k != "transcript"},
+    ):
+        execute.return_value = ambiguous
+        with pytest.raises(ValueError, match="not a string"):
+            await connector._body("meeting", "m")
+
+
+@pytest.mark.asyncio
+async def test_transcript_disappearing_after_first_range_stays_incomplete(monkeypatch):
+    connector = await source()
+    monkeypatch.setattr(
+        connector,
+        "_execute",
+        AsyncMock(
+            side_effect=[
+                {
+                    "id": "m",
+                    "content": "notes",
+                    "has_transcript": True,
+                    "transcript": (
+                        "abc\n(...truncated, 3 chars remaining; "
+                        "continue with view_transcript.start_char=3...)"
+                    ),
+                },
+                {"id": "m", "has_transcript": False, "transcript": None},
+            ]
+        ),
+    )
+    with pytest.raises(ValueError, match="not a string"):
+        await connector._body("meeting", "m")
