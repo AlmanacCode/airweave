@@ -253,7 +253,9 @@ class OwnedSearchService:
             assert previous is not None
             additional = previous.additional_matches
             if len(additional) < 3:
-                exact = OwnedSearchMatch.model_validate(hit.model_dump(exclude={"group"}))
+                exact = OwnedSearchMatch.model_validate(
+                    hit.model_dump(exclude={"group"}, round_trip=True)
+                )
                 additional = (
                     *additional,
                     exact.model_copy(update={"excerpts": exact.excerpts[:1]}),

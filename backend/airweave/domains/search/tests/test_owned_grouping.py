@@ -6,6 +6,10 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from airweave.domains.entities.canonical.extraction_models import (
+    ExtractionCoverage,
+    ExtractionOutcome,
+)
 from airweave.domains.search.owned import OwnedSearchService, _EnrichmentRecord
 from airweave.domains.search.owned_models import OwnedSearchGroup, OwnedSearchHit, OwnedSearchMatch
 
@@ -54,6 +58,10 @@ def test_source_scoped_group_keeps_exact_anchors_and_observed_count():
     sync = uuid4()
     hits = [match(sync, native=str(i)) for i in range(6)]
     other = match(native="other")
+    for hit in hits:
+        hit.extraction = ExtractionCoverage(
+            parts=(ExtractionOutcome(part_index=0, key="body", kind="body", outcome="indexed"),)
+        )
     for hit in [*hits, other]:
         hit.group = OwnedSearchService._conversation(row(hit), hit)
     grouped = OwnedSearchService._group_hits([hits[0], other, *hits[1:]])
@@ -70,6 +78,8 @@ def test_source_scoped_group_keeps_exact_anchors_and_observed_count():
         )
         assert extra.excerpts == original.excerpts[:1]
         assert "group" not in extra.model_dump()
+        assert extra.extraction == original.extraction
+        assert extra.model_dump()["extraction"]["status"] == "complete"
 
 
 def test_only_admitted_sessions_or_validated_gmail_threads_group():
