@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 
 import canonical_capture as harness  # settings must precede application imports
 from calendar_lifecycle import count_calendar_request, event_checkpoint, verify_calendar_scopes
+from capture_comparison import compare_observations
 from provider_sample import rest_source, wispr_source
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -38,7 +39,7 @@ from airweave.domains.entities.canonical.page_source import (
 )
 from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope, StartedScope
 from airweave.domains.entities.canonical.service import CanonicalCaptureService
-from airweave.domains.entities.canonical.store import CanonicalRecordStore
+from airweave.domains.entities.canonical.store import CanonicalRecordStore, source_record
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
 from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
@@ -426,6 +427,11 @@ async def child(manifest):
             organization = await db.get(Organization, organization_id)
             sync = await db.get(Sync, sync_id)
             job = await prepare_job(db, organization_id, sync_id, job_id, attempt_number)
+            before = {
+                row.id: source_record(row)
+                for row in await db.scalars(select(Entity).where(Entity.sync_id == sync_id))
+                if row.record_revision > 0
+            }
 
         config = SyncConfig()
         config.behavior.skip_guardrails = True
@@ -631,6 +637,11 @@ async def child(manifest):
             "loaded_durable_checkpoint": loaded,
             "job_status": status,
             "payload_revision_digest": digest,
+            "observation_comparison": compare_observations(
+                before,
+                {row.id: source_record(row) for row in rows if row.record_revision > 0},
+                name,
+            ),
             "mode": {
                 "gmail": ("unfiltered_" + saved["canonical_cycle"]["mode"])
                 if manifest.get("gmail_unfiltered")
