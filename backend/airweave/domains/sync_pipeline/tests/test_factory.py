@@ -141,7 +141,7 @@ async def test_create_orchestrator_raises_when_source_connection_missing():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("canonical", [False, True, "page"])
+@pytest.mark.parametrize("canonical", [False, True, "page", "composed"])
 async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
     """entity_repo is forwarded to EntityActionResolver and EntityPipeline."""
     entity_repo = MagicMock()
@@ -191,8 +191,9 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
         ) as mock_build_tracker,
     ):
         mock_source = MagicMock()
+        mock_source.capture_page_source = None
         mock_source.generate_entities = MagicMock(return_value=AsyncMock())
-        if canonical == "page":
+        if canonical in {"page", "composed"}:
             from airweave.domains.sources.token_providers.static import StaticTokenProvider
             from airweave.platform.configs.config import SlackConfig
             from airweave.platform.sources.slack import SlackSource
@@ -205,6 +206,17 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
                 return_value={"ok": True, "team_id": "T1", "user_id": "U1"}
             )
             await mock_source.validate()
+            page_source = mock_source
+            if canonical == "composed":
+                from airweave.platform.sources.outlook_mail import OutlookMailSource
+
+                mock_source = OutlookMailSource(
+                    auth=StaticTokenProvider("synthetic"),
+                    logger=MagicMock(),
+                    http_client=MagicMock(),
+                )
+                mock_source._capture_page_source = page_source
+                mock_source.generate_entities = MagicMock()
         elif canonical:
             mock_source.canonical_record_types = ("event",)
             mock_source.generate_observations = MagicMock(return_value=AsyncMock())
@@ -235,9 +247,12 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
             assert isinstance(orchestrator.entity_pipeline, CanonicalCapturePipeline)
             mock_build_destinations.assert_not_called()
             mock_disp_builder.assert_not_called()
-            if canonical == "page":
+            if canonical in {"page", "composed"}:
                 assert orchestrator.stream is None
-                assert orchestrator.entity_pipeline.page_source is mock_source
+                assert orchestrator.entity_pipeline.page_source is page_source
+                assert orchestrator.runtime.source is mock_source
+                if canonical == "composed":
+                    mock_source.generate_entities.assert_not_called()
             else:
                 mock_source.generate_entities.assert_not_called()
                 mock_source.generate_observations.assert_called_once()
@@ -403,8 +418,11 @@ class TestBuildArfReplaySource:
 
     @pytest.mark.asyncio
     async def test_success_returns_source_build_result(self):
-        mock_source = AsyncMock()
+        from airweave.domains.arf.replay_source import ArfReplaySource
+
+        mock_source = ArfReplaySource(sync_id=uuid4(), storage=MagicMock())
         mock_source.validate = AsyncMock(return_value=True)
+        assert mock_source.capture_page_source is None
 
         factory = _build_factory()
         db = AsyncMock()

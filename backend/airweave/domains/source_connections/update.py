@@ -31,6 +31,7 @@ from airweave.domains.syncs.protocols import SyncRepositoryProtocol, SyncService
 from airweave.domains.syncs.types import InvalidSyncTransitionError, OptimisticLockError
 from airweave.domains.temporal.protocols import TemporalScheduleServiceProtocol
 from airweave.models.source_connection import SourceConnection
+from airweave.platform.configs.config import OutlookMailConfig
 from airweave.schemas.source_connection import (
     AuthenticationMethod,
     ScheduleConfig,
@@ -39,6 +40,27 @@ from airweave.schemas.source_connection import (
 from airweave.schemas.source_connection import (
     SourceConnection as SourceConnectionSchema,
 )
+
+
+def _validate_outlook_capture_mode(source: SourceConnection, config: dict[str, Any]) -> None:
+    """Mutable legacy IDs and immutable originals cannot share an existing sync."""
+    if source.short_name != "outlook_mail":
+        return
+    previous = OutlookMailConfig.model_validate(source.config_fields or {})
+    proposed = OutlookMailConfig.model_validate(config)
+    if previous.capture_originals != proposed.capture_originals:
+        raise HTTPException(
+            status_code=400,
+            detail="Create a new source to change Outlook original capture mode",
+        )
+    if (
+        previous.capture_originals
+        and previous.expected_principal_id != proposed.expected_principal_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Create a new source to change the Outlook original capture principal",
+        )
 
 
 class SourceConnectionUpdateService(SourceConnectionUpdateServiceProtocol):
@@ -115,6 +137,7 @@ class SourceConnectionUpdateService(SourceConnectionUpdateServiceProtocol):
                 validated_config = self._source_validation.validate_config(
                     source_conn.short_name, update_data["config"], ctx
                 )
+                _validate_outlook_capture_mode(source_conn, validated_config)
                 update_data["config_fields"] = validated_config
                 del update_data["config"]
 
@@ -238,6 +261,7 @@ class SourceConnectionUpdateService(SourceConnectionUpdateServiceProtocol):
                 collection_id=collection.id,
                 collection_readable_id=collection.readable_id,
                 source_entry=source_entry,
+                source_config=source_conn.config_fields,
                 schedule_config=ScheduleConfig(cron=new_cron),
                 run_immediately=False,
                 ctx=ctx,

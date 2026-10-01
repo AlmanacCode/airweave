@@ -578,6 +578,21 @@ class OutlookCalendarConfig(SourceConfig):
 class OutlookMailConfig(SourceConfig):
     """Outlook Mail configuration schema."""
 
+    capture_originals: bool = Field(
+        default=False,
+        strict=True,
+        description=(
+            "Use owned immutable-message capture on a fresh source; legacy IDs are not migrated."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def require_capture_principal(self):
+        """Original capture must not rely on an unattested legacy mailbox."""
+        if self.capture_originals and self.expected_principal_id is None:
+            raise ValueError("Original Outlook capture requires expected_principal_id")
+        return self
+
     expected_principal_id: str | None = Field(
         default=None,
         min_length=1,

@@ -147,3 +147,54 @@ async def test_resumed_mailbox_page_preserves_original_and_updates_move_in_place
         assert projected.entities[0].id == "a"
         assert projected.parts[-1].part.key == "/attachment_inventory"
         assert projected.parts[-1].entity is None
+
+
+async def test_factory_rejects_mode_conflict_before_auth_or_cursor_reset(database, source):
+    """A full sync or skip-load cannot reinterpret a persisted Outlook cursor."""
+    from airweave.domains.sync_pipeline.config import SyncConfig
+    from airweave.domains.sync_pipeline.factory import SyncFactory
+    from airweave.models.sync_cursor import SyncCursor
+    from airweave.platform.sources.outlook_mail import OutlookMailSource
+
+    _, fence = source
+    factory = object.__new__(SyncFactory)
+    factory._source_lifecycle_service = MagicMock(create=AsyncMock())
+    factory._source_registry = MagicMock()
+    factory._source_registry.get.return_value.source_class_ref = OutlookMailSource
+    factory._build_arf_replay_source = AsyncMock(return_value="offline legacy replay")
+    ctx = MagicMock()
+    ctx.organization.id = fence.organization_id
+    sc = MagicMock(short_name="outlook_mail", config_fields={})
+    sync = MagicMock(id=fence.sync_id)
+    job = MagicMock(id=fence.job_id)
+    replay = SyncConfig.model_validate({"behavior": {"replay_from_arf": True}})
+    async with database() as db:
+        cursor = await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == fence.sync_id))
+        if cursor is None:
+            cursor = SyncCursor(
+                sync_id=fence.sync_id, organization_id=fence.organization_id, cursor_data={}
+            )
+            db.add(cursor)
+        cursor.cursor_data = {}
+        await db.flush()
+        assert await factory._build_source(
+            db, sync, job, ctx, MagicMock(), sc, False, replay
+        ) == "offline legacy replay"
+        factory._build_arf_replay_source.reset_mock()
+        sc.config_fields = {"capture_originals": True, "expected_principal_id": "mailbox"}
+        with pytest.raises(ValueError, match="not mutable ARF"):
+            await factory._build_source(db, sync, job, ctx, MagicMock(), sc, False, replay)
+        cursor.cursor_data = {"delta_link": "legacy continuation"}
+        await db.flush()
+        for force_full_sync in (False, True):
+            with pytest.raises(ValueError, match="retained state"):
+                await factory._build_source(
+                    db, sync, job, ctx, MagicMock(), sc, force_full_sync, replay
+                )
+        sc.config_fields = {}
+        cursor.cursor_data = {"canonical_cycle": {"phase": "active"}}
+        await db.flush()
+        with pytest.raises(ValueError, match="retained state"):
+            await factory._build_source(db, sync, job, ctx, MagicMock(), sc, True, replay)
+        factory._source_lifecycle_service.create.assert_not_called()
+        factory._build_arf_replay_source.assert_not_called()

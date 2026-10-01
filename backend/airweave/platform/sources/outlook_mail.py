@@ -91,7 +91,14 @@ class OutlookMailSource(BaseSource):
         instance.graph = OutlookGraphClient(
             auth, http_client, cls.short_name, config.expected_principal_id
         )
-        await instance.graph.verify_principal()
+        if config.capture_originals:
+            from airweave.platform.sources.outlook_mail_capture import OutlookMailCapture
+
+            instance._capture_page_source = await OutlookMailCapture.create(
+                graph=instance.graph, config=config
+            )
+        else:
+            await instance.graph.verify_principal()
         instance.after_date = config.after_date
         instance.included_folders = config.included_folders
         instance.excluded_folders = config.excluded_folders

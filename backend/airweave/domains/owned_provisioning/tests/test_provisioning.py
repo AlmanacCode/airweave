@@ -13,7 +13,7 @@ from airweave import schemas
 from airweave.core.shared_models import AuthMethod, IntegrationType
 from airweave.domains.collections.repository import CollectionRepository
 from airweave.domains.connections.repository import ConnectionRepository
-from airweave.domains.owned_provisioning.models import EnsureSource, ManagedSource
+from airweave.domains.owned_provisioning.models import EnsureSource, ManagedSource, native_principal
 from airweave.domains.owned_provisioning.service import OwnedProvisioningService
 from airweave.domains.owned_provisioning.store import ProvisioningStore
 from airweave.domains.source_connections.repository import SourceConnectionRepository
@@ -453,3 +453,63 @@ async def test_slack_workspace_user_survives_pause_and_rejects_different_member(
         )
         assert resumed.source_connection_id == first.source_connection_id
         assert (resumed.expected_identity, resumed.expected_user_identity) == ("T1", "U1")
+
+
+async def test_outlook_fresh_source_retry_and_principal_cannot_downgrade_owned_capture(
+    database, setup
+):
+    ctx, service, request, account, lifecycle, schedules, workflows = setup
+    creator = service.store.create
+    creator._source_registry.get.return_value.short_name = "outlook_mail"
+    expected_config = {"expected_principal_id": "native-owner", "capture_originals": True}
+    creator._source_validation.seed_config_result("outlook_mail", expected_config)
+    spec = ManagedSource.model_validate(
+        {
+            **request.source.model_dump(),
+            "provider": "outlook_mail",
+            "expected_identity": "native-owner",
+            "config": {"expected_principal_id": "wrong-owner", "capture_originals": False},
+        }
+    )
+    request = request.model_copy(update={"source": spec})
+    assert spec.source_config() == expected_config
+    assert native_principal("outlook_mail", spec.source_config()) == ("native-owner", None)
+    with pytest.raises(ValueError, match="must capture originals"):
+        native_principal("outlook_mail", {"expected_principal_id": "native-owner"})
+    with pytest.raises(ValueError):
+        native_principal("outlook_mail", {"capture_originals": True})
+
+    async with database() as db:
+        assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 0
+        first = await service.ensure(db, ctx, account, request)
+        assert first.state == "ready" and first.expected_identity == "native-owner"
+        source = await db.get(SourceConnection, first.source_connection_id)
+        assert source.short_name == "outlook_mail" and source.config_fields == expected_config
+        sync = await db.get(Sync, first.sync_id)
+        original_epoch = sync.writer_epoch
+        assert sync.provisioning_generation == sync.provisioning_ready_generation == 1
+        assert sync.index_pipeline_version == 2
+    async with database() as db:
+        replay = await service.ensure(db, ctx, account, request)
+        assert replay == first
+        assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 1
+        assert await db.scalar(select(func.count()).select_from(Sync)) == 1
+        assert await db.scalar(select(func.count()).select_from(SyncJob)) == 1
+        assert (await db.get(Sync, first.sync_id)).writer_epoch == original_epoch
+    async with database() as db:
+        wrong = request.model_copy(
+            update={
+                "generation": 2,
+                "source": spec.model_copy(update={"expected_identity": "other-native-owner"}),
+            }
+        )
+        with pytest.raises(HTTPException, match="Reconnect changes original account identity"):
+            await service.ensure(db, ctx, account, wrong)
+    async with database() as db:
+        current = await service.get(db, ctx, account)
+        assert current == first
+        source = await db.get(SourceConnection, first.source_connection_id)
+        assert source.config_fields == expected_config
+        assert (await db.get(Sync, first.sync_id)).writer_epoch == original_epoch
+    lifecycle.create.assert_awaited_once()
+    workflows.run_source_connection_workflow.assert_awaited_once()

@@ -3,6 +3,7 @@
 from typing import Dict, List, Optional, Tuple
 from uuid import UUID
 
+from pydantic import JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave import schemas
@@ -73,6 +74,8 @@ class FakeSyncService(SyncServiceProtocol):
         run_immediately: bool,
         ctx: ApiContext,
         uow: UnitOfWork,
+        defer_execution: bool = False,
+        source_config: dict[str, JsonValue] | None = None,
     ) -> SyncProvisionResult:
         self._calls.append(("create", name, source_connection_id, collection_id))
         if self._should_raise:

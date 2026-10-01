@@ -1073,9 +1073,18 @@ async def test_create_no_cron_no_run_immediately():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "source_kind, expected_version", [("legacy", 1), ("gmail", 2), ("slack", 2)]
+    "source_kind, source_config, expected_version",
+    [
+        ("legacy", None, 1),
+        ("gmail", None, 2),
+        ("slack", None, 2),
+        ("outlook_mail", None, 1),
+        ("outlook_mail", {"capture_originals": True, "expected_principal_id": "native-owner"}, 2),
+    ],
 )
-async def test_create_with_cron_calls_temporal_schedule(source_kind, expected_version):
+async def test_create_with_cron_calls_temporal_schedule(
+    source_kind, source_config, expected_version
+):
     from airweave.schemas.source_connection import ScheduleConfig
 
     sync_repo = AsyncMock()
@@ -1097,12 +1106,16 @@ async def test_create_with_cron_calls_temporal_schedule(source_kind, expected_ve
     )
 
     from airweave.platform.sources.gmail import GmailSource
+    from airweave.platform.sources.outlook_mail import OutlookMailSource
     from airweave.platform.sources.slack import SlackSource
 
-    source_entry = _mock_source_entry()
-    source_entry.source_class_ref = {"legacy": object, "gmail": GmailSource, "slack": SlackSource}[
-        source_kind
-    ]
+    source_entry = _mock_source_entry(short_name=source_kind)
+    source_entry.source_class_ref = {
+        "legacy": object,
+        "gmail": GmailSource,
+        "slack": SlackSource,
+        "outlook_mail": OutlookMailSource,
+    }[source_kind]
     result = await svc.create(
         AsyncMock(),
         name="test",
@@ -1111,6 +1124,7 @@ async def test_create_with_cron_calls_temporal_schedule(source_kind, expected_ve
         collection_id=uuid4(),
         collection_readable_id="col-x",
         source_entry=source_entry,
+        source_config=source_config,
         schedule_config=ScheduleConfig(cron="0 6 * * *"),
         run_immediately=False,
         ctx=_mock_ctx(),

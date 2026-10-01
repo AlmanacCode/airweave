@@ -261,3 +261,32 @@ async def test_attachment_pagination_cannot_swallow_unsafe_continuation():
         assert len(calls) == 1
         assert calls[0].url.path == "/v1.0/me/messages/message-id/attachments"
         assert "private" not in str(source.logger.method_calls)
+
+
+@pytest.mark.parametrize("capture_originals", [False, True])
+async def test_source_creation_selects_capture_adapter_without_replacing_auth(capture_originals):
+    from airweave.domains.entities.canonical.page_source import CanonicalPageSource
+
+    def graph(request):
+        assert request.url.path == "/v1.0/me"
+        return httpx.Response(200, json={"id": "principal"})
+
+    auth = StaticTokenProvider("synthetic")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(graph)) as client:
+        source = await OutlookMailSource.create(
+            auth=auth,
+            logger=MagicMock(),
+            http_client=client,
+            config=OutlookMailConfig(
+                capture_originals=capture_originals,
+                expected_principal_id="principal",
+                included_folders=[],
+                excluded_folders=[],
+            ),
+        )
+        assert source.auth is auth
+        if capture_originals:
+            assert isinstance(source.capture_page_source, CanonicalPageSource)
+            assert source.capture_page_source.graph is source.graph
+        else:
+            assert source.capture_page_source is None

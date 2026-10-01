@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave import crud, schemas
@@ -67,7 +68,11 @@ from airweave.domains.syncs.cursors.service import SyncCursorService
 from airweave.domains.syncs.jobs.protocols import SyncJobStateMachineProtocol
 from airweave.domains.syncs.protocols import SyncStateMachineProtocol
 from airweave.domains.usage.protocols import UsageLedgerProtocol, UsageLimitCheckerProtocol
+from airweave.models.capture_scan import CaptureScan
+from airweave.models.entity import Entity
 from airweave.models.source_connection import SourceConnection
+from airweave.models.sync_cursor import SyncCursor as StoredSyncCursor
+from airweave.platform.configs.config import OutlookMailConfig
 from airweave.platform.sources._base import BaseSource
 
 from .entity.pipeline import EntityPipeline
@@ -199,11 +204,9 @@ class SyncFactory(SyncFactoryProtocol):
         if await admission.admit_job(db, ctx.organization.id, sync.id, sync_job.id) != generation:
             raise StaleWriter("Source authorization changed during initialization")
         source_entry = self._source_registry.get(sc.short_name)
-        canonical_source = (
-            source_result.source
-            if isinstance(source_result.source, (CanonicalSource, CanonicalPageSource))
-            else None
-        )
+        canonical_source = source_result.source.capture_page_source
+        if canonical_source is None and isinstance(source_result.source, CanonicalSource):
+            canonical_source = source_result.source
         destinations = (
             []
             if canonical_source is not None
@@ -358,7 +361,7 @@ class SyncFactory(SyncFactoryProtocol):
         sync_context: SyncContext,
     ) -> AsyncSourceStream | None:
         """Page sources are driven sequentially; legacy generators retain their stream."""
-        if isinstance(runtime.source, CanonicalPageSource):
+        if runtime.source.capture_page_source is not None:
             if source_result.node_selections:
                 raise ValueError("Whole-scope page capture does not support selected nodes")
             return None
@@ -397,9 +400,15 @@ class SyncFactory(SyncFactoryProtocol):
         access_token: Optional[str] = None,
     ) -> SourceBuildResult:
         """Build source instance, cursor, file service, and node selections."""
+        outlook_capture = False
+        if source_connection.short_name == "outlook_mail":
+            outlook_capture = OutlookMailConfig.model_validate(
+                source_connection.config_fields or {}
+            ).capture_originals
+            await self._validate_outlook_capture_mode(db, sync.id, ctx, outlook_capture)
         if execution_config and execution_config.behavior.replay_from_arf:
             source_class = self._source_registry.get(source_connection.short_name).source_class_ref
-            if isinstance(source_class, (CanonicalSource, CanonicalPageSource)):
+            if outlook_capture or isinstance(source_class, (CanonicalSource, CanonicalPageSource)):
                 raise ValueError(
                     "Canonical records must be reindexed from Postgres, not mutable ARF"
                 )
@@ -437,6 +446,46 @@ class SyncFactory(SyncFactoryProtocol):
         return SourceBuildResult(
             source=source, cursor=cursor, files=files, node_selections=node_selections
         )
+
+    async def _validate_outlook_capture_mode(
+        self, db: AsyncSession, sync_id: UUID, ctx: BaseContext, capture_originals: bool
+    ) -> None:
+        """Never reinterpret persisted IDs or cursors when selecting an Outlook adapter."""
+        scope = (Entity.sync_id == sync_id, Entity.organization_id == ctx.organization.id)
+        legacy, canonical, scanned = (
+            await db.execute(
+                select(
+                    select(Entity.id).where(*scope, Entity.record_revision == 0).exists(),
+                    select(Entity.id).where(*scope, Entity.record_revision > 0).exists(),
+                    select(CaptureScan.id)
+                    .where(
+                        CaptureScan.sync_id == sync_id,
+                        CaptureScan.organization_id == ctx.organization.id,
+                    )
+                    .exists(),
+                )
+            )
+        ).one()
+        cursor = await db.scalar(
+            select(StoredSyncCursor.cursor_data).where(
+                StoredSyncCursor.sync_id == sync_id,
+                StoredSyncCursor.organization_id == ctx.organization.id,
+            )
+        )
+        cursor = cursor or {}
+        canonical_keys = {"canonical_cycle", "canonical_checkpoint"}
+        has_canonical_cursor = bool(canonical_keys.intersection(cursor))
+        has_legacy_cursor = any(
+            value is not None and value != {} and value != []
+            for key, value in cursor.items()
+            if key not in canonical_keys
+        )
+        if (capture_originals and (legacy or has_legacy_cursor)) or (
+            not capture_originals and (canonical or scanned or has_canonical_cursor)
+        ):
+            raise ValueError(
+                "Outlook capture mode differs from retained state; create a new source"
+            )
 
     async def _build_arf_replay_source(
         self,

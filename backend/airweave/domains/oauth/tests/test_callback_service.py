@@ -25,8 +25,8 @@ from airweave.domains.oauth.types import OAuth1TokenResponse
 from airweave.domains.organizations.fakes.repository import FakeOrganizationRepository
 from airweave.domains.source_connections.fakes.repository import FakeSourceConnectionRepository
 from airweave.domains.sources.exceptions import SourceNotFoundError, SourceValidationError
-from airweave.domains.syncs.jobs.fakes.repository import FakeSyncJobRepository
 from airweave.domains.syncs.fakes.repository import FakeSyncRepository
+from airweave.domains.syncs.jobs.fakes.repository import FakeSyncJobRepository
 from airweave.models.connection_init_session import ConnectionInitSession, ConnectionInitStatus
 from airweave.models.organization import Organization
 from airweave.models.source_connection import SourceConnection
@@ -1122,6 +1122,7 @@ class TestFinalizeCallback:
 
         job_id = uuid4()
         sync_job = SyncJob(
+            provisioning_generation=0,
             id=job_id,
             sync_id=sync_id,
             status=SyncJobStatus.PENDING,
@@ -1255,6 +1256,7 @@ class TestFinalizeCallback:
         from airweave.models.sync_job import SyncJob
 
         sync_job = SyncJob(
+            provisioning_generation=0,
             id=uuid4(),
             sync_id=sync_id,
             status=SyncJobStatus.RUNNING,
@@ -1316,6 +1318,7 @@ class TestFinalizeCallback:
             sync_id,
             [
                 SyncJob(
+                    provisioning_generation=0,
                     id=uuid4(),
                     sync_id=sync_id,
                     status=SyncJobStatus.PENDING,
@@ -1407,6 +1410,7 @@ class TestFinalizeCallback:
             sync_id,
             [
                 SyncJob(
+                    provisioning_generation=0,
                     id=uuid4(),
                     sync_id=sync_id,
                     status=SyncJobStatus.PENDING,
@@ -1575,6 +1579,7 @@ class TestFinalizeCallback:
             sync_id,
             [
                 SyncJob(
+                    provisioning_generation=0,
                     id=uuid4(),
                     sync_id=sync_id,
                     status=SyncJobStatus.PENDING,
@@ -1743,6 +1748,7 @@ class TestDeferredSync:
             sync_id,
             [
                 SyncJob(
+                    provisioning_generation=0,
                     id=uuid4(),
                     sync_id=sync_id,
                     status=SyncJobStatus.PENDING,
@@ -1823,6 +1829,7 @@ class TestDeferredSync:
             sync_id,
             [
                 SyncJob(
+                    provisioning_generation=0,
                     id=uuid4(),
                     sync_id=sync_id,
                     status=SyncJobStatus.PENDING,
@@ -1953,6 +1960,7 @@ class TestDeferredSync:
             sync_id,
             [
                 SyncJob(
+                    provisioning_generation=0,
                     id=uuid4(),
                     sync_id=sync_id,
                     status=SyncJobStatus.PENDING,
@@ -2241,9 +2249,7 @@ class TestVerifyOAuthFlow:
         db = AsyncMock()
         ctx = _ctx()
 
-        with patch(
-            "airweave.domains.oauth.callback_service.UnitOfWork"
-        ) as mock_uow_cls:
+        with patch("airweave.domains.oauth.callback_service.UnitOfWork") as mock_uow_cls:
             mock_uow = AsyncMock()
             mock_uow.session = AsyncMock()
             mock_uow.__aenter__ = AsyncMock(return_value=mock_uow)

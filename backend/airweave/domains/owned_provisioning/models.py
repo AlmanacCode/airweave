@@ -11,7 +11,7 @@ class ManagedSource(BaseModel):
     """Native identity is supplied only by Almanac's verified account authority."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    provider: Literal["gmail", "google_calendar", "google_drive", "slack"]
+    provider: Literal["gmail", "google_calendar", "google_drive", "slack", "outlook_mail"]
     expected_identity: str = Field(min_length=1, max_length=512)
     expected_user_identity: str | None = Field(default=None, min_length=1, max_length=512)
     collection: str = Field(min_length=1, max_length=255)
@@ -39,6 +39,12 @@ class ManagedSource(BaseModel):
 
     def source_config(self) -> dict[str, JsonValue]:
         """Expected identity cannot be overridden inside unstructured provider config."""
+        if self.provider == "outlook_mail":
+            return {
+                **self.config,
+                "expected_principal_id": self.expected_identity,
+                "capture_originals": True,
+            }
         if self.provider == "slack":
             return {
                 **self.config,
@@ -100,6 +106,7 @@ def native_principal(provider: str, config: dict) -> tuple[str, str | None]:
         GmailConfig,
         GoogleCalendarConfig,
         GoogleDriveConfig,
+        OutlookMailConfig,
         SlackConfig,
     )
 
@@ -111,6 +118,11 @@ def native_principal(provider: str, config: dict) -> tuple[str, str | None]:
             identity = GoogleCalendarConfig.model_validate(config).expected_primary_calendar_id
         case "google_drive":
             identity = GoogleDriveConfig.model_validate(config).expected_permission_id
+        case "outlook_mail":
+            outlook = OutlookMailConfig.model_validate(config)
+            if not outlook.capture_originals:
+                raise ValueError("Owned Outlook source must capture originals")
+            identity = outlook.expected_principal_id
         case "slack":
             slack = SlackConfig.model_validate(config)
             identity, user = slack.expected_team_id, slack.expected_user_id

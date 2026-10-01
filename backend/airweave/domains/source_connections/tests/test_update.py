@@ -201,6 +201,77 @@ async def test_update_config_valid():
     assert any(c[0] == "validate_config" for c in validation._calls)
 
 
+@pytest.mark.parametrize("originals", [False, True])
+async def test_outlook_capture_mode_change_requires_new_source(originals: bool):
+    sc = _make_sc(short_name="outlook_mail")
+    sc.config_fields = {"expected_principal_id": "native-user", "capture_originals": originals}
+    sc_repo = FakeSourceConnectionRepository()
+    sc_repo.seed(sc.id, sc)
+    config = {"expected_principal_id": "native-user", "capture_originals": not originals}
+    validation = FakeSourceValidationService()
+    validation.seed_config_result("outlook_mail", config)
+    svc = _build_service(sc_repo=sc_repo, source_validation=validation)
+
+    with pytest.raises(HTTPException, match="Create a new source") as exc:
+        await svc.update(
+            _unmanaged_db(), id=sc.id, obj_in=SourceConnectionUpdate(config=config), ctx=_make_ctx()
+        )
+
+    assert exc.value.status_code == 400
+    assert sc.config_fields["capture_originals"] is originals
+    assert not any(call[0] == "update" for call in sc_repo._calls)
+
+
+@pytest.mark.parametrize("originals", [False, True])
+async def test_outlook_principal_change_preserves_capture_identity(originals: bool):
+    sc = _make_sc(short_name="outlook_mail")
+    sc.config_fields = {"expected_principal_id": "native-user", "capture_originals": originals}
+    sc_repo = FakeSourceConnectionRepository()
+    sc_repo.seed(sc.id, sc)
+    config = {**sc.config_fields, "expected_principal_id": "another-user"}
+    validation = FakeSourceValidationService()
+    validation.seed_config_result("outlook_mail", config)
+    svc = _build_service(sc_repo=sc_repo, source_validation=validation)
+
+    if originals:
+        with pytest.raises(HTTPException, match="Create a new source") as exc:
+            await svc.update(
+                _unmanaged_db(),
+                id=sc.id,
+                obj_in=SourceConnectionUpdate(config=config),
+                ctx=_make_ctx(),
+            )
+        assert exc.value.status_code == 400
+        assert sc.config_fields["expected_principal_id"] == "native-user"
+        assert not any(call[0] == "update" for call in sc_repo._calls)
+    else:
+        await svc.update(
+            _unmanaged_db(), id=sc.id, obj_in=SourceConnectionUpdate(config=config), ctx=_make_ctx()
+        )
+        assert sc.config_fields["expected_principal_id"] == "another-user"
+
+
+@pytest.mark.parametrize("originals", [None, False, True])
+async def test_outlook_unchanged_capture_mode_allows_config_update(originals: bool | None):
+    sc = _make_sc(short_name="outlook_mail")
+    sc.config_fields = {"expected_principal_id": "native-user"}
+    if originals is not None:
+        sc.config_fields["capture_originals"] = originals
+    sc_repo = FakeSourceConnectionRepository()
+    sc_repo.seed(sc.id, sc)
+    config = {**sc.config_fields, "included_folders": ["inbox"]}
+    validation = FakeSourceValidationService()
+    validation.seed_config_result("outlook_mail", config)
+    svc = _build_service(sc_repo=sc_repo, source_validation=validation)
+
+    result = await svc.update(
+        _unmanaged_db(), id=sc.id, obj_in=SourceConnectionUpdate(config=config), ctx=_make_ctx()
+    )
+
+    assert result.id == sc.id
+    assert sc.config_fields == config
+
+
 # ---------------------------------------------------------------------------
 # Schedule updates -- table-driven
 # ---------------------------------------------------------------------------
@@ -665,7 +736,9 @@ async def test_native_update_cannot_rebind_identity():
     db = _unmanaged_db()
     with pytest.raises(HTTPException) as error:
         await _build_service(sc_repo=repo).update(
-            db, id=sc.id, obj_in=SourceConnectionUpdate(config={"owner_id": "other"}),
+            db,
+            id=sc.id,
+            obj_in=SourceConnectionUpdate(config={"owner_id": "other"}),
             ctx=_make_ctx(),
         )
     assert error.value.status_code == 409

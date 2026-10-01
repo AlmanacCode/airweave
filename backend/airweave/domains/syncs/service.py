@@ -16,6 +16,7 @@ from typing import List, Optional, Tuple
 from uuid import UUID
 
 from fastapi import HTTPException
+from pydantic import JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave import schemas
@@ -58,6 +59,7 @@ from airweave.domains.temporal.protocols import (
     TemporalScheduleServiceProtocol,
     TemporalWorkflowServiceProtocol,
 )
+from airweave.platform.configs.config import OutlookMailConfig
 from airweave.schemas.source_connection import ScheduleConfig
 from airweave.schemas.sync import SyncCreate
 from airweave.schemas.sync_job import SyncJobCreate
@@ -111,6 +113,7 @@ class SyncService(SyncServiceProtocol):
         ctx: ApiContext,
         uow: UnitOfWork,
         defer_execution: bool = False,
+        source_config: dict[str, JsonValue] | None = None,
     ) -> SyncProvisionResult:
         """Create sync + optional job + Temporal schedule atomically.
 
@@ -129,6 +132,13 @@ class SyncService(SyncServiceProtocol):
         if cron:
             self._validate_cron_for_source(cron, source_entry)
 
+        canonical = isinstance(
+            source_entry.source_class_ref, (CanonicalSource, CanonicalPageSource)
+        )
+        if source_entry.short_name == "outlook_mail":
+            # Outlook composes its canonical adapter only for explicit original capture.
+            canonical = OutlookMailConfig.model_validate(source_config or {}).capture_originals
+
         sync_schema, sync_job_schema = await self._create_sync_records(
             uow.session,
             name=f"Sync for {name}",
@@ -136,11 +146,7 @@ class SyncService(SyncServiceProtocol):
             destination_connection_ids=destination_connection_ids,
             cron_schedule=cron,
             run_immediately=run_immediately,
-            initial_pipeline_version=(
-                SEARCH_METADATA_PIPELINE_VERSION
-                if isinstance(source_entry.source_class_ref, (CanonicalSource, CanonicalPageSource))
-                else 1
-            ),
+            initial_pipeline_version=(SEARCH_METADATA_PIPELINE_VERSION if canonical else 1),
             ctx=ctx,
             uow=uow,
         )
