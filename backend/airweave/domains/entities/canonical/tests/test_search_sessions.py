@@ -161,14 +161,26 @@ async def test_read_phase_releases_acquired_connection(
             json={"query": "budget", "sync_ids": [str(fence.sync_id)], "mode": "keyword"},
         )
     )
-    await asyncio.wait_for(entered.wait(), timeout=5)
-    if outcome == "cancellation":
+    waiting = asyncio.create_task(entered.wait())
+    try:
+        await asyncio.wait({task, waiting}, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+        if not entered.is_set():
+            if task.done():
+                response = await task  # Surface an early exception instead of hiding it as timeout.
+                pytest.fail(f"Search returned HTTP {response.status_code} before enrichment")
+            pytest.fail("Search did not reach enrichment within five seconds")
+        if outcome == "cancellation":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            with pytest.raises(RuntimeError, match="synthetic enrichment failure"):
+                await task
+    finally:
+        # Failed setup must not leave a request borrowing from the fixture's pool.
+        waiting.cancel()
         task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-    else:
-        with pytest.raises(RuntimeError, match="synthetic enrichment failure"):
-            await task
+        await asyncio.gather(waiting, task, return_exceptions=True)
     await connection_is_free(single_connection)
 
 
