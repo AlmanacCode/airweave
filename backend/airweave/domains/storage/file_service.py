@@ -80,6 +80,8 @@ class FileService:
         auth: SourceAuthProvider,
         logger: ContextualLogger,
         media_type: str | None = None,
+        *,
+        follow_redirects: bool = True,
     ) -> BlobReference:
         """Capture original bytes with size/auth checks, independent of search file types."""
         if self.sync_id is None:
@@ -89,7 +91,9 @@ class FileService:
         temp_path = f"{self.base_temp_dir}/{uuid4()}-canonical"
         try:
             try:
-                await self._stream_download(client, url, headers, temp_path, logger)
+                await self._stream_download(
+                    client, url, headers, temp_path, logger, follow_redirects=follow_redirects
+                )
             except httpx.HTTPStatusError as exc:
                 if (
                     exc.response.status_code != 401
@@ -99,7 +103,9 @@ class FileService:
                     raise
                 # Never promote an unauthenticated signed URL to provider credentials.
                 headers = await authorization_headers(auth, refresh=True)
-                await self._stream_download(client, url, headers, temp_path, logger)
+                await self._stream_download(
+                    client, url, headers, temp_path, logger, follow_redirects=follow_redirects
+                )
             async with aiofiles.open(temp_path, "rb") as downloaded:
                 content = await downloaded.read(self.MAX_FILE_SIZE_BYTES + 1)
             return await self.store_canonical_blob(content, media_type=media_type)
@@ -170,13 +176,15 @@ class FileService:
         headers: dict,
         temp_path: str,
         logger: ContextualLogger,
+        *,
+        follow_redirects: bool = True,
     ) -> None:
         """Stream-download a file to disk with retry on 429/5xx/timeout."""
         async with client.stream(
             "GET",
             url,
             headers=headers,
-            follow_redirects=True,
+            follow_redirects=follow_redirects,
             timeout=httpx.Timeout(180.0, read=540.0),
         ) as response:
             response.raise_for_status()

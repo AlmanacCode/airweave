@@ -117,7 +117,7 @@ class ComposioAuthProvider(BaseAuthProvider):
             "google_drive": frozenset(
                 {"www.googleapis.com", "docs.googleapis.com", "sheets.googleapis.com"}
             ),
-            "slack": frozenset({"slack.com"}),
+            "slack": frozenset({"slack.com", "files.slack.com"}),
             "linear": frozenset({"api.linear.app", "uploads.linear.app"}),
             "github": frozenset({"api.github.com"}),
             "notion": frozenset({"api.notion.com"}),

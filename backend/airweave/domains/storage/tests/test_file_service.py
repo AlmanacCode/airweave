@@ -138,7 +138,7 @@ class TestCanonicalBlobs:
         svc.sync_id = uuid4()
         content = b"original unsupported format"
 
-        async def download(client, url, headers, destination, logger):
+        async def download(client, url, headers, destination, logger, *, follow_redirects=True):
             with open(destination, "wb") as output:
                 output.write(content)
 
@@ -205,3 +205,54 @@ async def test_401_refresh_requires_original_bearer_request(tmp_path, canonical,
             await operation
             auth.force_refresh.assert_awaited_once()
             assert requests == ["Bearer fixture-old", "Bearer fixture-new"]
+
+
+@pytest.mark.asyncio
+async def test_canonical_can_reject_redirect_without_storing_its_body(tmp_path):
+    from airweave.domains.sources.token_providers.static import StaticTokenProvider
+    from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+
+    service, storage = _make_service(str(tmp_path))
+    service.sync_id = uuid4()
+    calls = []
+
+    async def download(request):
+        if request.method == "HEAD":
+            return httpx.Response(200)
+        calls.append(request.url.path)
+        if request.url.path == "/original.pdf":
+            return httpx.Response(302, headers={"location": "/target.pdf"}, content=b"redirect")
+        return httpx.Response(200, content=b"original")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(download)) as raw:
+        client = AirweaveHttpClient(raw, uuid4(), "fixture", feature_flag_enabled=False)
+        with pytest.raises(httpx.HTTPStatusError) as error:
+            await service.capture_canonical_url(
+                "https://files.example/original.pdf",
+                client,
+                StaticTokenProvider("fixture"),
+                MagicMock(),
+                follow_redirects=False,
+            )
+        assert error.value.response.status_code == 302
+        assert calls == ["/original.pdf"]
+        storage.write_file.assert_not_awaited()
+        assert not list(tmp_path.iterdir())
+        # Existing callers retain their redirect behavior without a new argument.
+        blob = await service.capture_canonical_url(
+            "https://files.example/original.pdf",
+            client,
+            StaticTokenProvider("fixture"),
+            MagicMock(),
+        )
+        assert calls == ["/original.pdf", "/original.pdf", "/target.pdf"]
+        storage.write_file.assert_awaited_once_with(blob.key, b"original")
+
+        entity = MagicMock(name="entity")
+        entity.name, entity.url = "original.pdf", "https://files.example/original.pdf"
+        downloaded = await service.download_from_url(
+            entity, client, StaticTokenProvider("fixture"), MagicMock()
+        )
+        assert calls[-2:] == ["/original.pdf", "/target.pdf"]
+        with open(downloaded.local_path, "rb") as original:
+            assert original.read() == b"original"

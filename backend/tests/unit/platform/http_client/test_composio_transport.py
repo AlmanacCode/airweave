@@ -361,3 +361,40 @@ async def test_attio_binding_uses_only_native_api_host_and_verified_account(monk
     fetch.return_value = {"id": "ca_other", "toolkit": {"slug": "attio"}, "status": "ACTIVE"}
     with pytest.raises(AuthProviderConfigError, match="identity"):
         await provider.get_auth_result("attio", ["access_token"])
+
+
+@pytest.mark.asyncio
+async def test_slack_binding_permits_exact_file_host_not_lookalike(monkeypatch):
+    from airweave.domains.auth_provider.providers.composio import ComposioAuthProvider
+
+    provider = await ComposioAuthProvider.create(
+        credentials={"api_key": "key"}, config={"account_id": "ca_slack"}
+    )
+    monkeypatch.setattr(
+        provider,
+        "_get_with_auth",
+        AsyncMock(
+            return_value={"id": "ca_slack", "toolkit": {"slug": "slack"}, "status": "ACTIVE"}
+        ),
+    )
+    result = await provider.get_auth_result("slack", ["access_token"])
+    assert result.managed_auth.allowed_hosts == {"slack.com", "files.slack.com"}
+    calls = []
+
+    async def proxy(request):
+        calls.append(json.loads(request.content)["endpoint"])
+        return httpx.Response(200, json={"status": 200, "data": "file", "headers": {}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(proxy)) as upstream:
+        async with httpx.AsyncClient(
+            transport=ComposioTransport(
+                client=upstream,
+                api_key="key",
+                connected_account_id="ca_slack",
+                allowed_hosts=result.managed_auth.allowed_hosts,
+            )
+        ) as client:
+            await client.get("https://files.slack.com/files-pri/original.pdf")
+            with pytest.raises(ComposioProxyError):
+                await client.get("https://files.slack.com.evil.example/original.pdf")
+    assert calls == ["https://files.slack.com/files-pri/original.pdf"]
