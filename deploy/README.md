@@ -120,3 +120,12 @@ coverage from one healthy request.
 
 Manifest syntax reference: https://docs.porter.run/applications/configuration-as-code/reference
 Private service semantics: https://docs.porter.run/applications/configuration-as-code/services/web-service
+
+## Private local worker listeners
+
+Set `WORKER_BIND_HOST=127.0.0.1` for a host-local worker. This binds both its
+health/metrics/drain control server and Temporal SDK metrics exporter to loopback.
+The default remains `0.0.0.0` for container networking. Binding limits network
+reachability; it does not authenticate these endpoints, including `POST /drain`.
+Keep container worker ports private. API listener and API metrics bindings are
+configured separately.

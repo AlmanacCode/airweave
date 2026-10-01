@@ -8,6 +8,7 @@ WorkerMetricsRegistry) is constructed for real so tests exercise actual wiring.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import ClientSession
 from temporalio.runtime import PrometheusConfig, TelemetryConfig
 
 from airweave.domains.temporal.worker.config import WorkerConfig
@@ -33,7 +34,7 @@ def test_init_creates_runtime_with_correct_config(mock_runtime_cls):
     """__init__ builds a real TelemetryConfig(PrometheusConfig) and passes it to Runtime."""
     from airweave.domains.temporal.worker import TemporalWorker
 
-    config = _make_config(sdk_metrics_port=9999)
+    config = _make_config(sdk_metrics_port=9999, bind_host="127.0.0.1")
     worker = TemporalWorker(config)
 
     # Runtime was called exactly once
@@ -46,7 +47,7 @@ def test_init_creates_runtime_with_correct_config(mock_runtime_cls):
 
     # Its metrics member is a real PrometheusConfig with the right address
     assert isinstance(telemetry.metrics, PrometheusConfig)
-    assert telemetry.metrics.bind_address == "0.0.0.0:9999"
+    assert telemetry.metrics.bind_address == "127.0.0.1:9999"
 
     # The worker holds the Runtime *instance*
     assert worker._runtime is mock_runtime_cls.return_value
@@ -183,3 +184,25 @@ async def test_stop_skips_shutdown_when_not_running(mock_runtime_cls, mock_clien
 
     worker._control_server.stop.assert_awaited_once()
     mock_client_close.assert_awaited_once()
+
+
+@patch("temporalio.runtime.Runtime")
+async def test_control_server_binds_only_loopback(mock_runtime_cls):
+    """Real aiohttp listener uses the same configured host as SDK metrics."""
+    from airweave.domains.temporal.worker import TemporalWorker
+
+    worker = TemporalWorker(_make_config(bind_host="127.0.0.1", metrics_port=0))
+    server = worker._control_server
+    try:
+        await server.start()
+        assert server._runner is not None
+        addresses = server._runner.addresses
+        assert len(addresses) == 1
+        host, port = addresses[0]
+        assert host == "127.0.0.1"
+        async with ClientSession() as client:
+            async with client.get(f"http://127.0.0.1:{port}/health") as response:
+                assert response.status == 503
+                assert await response.text() == "NOT_RUNNING"
+    finally:
+        await server.stop()

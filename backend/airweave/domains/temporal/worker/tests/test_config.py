@@ -14,6 +14,7 @@ def test_sdk_metrics_port_default():
         graceful_shutdown_timeout_seconds=30,
     )
     assert config.sdk_metrics_port == 9090
+    assert config.bind_host == "0.0.0.0"
 
 
 def test_sdk_metrics_port_override():
@@ -32,6 +33,7 @@ def test_from_settings_wires_sdk_metrics_port():
     with patch("airweave.domains.temporal.worker.config.settings") as mock:
         mock.TEMPORAL_TASK_QUEUE = "q"
         mock.WORKER_METRICS_PORT = 8080
+        mock.WORKER_BIND_HOST = "0.0.0.0"
         mock.TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT = 30
         mock.TEMPORAL_DISABLE_SANDBOX = False
         mock.TEMPORAL_SDK_METRICS_PORT = 7777
@@ -46,6 +48,7 @@ def test_from_settings_wires_all_fields():
     with patch("airweave.domains.temporal.worker.config.settings") as mock:
         mock.TEMPORAL_TASK_QUEUE = "my-queue"
         mock.WORKER_METRICS_PORT = 9091
+        mock.WORKER_BIND_HOST = "127.0.0.1"
         mock.TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT = 60
         mock.TEMPORAL_DISABLE_SANDBOX = True
         mock.TEMPORAL_SDK_METRICS_PORT = 9999
@@ -54,6 +57,7 @@ def test_from_settings_wires_all_fields():
 
     assert config.task_queue == "my-queue"
     assert config.metrics_port == 9091
+    assert config.bind_host == "127.0.0.1"
     assert config.graceful_shutdown_timeout_seconds == 60
     assert config.disable_sandbox is True
     assert config.sdk_metrics_port == 9999

@@ -233,6 +233,7 @@ class Settings(BaseSettings):
 
     # Temporal worker graceful shutdown configuration
     TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT: int = 7200  # 2 hours in seconds
+    WORKER_BIND_HOST: str = "0.0.0.0"  # Control server and Temporal SDK metrics
     WORKER_METRICS_PORT: int = 8888  # Port for /drain and /health endpoints
     METRICS_PORT: int = 9090  # Port for Prometheus metrics endpoint
     METRICS_HOST: str = "0.0.0.0"  # Bind address for metrics server

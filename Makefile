@@ -53,7 +53,7 @@ test-health:
 
 test-worker:
 	@test -n "$$CANONICAL_TEST_DATABASE_URL" || (echo 'Set CANONICAL_TEST_DATABASE_URL to a disposable PostgreSQL database.' >&2; exit 1)
-	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/temporal/activities/tests/test_project_canonical_records.py airweave/domains/temporal/activities/tests/test_cleanup_stuck_sync_jobs.py airweave/domains/temporal/workflows/tests/test_native_projection_recovery.py airweave/domains/temporal/workflows/tests/test_cleanup_workflows.py airweave/domains/temporal/workflows/tests/test_canonical_projection.py airweave/domains/temporal/worker/tests/test_wiring.py
+	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/temporal/activities/tests/test_project_canonical_records.py airweave/domains/temporal/activities/tests/test_cleanup_stuck_sync_jobs.py airweave/domains/temporal/workflows/tests/test_native_projection_recovery.py airweave/domains/temporal/workflows/tests/test_cleanup_workflows.py airweave/domains/temporal/workflows/tests/test_canonical_projection.py airweave/domains/temporal/worker/tests/test_wiring.py airweave/domains/temporal/worker/tests/test_config.py airweave/domains/temporal/worker/tests/test_worker.py
 
 test-index:
 	@test "$$OWNED_VESPA_TEST" = 1 || (echo 'Set OWNED_VESPA_TEST=1 only for a disposable Vespa at localhost:8081/19071; this deploys schemas.' >&2; exit 1)

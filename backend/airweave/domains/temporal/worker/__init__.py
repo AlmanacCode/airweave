@@ -63,7 +63,7 @@ class TemporalWorker:
         self._runtime = Runtime(
             telemetry=TelemetryConfig(
                 metrics=PrometheusConfig(
-                    bind_address=f"0.0.0.0:{config.sdk_metrics_port}",
+                    bind_address=f"{config.bind_host}:{config.sdk_metrics_port}",
                 ),
             ),
         )
