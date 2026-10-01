@@ -2,7 +2,7 @@
 
 This internal service retains versioned Almanac snapshots in the existing
 canonical store. It does not provision sources, authenticate callers, enumerate
-Almanac data, publish a search projection, or provide a public import endpoint.
+Almanac data, or provide a public import endpoint.
 Almanac remains the authority for content and access.
 
 The future trusted publisher must bind a source connection with
@@ -46,3 +46,28 @@ The publisher must not invent a version from capture time or an observation coun
 
 Tests use the existing disposable PostgreSQL fixture, including actual migration
 schemas and transaction rollback. They do not contact a provider or production.
+
+## Native search projection
+
+`projection.py` supplies offline inputs to the existing canonical projector.
+It validates original IDs, revisions and timestamps against their snapshot,
+then selects native text without replacing the retained original JSON:
+
+- Knowledge: body, title, description and user notes. Path is a locator; renaming
+  it keeps record identity. Other structured knowledge fields are retained but
+  do not yet have a curated searchable representation.
+- Sessions: title and description. Archived sessions remain included, matching
+  current Almanac session search; archived knowledge is excluded.
+- Messages: original string content or `type=text` blocks, with session/message
+  IDs, ordinals and block anchors. Inactive legacy imports are excluded. API
+  replay payloads, reasoning fields and arbitrary metadata are not search text.
+
+Mixed messages can publish their text while retained nontext blocks report
+`unsupported_format` and partial extraction coverage. Malformed text fails
+explicitly. Retaining an image URL in original JSON does not capture image bytes
+or make them downloadable; attachment acquisition is still separate work.
+
+Native indexed sources use the same publication and access validation as provider
+sources, without a provider registry entry or fabricated OAuth connection. This
+is an index capability, not an authentication grant. The trusted publisher and
+owner-binding API must still be implemented before exposing native ingestion.

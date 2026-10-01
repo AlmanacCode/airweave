@@ -1,6 +1,8 @@
 """Typed mapper outputs; source descriptors survive filtering and entity-ID stamping."""
 
-from pydantic import BaseModel, ConfigDict
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from airweave.domains.entities.canonical.extraction_models import ExtractionPart
 from airweave.domains.sync_pipeline.pipeline.text_models import NativeTextBody
@@ -14,6 +16,14 @@ class ProjectionInput(BaseModel):
     part: ExtractionPart
     entity: BaseEntity | None
     native_body: NativeTextBody | None = None
+    omission: Literal["unsupported_format"] | None = None
+
+    @model_validator(mode="after")
+    def valid_omission(self) -> "ProjectionInput":
+        """Explicit unsupported originals cannot also supply indexable content."""
+        if self.omission is not None and (self.entity is not None or self.native_body is not None):
+            raise ValueError("Unsupported projection parts cannot supply an entity or text")
+        return self
 
 
 class ProjectionInputs(BaseModel):

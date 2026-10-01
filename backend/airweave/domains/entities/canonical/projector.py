@@ -226,7 +226,9 @@ def _select_inputs(
     outcomes = []
     for item in mapped.parts:
         part, entity = item.part, item.entity
-        if entity is None:
+        if item.omission == "unsupported_format":
+            outcome, reason = "unsupported", "unsupported_format"
+        elif entity is None:
             outcome, reason = "unavailable_original", "original_not_captured"
         elif (
             part.kind == "file"

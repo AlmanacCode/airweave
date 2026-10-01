@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
 from airweave.domains.entities.canonical.projection_store import publications_match
+from airweave.domains.entities.canonical.source import indexed_record_types
 from airweave.domains.search.types.results import SearchResult
 from airweave.domains.sources.protocols import SourceRegistryProtocol
 from airweave.models.entity import Entity
@@ -45,9 +46,7 @@ async def visible_results(
         scope = scopes.get(metadata.sync_id)
         if scope is None or metadata.source_name != scope.short_name:
             continue
-        canonical = bool(
-            getattr(registry.get(scope.short_name).source_class_ref, "canonical_record_types", ())
-        )
+        canonical = bool(indexed_record_types(scope.short_name, registry))
         try:
             locator = ProjectionLocator.parse(metadata.original_entity_id)
         except ValueError:

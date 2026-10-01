@@ -250,6 +250,10 @@ def _wispr(record: SourceRecord) -> tuple[BaseEntity, ...]:
 
 def excluded_from_search(record: SourceRecord, source_name: str) -> bool:
     """Retained calendar exclusions intentionally publish no searchable meeting."""
+    if source_name == "almanac":
+        from airweave.domains.native_ingestion.projection import excluded_native
+
+        return excluded_native(record)
     return source_name == "google_calendar" and (
         record.identity.record_type == "event_occurrence"
         or (record.identity.record_type == "event" and is_cancelled_recurring_event(record.payload))
@@ -267,6 +271,11 @@ async def map_record(
         raise ProjectionMappingError("Unavailable records cannot be projected")
     if excluded_from_search(record, source_name):
         yield ProjectionInputs(parts=())
+        return
+    if source_name == "almanac":
+        from airweave.domains.native_ingestion.projection import map_native
+
+        yield map_native(record)
         return
     if (
         source_name == "google_drive"

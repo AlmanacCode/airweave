@@ -19,6 +19,7 @@ from airweave.domains.entities.canonical.search_metadata import (
     SEARCH_METADATA_PIPELINE_VERSION,
     epoch_microseconds,
 )
+from airweave.domains.entities.canonical.source import indexed_record_types
 from airweave.domains.entities.canonical.store import content_is_available
 from airweave.domains.search.owned_models import (
     OwnedSearchCoverage,
@@ -256,11 +257,7 @@ class OwnedSearchService:
         allowed_types = set()
         groups = defaultdict(list)
         for connection in snapshots:
-            types = getattr(
-                self._registry.get(connection.short_name).source_class_ref,
-                "canonical_record_types",
-                (),
-            )
+            types = indexed_record_types(connection.short_name, self._registry)
             if not types:
                 raise HTTPException(422, "Source does not support owned indexed records")
             allowed_types.update(types)
