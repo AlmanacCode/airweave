@@ -14,7 +14,6 @@ from pathlib import Path
 from statistics import mean
 from typing import Annotated, Literal
 
-import ir_measures
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Identifier = Annotated[str, Field(min_length=1, pattern=r"^\S+$")]
@@ -209,8 +208,8 @@ class Report(Value):
     warnings: tuple[str, ...]
 
 
-def summarize(dataset: Dataset, run: Run) -> Report:
-    """Use established IR measures, preserving API rank order with unique synthetic scores."""
+def validate_run(dataset: Dataset, run: Run) -> None:
+    """Require every observation to belong to the exact frozen evaluation dataset."""
     if (
         run.corpus_id != dataset.corpus_id
         or run.dataset_sha256 != dataset.fingerprint()
@@ -223,6 +222,36 @@ def summarize(dataset: Dataset, run: Run) -> Report:
         )
     if any(t.query_id not in query_ids for t in run.timings):
         raise ValueError("Timing references an unknown query")
+
+
+def pool_unjudged(
+    dataset: Dataset, runs: tuple[Run, ...]
+) -> dict[str, tuple[str, ...]]:
+    """Union delivered candidates needing assessment; never invent negative labels."""
+    for run in runs:
+        validate_run(dataset, run)
+    return {
+        query.id: tuple(
+            sorted(
+                {
+                    record
+                    for run in runs
+                    for result in run.results
+                    if result.query_id == query.id
+                    for record in result.record_ids
+                }
+                - {judgment.record_id for judgment in query.judgments}
+            )
+        )
+        for query in dataset.queries
+    }
+
+
+def summarize(dataset: Dataset, run: Run) -> Report:
+    """Use established IR measures, preserving API rank order with unique synthetic scores."""
+    import ir_measures
+
+    validate_run(dataset, run)
     measures = [
         ir_measures.nDCG @ 10,
         ir_measures.RR @ 10,

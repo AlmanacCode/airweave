@@ -11,6 +11,7 @@ from evaluation.retrieval import (
     Result,
     Run,
     Timing,
+    pool_unjudged,
     summarize,
 )
 
@@ -143,6 +144,33 @@ def test_missing_query_or_changed_labels_cannot_improve_score_silently():
             status="success",
             duration_ms=float("nan"),
         )
+
+
+def test_pool_unions_only_unjudged_delivered_records_and_preserves_dataset_binding():
+    dataset = corpus()
+    original = run(dataset)
+    additional = run(
+        dataset,
+        results=(
+            Result(
+                query_id="known",
+                status="success",
+                record_ids=("meeting", "other", "unknown"),
+            ),
+            Result(query_id="failed", status="timeout"),
+            Result(query_id="absent", status="success", record_ids=("candidate",)),
+        ),
+    )
+    assert pool_unjudged(dataset, (original, additional)) == {
+        "known": ("other", "unknown"),
+        "failed": (),
+        "absent": ("candidate",),
+    }
+    assert not any(
+        j.record_id == "unknown" for q in dataset.queries for j in q.judgments
+    )
+    with pytest.raises(ValueError, match="exact dataset"):
+        pool_unjudged(dataset.model_copy(update={"version": "changed"}), (original,))
 
 
 def test_no_answer_success_is_separate_from_answerable_metrics():

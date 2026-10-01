@@ -213,3 +213,34 @@ revisions, model settings and assessment provenance fixed for both experiments.
 The one-session trial in the product worklog is diagnostic, not a judged benchmark:
 it found the session in every mode, but the expected passage only in keyword and
 hybrid mode. More diverse sessions and independently judged queries are required.
+
+`evaluation.owned_retrieval.delivered_result` exports these two units from the
+existing typed `OwnedSearchResponse`. Supply a frozen tuple of `CorpusRecord`
+locators with destination record/sync/revision, preserved provider identity, and
+a stable original source ID (account or attested owner/dataset). The adapter
+checks each returned original against the census and hashes source plus native
+identity for rebuild-stable evaluation IDs. Conversation IDs additionally bind
+group kind and native ID; accounts with the same native thread ID stay separate.
+Attest optional `ConversationIdentity` from canonical parent identity or a
+validated retained email thread before retrieval. A returned group or additional
+member contradicting that frozen membership is rejected. Use `CorpusRecord.card_id`
+for card judgments, independent of which member becomes the representative.
+Use `unit="card"` for primary UI/API ranking and `unit="displayed_original"`
+for the explicitly flattened diagnostic. Returned match counts never invent
+hidden original members. An incomplete response retains its ranking and is
+marked partial. This helper requires the backend environment; it does not query
+the service or verify publication by itself.
+
+`evaluation.retrieval.pool_unjudged(dataset, runs)` returns each query's sorted
+union of delivered IDs without existing judgments. It checks the exact dataset
+and corpus binding for every run. Assess that private pool before comparing
+metrics; membership in the pool is neither a positive nor a negative label.
+If labels change, deliberately regenerate the dataset fingerprint and rebind
+the preserved observations; never rerun queries selectively to improve scores.
+
+The delivery adapter's synthetic tests use backend fixtures:
+
+```sh
+PYTHONPATH=backend:. backend/.venv/bin/python -m pytest \
+  backend/tests/unit/search/test_owned_evaluation.py -q
+```

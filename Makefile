@@ -45,6 +45,7 @@ test-provisioning:
 
 test-search:
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/domains/search airweave/domains/embedders
+	PYTHONPATH=$(BACKEND):. $(BACKEND)/$(PYTEST) -q -o log_cli=false $(BACKEND)/tests/unit/search/test_owned_evaluation.py
 
 test-auth:
 	cd $(BACKEND) && $(PYTEST) -q -o log_cli=false airweave/api/tests/test_service_auth.py airweave/api/tests/test_sync_authorization.py airweave/api/tests/test_context_resolver_auth.py
