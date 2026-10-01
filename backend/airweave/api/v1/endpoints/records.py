@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from airweave.api import deps
 from airweave.api.context import ApiContext
@@ -24,10 +24,12 @@ from airweave.domains.entities.canonical.query_models import (
     RecordFilters,
     RecordListQuery,
     RecordPage,
+    SpreadsheetRead,
 )
 from airweave.domains.entities.canonical.store import CanonicalStoreError
 from airweave.domains.entities.canonical.text_models import TextRead, TextRepresentationList
 from airweave.domains.search.owned_models import OwnedSearchRequest, OwnedSearchResponse
+from airweave.platform.sources.records.sheets_manifest import GridBounds
 
 router = TrailingSlashRouter()
 
@@ -42,12 +44,12 @@ async def _search_disconnected(request: Request) -> None:
 async def search_records(
     request: OwnedSearchRequest,
     http_request: Request,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    sessions: async_sessionmaker[AsyncSession] = Depends(deps.get_search_session_factory),
+    ctx: ApiContext = Depends(deps.get_owned_search_context),
     container: Container = Depends(deps.get_container),
 ) -> OwnedSearchResponse:
     """Retrieve bounded indexed originals; no provider requests or agent execution."""
-    work = create_task(container.owned_search.search(db, ctx, request))
+    work = create_task(container.owned_search.search(sessions, ctx, request))
     disconnected = create_task(_search_disconnected(http_request))
     try:
         done, _ = await wait((work, disconnected), return_when=FIRST_COMPLETED)
@@ -72,6 +74,7 @@ async def record_error_response(request: Request, error: CanonicalStoreError) ->
         "stale_record_revision": 409,
         "blob_unavailable": 503,
         "document_unavailable": 409,
+        "spreadsheet_unavailable": 409,
         "text_unavailable": 409,
         "document_incomplete": 409,
         "calendar_changed_restart": 409,
@@ -132,6 +135,48 @@ async def read_record(
         db, ctx.organization.id, sync_id, record_id, record.revision
     )
     return IndexedRecordRead(**record.model_dump(), extraction=extraction)
+
+
+@router.get("/{sync_id}/records/{record_id}/spreadsheet", response_model=SpreadsheetRead)
+async def read_stored_spreadsheet(
+    sync_id: UUID,
+    record_id: UUID,
+    response: Response,
+    revision: int = Query(ge=1),
+    sheet_id: int | None = Query(None, ge=0),
+    start_row: int | None = Query(None, ge=0),
+    end_row: int | None = Query(None, gt=0),
+    start_column: int | None = Query(None, ge=0),
+    end_column: int | None = Query(None, gt=0),
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+    container: Container = Depends(deps.get_container),
+) -> SpreadsheetRead:
+    """Read exact retained spreadsheet cells; no live provider fallback."""
+    values = (sheet_id, start_row, end_row, start_column, end_column)
+    if any(value is not None for value in values) and any(value is None for value in values):
+        raise HTTPException(status_code=422, detail="Supply all grid bounds or none")
+    try:
+        bounds = (
+            None
+            if sheet_id is None
+            else GridBounds(
+                sheet_id=sheet_id,
+                start_row=start_row,
+                end_row=end_row,
+                start_column=start_column,
+                end_column=end_column,
+            )
+        )
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Grid bounds must be nonempty") from None
+    result = await service.spreadsheet(
+        db, ctx.organization.id, sync_id, record_id, revision, container.storage_backend, bounds
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return result
 
 
 @router.get("/{sync_id}/records/{record_id}/document", response_model=DocumentRead)
