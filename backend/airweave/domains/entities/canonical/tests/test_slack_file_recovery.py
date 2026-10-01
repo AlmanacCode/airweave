@@ -34,7 +34,9 @@ MESSAGE = {
 }
 
 
-async def attempt(database, source, storage, calls, *, number, fail_last=False):
+async def attempt(
+    database, source, storage, calls, *, number, fail_last=False, responses=None, connector_out=None
+):
     service, fence = source
     ctx, _, runtime, bus = components(database, source)
     connector = SlackSource(
@@ -44,7 +46,9 @@ async def attempt(database, source, storage, calls, *, number, fail_last=False):
         expected_team_id="T1", expected_user_id="U1", capture_files=True
     )
     connector._verified_principal = SlackPrincipal(ok=True, team_id="T1", user_id="U1")
-    connector._get = AsyncMock(side_effect=[ROOT, {"messages": [MESSAGE]}])
+    connector._get = AsyncMock(side_effect=responses or [ROOT, {"messages": [MESSAGE]}])
+    if connector_out is not None:
+        connector_out.append(connector)
     files = FileService(uuid4(), storage, sync_id=fence.sync_id)
 
     async def download(url, *args, **kwargs):
@@ -112,3 +116,54 @@ async def test_last_file_retry_preserves_committed_children_and_inventory_hides_
         for row in children:
             stored = await service.store.read(db, fence.organization_id, fence.sync_id, row.id)
             assert stored.content_access == "unavailable"
+
+
+async def test_omitted_accessible_message_does_not_remove_retained_file_children(
+    database, source, tmp_path
+):
+    from airweave.models.sync_job import SyncJob
+
+    service, fence = source
+    storage = FilesystemBackend(tmp_path)
+    await attempt(database, source, storage, [], number=1)
+    new_job = uuid4()
+    async with database() as db:
+        (await db.get(SyncJob, fence.job_id)).status = "completed"
+        db.add(
+            SyncJob(
+                id=new_job,
+                sync_id=fence.sync_id,
+                organization_id=fence.organization_id,
+                status="running",
+            )
+        )
+        await db.commit()
+    following = (service, fence.model_copy(update={"job_id": new_job, "attempt_id": uuid4()}))
+    connectors = []
+    with pytest.raises(ValueError, match="omitted an accessible prior message"):
+        await attempt(
+            database,
+            following,
+            storage,
+            [],
+            number=1,
+            responses=[ROOT, {"messages": []}, {"messages": [MESSAGE]}],
+            connector_out=connectors,
+        )
+    call = connectors[0]._get.call_args_list[-1]
+    assert call.args[0].endswith("conversations.history")
+    assert call.args[1] == {
+        "channel": "C1",
+        "oldest": "1",
+        "latest": "1",
+        "inclusive": "true",
+        "limit": 1,
+    }
+    async with database() as db:
+        rows = (await db.scalars(select(Entity).where(Entity.sync_id == fence.sync_id))).all()
+        assert len(rows) == 5
+        for row in rows:
+            stored = await service.store.read(db, fence.organization_id, fence.sync_id, row.id)
+            assert stored.deleted_at is None and stored.content_access == "available"
+            if row.entity_definition_short_name == "file":
+                assert stored.blobs

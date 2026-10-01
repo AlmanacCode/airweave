@@ -567,6 +567,11 @@ class SlackSource(BaseSource):
     async def confirm_absent(self, record: SourceRecord) -> None:
         """Require provider confirmation before hiding an omitted prior conversation."""
         self._require_principal()
+        if record.identity.record_type == "message":
+            await self._confirm_message_omission(record)
+            return
+        if record.identity.record_type != "channel" or record.identity.container_id is not None:
+            raise ValueError("Slack omission confirmation requires a channel or message")
         native_id = record.identity.native_id
         try:
             await self._get("https://slack.com/api/conversations.info", {"channel": native_id})
@@ -575,6 +580,36 @@ class SlackSource(BaseSource):
                 raise
             return
         raise ValueError("Slack omitted an accessible prior channel; retry enumeration")
+
+    async def _confirm_message_omission(self, record: SourceRecord) -> None:
+        """An exact read can disprove omission; an empty read does not prove deletion."""
+        identity = record.identity
+        if (
+            identity.container_id is None
+            or record.parent
+            != RecordIdentity(record_type="channel", native_id=identity.container_id)
+            or record.payload.get("ts") != identity.native_id
+        ):
+            raise ValueError("Slack message omission requires its retained channel identity")
+        thread_ts = record.payload.get("thread_ts")
+        if thread_ts is not None and (not isinstance(thread_ts, str) or not thread_ts):
+            raise ValueError("Slack retained message has invalid thread identity")
+        params = {
+            "channel": identity.container_id,
+            "oldest": identity.native_id,
+            "latest": identity.native_id,
+            "inclusive": "true",
+            "limit": 1,
+        }
+        operation = "conversations.history"
+        if thread_ts and thread_ts != identity.native_id:
+            operation = "conversations.replies"
+            params["ts"] = thread_ts
+        payload = await self._get(f"https://slack.com/api/{operation}", params)
+        messages = TypeAdapter(list[dict[str, JsonValue]]).validate_python(payload.get("messages"))
+        if any(message.get("ts") == identity.native_id for message in messages):
+            raise ValueError("Slack omitted an accessible prior message; retry enumeration")
+        raise ValueError("Slack message omission remains unconfirmed; capture is incomplete")
 
     # ------------------------------------------------------------------
     # Federated search

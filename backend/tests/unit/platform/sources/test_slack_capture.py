@@ -227,3 +227,36 @@ async def test_conversation_dates_use_distinct_native_units():
     assert first.source_updated_at.isoformat() == "2023-07-21T18:56:43.820000+00:00"
     assert malformed.source_created_at is malformed.source_updated_at is None
     assert absent.source_created_at is absent.source_updated_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", [False, True])
+async def test_message_omission_reads_exact_native_message_and_never_confirms_empty(reply):
+    connector = await source()
+    payload = {"ts": "2", **({"thread_ts": "1"} if reply else {})}
+    record = SourceRecord.model_construct(
+        identity=RecordIdentity(record_type="message", native_id="2", container_id="C1"),
+        parent=RecordIdentity(record_type="channel", native_id="C1"),
+        payload=payload,
+    )
+    connector._get = AsyncMock(return_value={"messages": [payload]})
+    with pytest.raises(ValueError, match="accessible prior message"):
+        await connector.confirm_absent(record)
+    operation = "conversations.replies" if reply else "conversations.history"
+    connector._get.assert_awaited_once_with(
+        f"https://slack.com/api/{operation}",
+        {
+            "channel": "C1",
+            "oldest": "2",
+            "latest": "2",
+            "inclusive": "true",
+            "limit": 1,
+            **({"ts": "1"} if reply else {}),
+        },
+    )
+    connector._get = AsyncMock(return_value={"messages": []})
+    with pytest.raises(ValueError, match="remains unconfirmed"):
+        await connector.confirm_absent(record)
+    connector._get = AsyncMock(side_effect=SlackApiError("channel_not_found"))
+    with pytest.raises(SlackApiError):
+        await connector.confirm_absent(record)
