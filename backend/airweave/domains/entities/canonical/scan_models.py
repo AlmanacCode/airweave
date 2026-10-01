@@ -38,6 +38,19 @@ class ScanContinuation(BaseModel):
         return value
 
 
+class ChildScopeObservation(BaseModel):
+    """Current native page certifies this exact owner's complete child inventory.
+
+    The provider validates inventory completeness, independently of unrelated body
+    coverage. SQL derives the receipt from the captured owner, never caller versions.
+    This declaration is page input, not a persisted queue or a resumed-page receipt.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    scope: CompletedScope
+    continuation: ScanContinuation = Field(default_factory=ScanContinuation)
+
+
 class BeginScan(BaseModel):
     """Resume a cycle, or explicitly CAS-restart its sweep after invalid continuation."""
 
@@ -100,6 +113,7 @@ class CommitScanPage(BaseModel):
         max_length=500,
         description="Verified independent originals from the bound source; never placeholders",
     )
+    child_scope_observations: tuple[ChildScopeObservation, ...] = Field(default=(), max_length=500)
     continuation: ScanContinuation
     final: bool = False
     provider_checkpoint: ProviderCheckpoint | None = None

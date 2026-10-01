@@ -53,9 +53,9 @@ async def attempt(
         expected_team_id="T1", expected_user_id="U1", capture_files=True
     )
     connector._verified_principal = SlackPrincipal(ok=True, team_id="T1", user_id="U1")
-    # Fresh attempts enumerate history and then revalidate the attachment owner.
-    # A retry reuses completed history and only refreshes the owner.
-    defaults = [ROOT, *([{"messages": [MESSAGE]}] if number == 1 else []), {"messages": [MESSAGE]}]
+    # A fresh message page attests its complete inventory in the same SQL commit.
+    # A retry with no fresh owner page must still perform exact owner refresh.
+    defaults = [ROOT, {"messages": [MESSAGE]}]
     connector._get = AsyncMock(side_effect=responses if responses is not None else defaults)
     if connector_out is not None:
         connector_out.append(connector)
@@ -179,18 +179,21 @@ async def test_omitted_accessible_message_does_not_remove_retained_file_children
                 assert stored.blobs
 
 
+@pytest.mark.parametrize("repeat_owner", [False, True])
 async def test_files_progress_before_history_finishes_and_resume_both_cursors(
-    database, source, tmp_path
+    database, source, tmp_path, repeat_owner
 ):
     storage = FilesystemBackend(tmp_path)
     downloads = []
     histories = []
+    owner_reads = []
     interrupt = True
 
     async def respond(url, params):
         if url.endswith("conversations.list"):
             return ROOT
         if "oldest" in params:
+            owner_reads.append(params["oldest"])
             return {"messages": [MESSAGE]}
         cursor = params.get("cursor")
         histories.append(cursor)
@@ -199,13 +202,17 @@ async def test_files_progress_before_history_finishes_and_resume_both_cursors(
         if cursor == "H2":
             if interrupt:
                 raise asyncio.CancelledError()
-            return {"messages": [], "response_metadata": {"next_cursor": "H3"}}
+            return {
+                "messages": [MESSAGE] if repeat_owner else [],
+                "response_metadata": {"next_cursor": "H3"},
+            }
         assert cursor == "H3"
         return {"messages": []}
 
     with pytest.raises(asyncio.CancelledError):
         await attempt(database, source, storage, downloads, number=1, responses=respond)
     assert downloads == ["F1"]
+    assert owner_reads == []
     async with database() as db:
         scans = (await db.scalars(select(CaptureScan))).all()
         history = next(row for row in scans if row.record_type == "message")
@@ -219,6 +226,7 @@ async def test_files_progress_before_history_finishes_and_resume_both_cursors(
     await attempt(database, source, storage, downloads, number=2, responses=respond)
     assert downloads == ["F1", "F2", "F3"]
     assert histories == [None, "H2", "H2", "H3"]
+    assert owner_reads == ([] if repeat_owner else ["1"])
     async with database() as db:
         scans = (await db.scalars(select(CaptureScan))).all()
         history = next(row for row in scans if row.record_type == "message")
@@ -293,3 +301,46 @@ async def test_required_child_access_loss_does_not_withdraw_enclosing_channel(
             expected = "available" if row.native_id == "C1" else "unavailable"
             assert stored.content_access == expected
         assert "canonical_checkpoint" not in (await db.scalar(select(SyncCursor))).cursor_data
+
+
+async def test_fresh_empty_inventory_reconciles_old_files_without_exact_owner_call(
+    database, source, tmp_path
+):
+    from airweave.models.sync_job import SyncJob
+
+    service, fence = source
+    storage = FilesystemBackend(tmp_path)
+    downloads = []
+    await attempt(database, source, storage, downloads, number=1)
+    assert downloads == ["F1", "F2", "F3"]
+    job = uuid4()
+    async with database() as db:
+        (await db.get(SyncJob, fence.job_id)).status = "completed"
+        db.add(
+            SyncJob(
+                id=job,
+                sync_id=fence.sync_id,
+                organization_id=fence.organization_id,
+                status="running",
+            )
+        )
+        await db.commit()
+    following = (service, fence.model_copy(update={"job_id": job, "attempt_id": uuid4()}))
+    pipeline, connector = await attempt(
+        database,
+        following,
+        storage,
+        downloads,
+        number=1,
+        responses=[ROOT, {"messages": [{**MESSAGE, "files": []}]}],
+    )
+    assert connector._get.await_count == 2
+    assert downloads == ["F1", "F2", "F3"]
+    async with database() as db:
+        children = (
+            await db.scalars(select(Entity).where(Entity.entity_definition_short_name == "file"))
+        ).all()
+        assert len(children) == 3 and all(child.deleted_at is not None for child in children)
+        scan = await db.scalar(select(CaptureScan).where(CaptureScan.record_type == "file"))
+        assert scan.phase == "complete"
+        assert scan.parent_verified_attempt_id == pipeline._writer().attempt_id

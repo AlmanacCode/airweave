@@ -17,7 +17,11 @@ from airweave.domains.entities.canonical.requests import (
     CompletedScope,
     ScopeRemovalReason,
 )
-from airweave.domains.entities.canonical.scan_models import ScanContinuation, ScanState
+from airweave.domains.entities.canonical.scan_models import (
+    ChildScopeObservation,
+    ScanContinuation,
+    ScanState,
+)
 from airweave.domains.entities.canonical.scope_execution import ScopePlan
 from airweave.domains.storage.file_service import FileService
 
@@ -31,6 +35,11 @@ class CapturePage(BaseModel):
         default=(),
         max_length=500,
         description="Verified independent originals from the bound source; never placeholders",
+    )
+    child_scope_observations: tuple[ChildScopeObservation, ...] = Field(
+        default=(),
+        max_length=500,
+        description="Complete child inventories evidenced by active originals on this page",
     )
     continuation: ScanContinuation
     final: bool = False

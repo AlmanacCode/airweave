@@ -277,6 +277,7 @@ class CanonicalScanDriver:
                         expected=state.version,
                         records=tuple(self._parented(r, scope) for r in page.records),
                         discovered_records=page.discovered_records,
+                        child_scope_observations=page.child_scope_observations,
                         continuation=page.continuation,
                         final=page.final,
                         provider_checkpoint=page.provider_checkpoint,

@@ -387,6 +387,19 @@ class CanonicalScanStore:
         available = await db.scalar(select(content_is_available()).where(Entity.id == parent.id))
         if parent.deleted_at is not None or not available:
             return ScanAdmission(state=None, parent=source_record(parent), capture=captured)
+        state = await self._begin_verified(db, request, context=(cursor, cycle, parent))
+        return ScanAdmission(state=state, parent=source_record(parent), capture=captured)
+
+    async def _begin_verified(
+        self,
+        db: AsyncSession,
+        request: BeginScan,
+        *,
+        context: tuple[SyncCursor, CaptureCycle, Entity],
+    ) -> ScanState:
+        """Share child admission after a fenced native owner observation is captured."""
+        cursor, cycle, parent = context
+        row = await self._row(db, request.fence, request.scope)
         updated = request.model_copy(
             update={
                 "expected_parent_epoch": parent.visibility_epoch,
@@ -401,9 +414,7 @@ class CanonicalScanStore:
         row.parent_verified_revision = parent.record_revision
         row.revision += 1
         await db.flush()
-        return ScanAdmission(
-            state=await self._state(db, row), parent=source_record(parent), capture=captured
-        )
+        return await self._state(db, row)
 
     async def begin(self, db: AsyncSession, request: BeginScan) -> ScanState:
         """Ordinary admission cannot accept uncommitted owner observations."""
@@ -503,6 +514,68 @@ class CanonicalScanStore:
         await db.flush()
         return await self._state(db, row)
 
+    @staticmethod
+    def _validate_child_observations(request: CommitScanPage, cycle: CaptureCycle) -> None:
+        """Only exact active owners in this native page can attest child inventories."""
+        if not request.child_scope_observations:
+            return
+        if cycle.mode != "full":
+            raise ScanConflict("Page child observations require a full capture cycle")
+        records = {record.identity: record for record in request.records}
+        seen = set()
+        for observation in request.child_scope_observations:
+            scope = observation.scope
+            parent = records.get(scope.parent)
+            if (
+                parent is None
+                or parent.kind != "upsert"
+                or parent.allow_reparent
+                or parent.removal_reason is not None
+                or parent.identity.record_type not in cycle.configuration.exact_parent_validation
+                or parent.identity.record_type
+                not in cycle.configuration.parents.get(scope.record_type, ())
+            ):
+                raise ScanConflict(
+                    "Child observation requires an allowed current-page upsert owner"
+                )
+            key = (scope.parent, scope.record_type)
+            if key in seen:
+                raise ScanConflict("Duplicate child observation for the same owner and kind")
+            seen.add(key)
+
+    async def _observe_child_scopes(self, db: AsyncSession, request: CommitScanPage) -> None:
+        """Derive existing child receipts inside the page's atomic writer transaction."""
+        for observation in request.child_scope_observations:
+            # _begin may advance the cycle version; never reuse an earlier snapshot.
+            cursor, cycle = await attest_cycle(db, request.fence, request.cycle_id)
+            scope = observation.scope
+            await attest_scope(db, request.fence, cycle, scope, require_owner_receipt=False)
+            parent = await scope_owner(db, request.fence, cycle, scope)
+            if parent is None or parent.deleted_at is not None:
+                raise ScanConflict("Child observation owner is unavailable")
+            previous = await self._row(db, request.fence, scope)
+            request_begin = BeginScan(
+                fence=request.fence,
+                scope=scope,
+                cycle_id=request.cycle_id,
+                fingerprint=cycle.configuration.fingerprint,
+                expected=(
+                    ScanVersion(sweep_id=previous.sweep_id, revision=previous.revision)
+                    if previous is not None
+                    else None
+                ),
+                restart=bool(
+                    previous
+                    and previous.cycle_id == request.cycle_id
+                    and cycle.configuration.fresh_inventory(scope.record_type)
+                    and previous.membership_attempt_id != request.fence.attempt_id
+                ),
+                expected_parent_epoch=parent.visibility_epoch,
+                expected_parent_revision=parent.record_revision,
+                continuation=observation.continuation,
+            )
+            await self._begin_verified(db, request_begin, context=(cursor, cycle, parent))
+
     async def page(
         self,
         db: AsyncSession,
@@ -555,6 +628,7 @@ class CanonicalScanStore:
             for record in request.discovered_records
         ):
             raise ScanConflict("Discovered originals must be verified independent declared roots")
+        self._validate_child_observations(request, cycle)
         capture = capture_page or self.records._capture_locked
         captured = await capture(
             db,
@@ -573,6 +647,7 @@ class CanonicalScanStore:
             sequence=discovered.sequence,
             unchanged=captured.unchanged + discovered.unchanged,
         )
+        await self._observe_child_scopes(db, request)
         row.continuation = continuation
         row.revision += 1
         if request.final:

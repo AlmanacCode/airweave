@@ -87,29 +87,12 @@ async def test_cancel_after_history_resumes_pending_reply_without_repeating_hist
     second, connector, _ = await runner(
         database, source, [ROOT, REPLIES], attempt=2, capture_files=capture_files
     )
-    if capture_files:
-        initial = iter([ROOT, REPLIES])
-
-        async def respond(url, params):
-            if "oldest" not in params:
-                return next(initial)
-            assert params["oldest"] == params["latest"]
-            return {
-                "messages": [
-                    message for message in REPLIES["messages"] if message["ts"] == params["oldest"]
-                ]
-            }
-
-        connector._get = AsyncMock(side_effect=respond)
     await run(second)
     operations = [call.args[0].split("/")[-1] for call in connector._get.call_args_list]
     assert operations[:2] == ["conversations.list", "conversations.replies"]
-    assert len(operations) == (4 if capture_files else 2)
-    if capture_files:
-        # Exact owner reads must not become another unbounded history traversal.
-        for call in connector._get.call_args_list[2:]:
-            assert call.args[1]["oldest"] == call.args[1]["latest"]
-            assert call.args[1]["limit"] == 1
+    # Both attachment owners were freshly returned by the reply page; its SQL
+    # commit attests empty inventories without a redundant exact lookup.
+    assert len(operations) == 2
     rows, cursor, _ = await saved(database)
     assert {row.native_id for row in rows} == {"C1", "1", "1.1"}
     assert next(row for row in rows if row.native_id == "1").record_revision == 1

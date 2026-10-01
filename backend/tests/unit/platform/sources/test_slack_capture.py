@@ -292,3 +292,45 @@ async def test_exact_attachment_owner_refresh_preserves_native_inventory_and_par
         connector._get = AsyncMock(return_value={"messages": messages})
         with pytest.raises(ValueError, match=error):
             await connector.refresh_known(record, files=MagicMock())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_files", [None, [], [{"id": "F1"}]])
+async def test_fresh_message_page_declares_exact_file_inventory_scope(native_files):
+    connector = await source()
+    connector.slack_config = SlackConfig(
+        expected_team_id="T1", expected_user_id="U1", capture_files=True
+    )
+    native = {"ts": "1", "text": "Retained unchanged"}
+    if native_files is not None:
+        native["files"] = native_files
+    connector._get = AsyncMock(return_value={"messages": [native]})
+    page = await connector.capture_page(
+        CompletedScope(record_type="message", container_id="C1"),
+        ScanContinuation(),
+        files=MagicMock(),
+    )
+    assert page.records[0].payload == native
+    (declaration,) = page.child_scope_observations
+    owner = SourceRecord.model_construct(identity=page.records[0].identity)
+    assert declaration.scope == connector.child_scope(owner, "file")
+    assert declaration.continuation == ScanContinuation()
+    assert page.records[0].payload_schema_version == 2
+    connector._get.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_invalid_attachment_inventory_cannot_emit_fresh_scope_receipt():
+    connector = await source()
+    connector.slack_config = SlackConfig(
+        expected_team_id="T1", expected_user_id="U1", capture_files=True
+    )
+    connector._get = AsyncMock(
+        return_value={"messages": [{"ts": "1", "files": [{"id": "F1"}, {"id": "F1"}]}]}
+    )
+    with pytest.raises(ValueError, match="duplicate file identities"):
+        await connector.capture_page(
+            CompletedScope(record_type="message", container_id="C1"),
+            ScanContinuation(),
+            files=MagicMock(),
+        )

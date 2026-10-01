@@ -39,7 +39,7 @@ from airweave.domains.entities.canonical.requests import (
     RecordIdentity,
     parent_container_key,
 )
-from airweave.domains.entities.canonical.scan_models import ScanContinuation
+from airweave.domains.entities.canonical.scan_models import ChildScopeObservation, ScanContinuation
 from airweave.domains.sources.exceptions import SourceAuthError, SourceError, SourceRateLimitError
 from airweave.domains.sources.token_providers.protocol import (
     SourceAuthProvider,
@@ -338,14 +338,18 @@ class SlackSource(BaseSource):
 
     def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
         """Keep the established native container identity for this flat provider."""
-        if self.canonical_container_parents.get(record_type) != parent.identity.record_type:
+        return self._child_scope(parent.identity, record_type)
+
+    def _child_scope(self, parent: RecordIdentity, record_type: str) -> CompletedScope:
+        """Enumeration and fresh-page receipts use exactly the same scope identity."""
+        if self.canonical_container_parents.get(record_type) != parent.record_type:
             raise ValueError("Unsupported Slack child scope")
         return CompletedScope(
             record_type=record_type,
-            container_id=parent_container_key(parent.identity)
+            container_id=parent_container_key(parent)
             if record_type == "file"
-            else parent.identity.native_id,
-            parent=parent.identity,
+            else parent.native_id,
+            parent=parent,
         )
 
     async def capture_page(
@@ -363,9 +367,14 @@ class SlackSource(BaseSource):
                 return await self._file_page(scope, continuation, files, parent)
             page = await self._validated_capture_page(scope, continuation)
             if self.slack_config.capture_files and scope.record_type == "message":
+                records = tuple(self._attachment_owner(record) for record in page.records)
                 page = page.model_copy(
                     update={
-                        "records": tuple(self._attachment_owner(record) for record in page.records)
+                        "records": records,
+                        "child_scope_observations": tuple(
+                            ChildScopeObservation(scope=self._child_scope(record.identity, "file"))
+                            for record in records
+                        ),
                     }
                 )
             return page
