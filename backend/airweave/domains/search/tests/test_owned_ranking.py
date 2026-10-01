@@ -103,7 +103,7 @@ async def test_global_orchestration_rechecks_before_and_after_without_holding_se
     keys = [UUID(int=1), UUID(int=2)]
     syncs = [uuid4(), uuid4()]
     collections = [uuid4(), uuid4()]
-    hits = {key: SimpleNamespace(title="Title") for key in keys}
+    hits = {key: SimpleNamespace(title="Title", group=None) for key in keys}
     active = 0
 
     @asynccontextmanager

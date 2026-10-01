@@ -28,7 +28,9 @@ from airweave.domains.entities.canonical.store import content_is_available
 from airweave.domains.search.owned_models import (
     OwnedRanking,
     OwnedSearchCoverage,
+    OwnedSearchGroup,
     OwnedSearchHit,
+    OwnedSearchMatch,
     OwnedSearchRequest,
     OwnedSearchResponse,
 )
@@ -67,6 +69,9 @@ class _EnrichmentRecord(BaseModel):
     entity_definition_short_name: str
     native_id: str
     container_id: str | None
+    parent_record_type: str | None
+    parent_native_id: str | None
+    parent_container_id: str | None
     observed_at: AwareDatetime
     source_created_at: AwareDatetime | None
     source_updated_at: AwareDatetime | None
@@ -166,8 +171,9 @@ class OwnedSearchService:
             final = await self._final_publications(db, ctx, request, scores, scope_snapshot)
         exclusions += len(set(candidates) - final)
         ranked = [key for key in ranked if key in final]
+        grouped = self._group_hits([hits[key] for key in ranked])
         return OwnedSearchResponse(
-            items=tuple(hits[key] for key in ranked[: request.limit]),
+            items=tuple(grouped[: request.limit]),
             ranking=ranking,
             sources=sources,
             candidate_window_full=full,
@@ -179,7 +185,7 @@ class OwnedSearchService:
             or full
             or exclusions > 0
             or postfiltered > 0
-            or len(ranked) > request.limit
+            or len(grouped) > request.limit
             or any(
                 row.pending_records
                 or row.partially_indexed_records
@@ -188,6 +194,81 @@ class OwnedSearchService:
                 for row in sources
             ),
         )
+
+    @staticmethod
+    def _conversation(row: _EnrichmentRecord, hit: OwnedSearchHit) -> OwnedSearchGroup | None:
+        """Derive membership only from admitted canonical parent or validated Gmail identity."""
+        if hit.provider == "gmail" and hit.email_thread_id is not None:
+            return OwnedSearchGroup(
+                kind="email_thread", native_id=hit.email_thread_id, matched_records=1
+            )
+        if hit.provider != "almanac":
+            return None
+        if (
+            row.entity_definition_short_name == "session"
+            and row.container_id is None
+            and row.parent_record_type is None
+            and row.parent_native_id is None
+            and row.parent_container_id is None
+        ):
+            return OwnedSearchGroup(kind="session", native_id=row.native_id, matched_records=1)
+        if (
+            row.entity_definition_short_name == "message"
+            and row.parent_record_type == "session"
+            and row.parent_native_id
+            and row.parent_container_id is None
+            and row.container_id == row.parent_native_id
+        ):
+            return OwnedSearchGroup(
+                kind="session", native_id=row.parent_native_id, matched_records=1
+            )
+        return None
+
+    @staticmethod
+    def _group_hits(ranked: list[OwnedSearchHit]) -> list[OwnedSearchHit]:
+        """Group final eligible matches in rank order, preserving each original."""
+        output: list[OwnedSearchHit] = []
+        positions: dict[tuple[UUID, str, str, str], int] = {}
+        for hit in ranked:
+            group = hit.group
+            if group is None:
+                output.append(hit)
+                continue
+            key = (hit.sync_id, hit.provider, group.kind, group.native_id)
+            if key not in positions:
+                positions[key] = len(output)
+                output.append(
+                    hit.model_copy(
+                        update={
+                            "group": group.model_copy(
+                                update={"matched_records": 1, "additional_matches": ()}
+                            )
+                        }
+                    )
+                )
+                continue
+            index = positions[key]
+            representative = output[index]
+            previous = representative.group
+            assert previous is not None
+            additional = previous.additional_matches
+            if len(additional) < 3:
+                exact = OwnedSearchMatch.model_validate(hit.model_dump(exclude={"group"}))
+                additional = (
+                    *additional,
+                    exact.model_copy(update={"excerpts": exact.excerpts[:1]}),
+                )
+            output[index] = representative.model_copy(
+                update={
+                    "group": previous.model_copy(
+                        update={
+                            "matched_records": previous.matched_records + 1,
+                            "additional_matches": additional,
+                        }
+                    )
+                }
+            )
+        return output
 
     async def _rank(
         self,
@@ -404,6 +485,9 @@ class OwnedSearchService:
                 Entity.entity_definition_short_name,
                 Entity.native_id,
                 Entity.container_id,
+                Entity.parent_record_type,
+                Entity.parent_native_id,
+                Entity.parent_container_id,
                 Entity.observed_at,
                 Entity.source_created_at,
                 Entity.source_updated_at,
@@ -486,6 +570,7 @@ class OwnedSearchService:
                         else None
                     ),
                 )
+                hits[row.id].group = self._conversation(row, hits[row.id])
                 scores[row.id] = (1 / (60 + rank), locator)
                 matched_text[row.id] = result.textual_representation
             excerpt = result.textual_representation[:2000]

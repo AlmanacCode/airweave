@@ -41,7 +41,7 @@ class OwnedSearchRequest(BaseModel):
         return self
 
 
-class OwnedSearchHit(BaseModel):
+class OwnedSearchMatch(BaseModel):
     """Canonical identity plus excerpts; no native payload or generation IDs."""
 
     record_id: UUID
@@ -58,6 +58,21 @@ class OwnedSearchHit(BaseModel):
     source_updated_at: AwareDatetime | None
     completeness: Literal["complete", "partial", "metadata_only"]
     extraction: ExtractionCoverage | None = None
+
+
+class OwnedSearchGroup(BaseModel):
+    """Observed eligible shortlist members, never a complete conversation count."""
+
+    kind: Literal["session", "email_thread"]
+    native_id: str
+    matched_records: int = Field(ge=1)
+    additional_matches: tuple[OwnedSearchMatch, ...] = Field(default=(), max_length=3)
+
+
+class OwnedSearchHit(OwnedSearchMatch):
+    """An exact representative match, optionally with other conversation matches."""
+
+    group: OwnedSearchGroup | None = None
 
 
 class OwnedSearchCoverage(BaseModel):
