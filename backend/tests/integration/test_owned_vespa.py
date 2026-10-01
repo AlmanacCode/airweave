@@ -5,6 +5,7 @@ and is unsuitable for an existing application or customer index.
 """
 
 import json
+import math
 import os
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -18,6 +19,7 @@ from airweave.domains.embedders.types import DenseEmbedding, SparseEmbedding
 from airweave.domains.entities.canonical.tests.vespa_helpers import deploy_schema
 from airweave.domains.search.adapters.vector_db.filter_translator import FilterTranslator
 from airweave.domains.search.adapters.vector_db.vespa_client import VespaVectorDB
+from airweave.domains.search.adapters.vector_db.vespa_config import ALL_VESPA_SCHEMAS
 from airweave.domains.search.types.embeddings import QueryEmbeddings
 from airweave.domains.search.types.filters import FilterCondition, FilterGroup
 from airweave.domains.search.types.plan import RetrievalStrategy, SearchPlan, SearchQuery
@@ -120,6 +122,99 @@ async def test_real_schema_retrieval_collection_isolation_and_delete():
             for url in urls:
                 response = await http.delete(url)
                 assert response.status_code in (200, 404)
+
+
+@pytest.mark.asyncio
+async def test_all_schemas_retrieve_varied_vectors_with_collection_and_sync_scope():
+    """Small all-schema recall regression; exact ID sets, not relevance-quality claims."""
+    collection, foreign_collection, sync, foreign_sync = (str(uuid4()) for _ in range(4))
+    filters = [
+        FilterGroup(
+            conditions=[
+                FilterCondition(
+                    field="airweave_system_metadata.sync_id",
+                    operator="in",
+                    value=[sync],
+                )
+            ]
+        )
+    ]
+    contextual = logger.with_context(request_id="synthetic-all-schema-retrieval")
+    engine = VespaVectorDB(
+        app=Vespa(url="http://localhost", port=8081),
+        logger=contextual,
+        filter_translator=FilterTranslator(logger=contextual),
+    )
+    urls, expected = [], set()
+    async with httpx.AsyncClient(timeout=120) as http:
+        await deploy_schema(http)
+        try:
+            for index, schema in enumerate(ALL_VESPA_SCHEMAS):
+                # Distinct finite, nonzero vectors exercise angular ANN across schemas.
+                vector = [math.sin((index + 1) * (dimension + 1)) for dimension in range(384)]
+                for scope, source in (
+                    (collection, sync),
+                    (foreign_collection, sync),
+                    (collection, foreign_sync),
+                ):
+                    identity = f"all-schema-{uuid4()}"
+                    url = f"http://localhost:8081/document/v1/airweave/{schema}/docid/{identity}"
+                    urls.append(url)
+                    response = await http.post(
+                        url,
+                        json={
+                            "fields": {
+                                "entity_id": identity,
+                                "name": "Synthetic fundraising discussion",
+                                "textual_representation": "fundraising all schema fixture",
+                                "payload": "{}",
+                                "airweave_system_metadata_collection_id": scope,
+                                "airweave_system_metadata_sync_id": source,
+                                "airweave_system_metadata_source_name": "gmail",
+                                "airweave_system_metadata_entity_type": "SyntheticEntity",
+                                "airweave_system_metadata_original_entity_id": identity,
+                                "dense_embedding": {"values": vector},
+                                "sparse_embedding": {"cells": {"1": 1.0}},
+                            }
+                        },
+                    )
+                    assert response.status_code == 200, response.text
+                    if scope == collection and source == sync:
+                        expected.add(identity)
+            vectors = (
+                [1.0] * 384,
+                [-1.0] * 384,
+                [math.cos(dimension + 1) for dimension in range(384)],
+            )
+            for mode in RetrievalStrategy:
+                for vector in vectors if mode != RetrievalStrategy.KEYWORD else vectors[:1]:
+                    compiled = await engine.compile_query(
+                        SearchPlan(
+                            query=SearchQuery(primary="fundraising"),
+                            retrieval_strategy=mode,
+                            filter_groups=filters,
+                            limit=20,
+                            offset=0,
+                        ),
+                        QueryEmbeddings(
+                            dense_embeddings=[DenseEmbedding(vector=vector)],
+                            sparse_embedding=SparseEmbedding(indices=[1], values=[1.0]),
+                        ),
+                        collection,
+                    )
+                    result = await engine.execute_query(compiled)
+                    assert not result.engine_partial, (mode, result.engine_coverage_percent)
+                    assert {item.entity_id for item in result.results} == expected, mode
+                    assert len(result.results) == len(ALL_VESPA_SCHEMAS)
+            browsed = await engine.filter_search(filters, collection, limit=20)
+            assert {item.entity_id for item in browsed} == expected
+            assert await engine.count(filters, collection) == len(expected)
+        finally:
+            # Delete and read back only this run's random synthetic document IDs.
+            for url in urls:
+                deleted = await http.delete(url)
+                assert deleted.status_code in (200, 404), deleted.text
+                assert (await http.get(url)).status_code == 404
 
 
 @pytest.mark.asyncio
