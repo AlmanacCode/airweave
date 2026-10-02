@@ -1,0 +1,222 @@
+{
+  "qualification": "Exact-two retained Gmail body publication with explicit attachment failures",
+  "date": "2026-10-02",
+  "code_commit": "f6c89e446365629b075a30e791c39edfdf63c602",
+  "scope": {
+    "source": "Preserved full Gmail capture; existing isolated migrated clone and collection",
+    "captured_messages": 2034,
+    "admitted_pending_records": 2,
+    "prior_publications": 2032,
+    "new_infrastructure": false,
+    "shared_schema_redeployment": false,
+    "frozen_http_and_ui_fixtures_changed_during_projection": false
+  },
+  "execution": {
+    "existing_temporal_workflow_activity_and_projector": true,
+    "initial_workflow_sweep": 2,
+    "terminal": {
+      "status": "failed",
+      "error_class": "WorkflowFailureError",
+      "cap_reason": null,
+      "temporal_status": "FAILED"
+    },
+    "exit_code": 1,
+    "workflow_seconds": 124.841,
+    "total_seconds": 129.568,
+    "pages": 1,
+    "published_records_this_attempt": 2,
+    "records_with_conversion_failure_this_attempt": 1,
+    "dense_requests": 22,
+    "vespa_feed_requests": 22,
+    "forbidden_http_requests": 0,
+    "prepared_feed_documents": 22,
+    "document_payload_bytes": 995443,
+    "derived_bytes_written": 135816,
+    "cumulative_derived_bytes": 8954282,
+    "minimum_free_bytes": 17398456320,
+    "runtime_caps": {
+      "wall_seconds": 600,
+      "derived_bytes": 268435456,
+      "documents": 12000,
+      "free_floor": 2147483648
+    },
+    "ocr_per_file_timeout_seconds": 120,
+    "local_ocr_languages": [
+      "eng",
+      "hin"
+    ]
+  },
+  "publication": {
+    "bodies_before": 2032,
+    "bodies_after": 2034,
+    "body_gaps_after": 0,
+    "parent_extraction_complete": 1,
+    "parent_extraction_partial": 1,
+    "indexed_body_parts": 2,
+    "indexed_pdf_parts": 3,
+    "failed_pdf_parts": 1,
+    "failed_part_reason": "conversion_failed",
+    "remaining_failure_class": "Valid retained vector-only PDF; pinned partial OCR has no supported native/image text recovery",
+    "projection_error_records": 1,
+    "automatic_skip_failed_pending_empty": true
+  },
+  "independent_census": {
+    "records": 2034,
+    "metadata_missing": 0,
+    "published_complete_body_records": 2034,
+    "retained_only_body_gaps": 0,
+    "projection_error_classes": {
+      "conversion_failed": 1
+    },
+    "body_utf8_bytes": 6090441,
+    "all_published_text_artifacts_hash_verified": 2125,
+    "published_manifest_documents": 4224,
+    "vespa_collection_document_counts": {
+      "email_entity": 4037,
+      "file_entity": 187
+    },
+    "vespa_exact_manifest_document_samples": 10,
+    "frozen_census_sha256": "5dc50ab117ba6f185cb5fdc3409a36853de3a6b955b6e18d6f21a3aea1387d19",
+    "frozen_census_bytes": 9538696,
+    "provider_calls": 0,
+    "paid_model_calls": 0,
+    "read_only_verification": true,
+    "source_capture_preserved": true
+  },
+  "actual_read_and_search_verification": {
+    "records_verified": 2,
+    "body_literal_queries_passed": 2,
+    "original_thread_reads_passed": 2,
+    "derived_content_reads_passed": 2,
+    "publication_cas_checks_passed": true,
+    "prior2032_generation_body_provenance_and_bytes_unchanged": true,
+    "original_blobs_hash_verified": 4,
+    "original_blob_bytes_verified": 12237493,
+    "vespa_current_body_keyword_hits": 2,
+    "parts": [
+      {
+        "kind": "body",
+        "outcome": "indexed",
+        "reason": null,
+        "count": 2
+      },
+      {
+        "kind": "file",
+        "outcome": "failed",
+        "reason": "conversion_failed",
+        "count": 1
+      },
+      {
+        "kind": "file",
+        "outcome": "indexed",
+        "reason": null,
+        "count": 3
+      }
+    ],
+    "automatic_skip_failed_pending_empty": true,
+    "provider_calls": 0,
+    "paid_model_calls": 0,
+    "read_only_verification": true,
+    "vespa_new_manifest_documents_read": 22
+  },
+  "preservation": {
+    "source_capture_preserved": true,
+    "original_sql_unchanged": true,
+    "original_blob_digest_unchanged": true,
+    "source_original_blob_files": 299,
+    "source_original_blob_bytes": 129533483,
+    "prior_publication_pointers_unchanged": true,
+    "prior_publication_pointers_checked": 2032,
+    "prior_generation_body_provenance_and_bytes_unchanged": true,
+    "all_frozen_censuses_unchanged": true,
+    "new_census_is_separate_file": true,
+    "baseline_2032_population_not_regraded": true
+  },
+  "limitations": [
+    "Workflow remains FAILED because an explicitly failed attachment remains pending; both mail bodies are published and readable/searchable.",
+    "Keyword proof uses current canonical mail literal SQL and exact current-body Vespa keyword queries; it does not establish relevance quality or all search modes.",
+    "Local OCR remains pinned PyMuPDF1.26.7 native-preserving partial mode; vector-only text, reading order and Hindi whitespace limitations remain.",
+    "No provider recapture, original mutation, paid calls, production activation or broad reprocessing occurred.",
+    "Frozen comparative source archives/files remain immutable; only owned loopback serving processes58153/58154 were refreshed to archivedf6/0a to accept the new partial extraction wire.",
+    "The standalone browser3192 generated wire was separately found stale; companion owns its normal generator/runtime refresh.",
+    "Vespa verification counts all4224 current collection documents, reads10 existing samples plus all22 new manifest documents, and keyword-matches both current body locators; it does not hash-check every remote document."
+  ],
+  "http_runtime_compatibility_refresh": {
+    "records": [
+      {
+        "record_read_status": 200,
+        "text_read_status": 200,
+        "email_literal_search_membership": true,
+        "email_original_thread_read_status": 200,
+        "shared_keyword_search_membership": true,
+        "shared_keyword_hits": 63,
+        "extraction_status": "complete"
+      },
+      {
+        "record_read_status": 200,
+        "text_read_status": 200,
+        "email_literal_search_membership": true,
+        "email_original_thread_read_status": 200,
+        "shared_keyword_search_membership": true,
+        "shared_keyword_hits": 1,
+        "extraction_status": "partial"
+      }
+    ],
+    "bad_product_auth_status": 401,
+    "wrong_account_scope_status": 404,
+    "bad_fork_key_status": 403,
+    "fixture_database_token_account_binding_preserved": true,
+    "fork_network": {
+      "local_dense": 0,
+      "vespa": 3,
+      "forbidden": 0
+    },
+    "product_network": {
+      "provider_attempts": 0,
+      "fork_requests": 19,
+      "forbidden": 0
+    },
+    "fork_source_commit": "f6c89e446365629b075a30e791c39edfdf63c602",
+    "product_source_commit": "0a192fd9d",
+    "old_owned_processes": [
+      {
+        "pid": 40946,
+        "port": 58153,
+        "launcher": "/tmp/gmail-full-cli-20261002/fork-server.py",
+        "signal": "SIGTERM",
+        "command_and_port_validated": true
+      },
+      {
+        "pid": 41597,
+        "port": 58154,
+        "launcher": "/tmp/gmail-full-cli-20261002/product-server.py",
+        "signal": "SIGKILL",
+        "command_and_port_validated": true
+      }
+    ],
+    "product_sigkill_reason": "Preserve existing synthetic DB; old launcher graceful finalizer invokes test DROP DATABASE",
+    "new_owned_processes": [
+      {
+        "pid": 8506,
+        "port": 58153,
+        "launcher_sha256": "dc1b4c9f00444967af3e3d24fd3f15297c6be84540bbce1ceaead16567f16a8e",
+        "exact_command_and_port_pid_verified": true
+      },
+      {
+        "pid": 8509,
+        "port": 58154,
+        "launcher_sha256": "32badaf92c61b3499a87a16e5f7caf284bf47d75435d5db6f522683ed431d2f3",
+        "exact_command_and_port_pid_verified": true
+      }
+    ],
+    "new_owned_sessions": {
+      "fork": 19937,
+      "product": 18765
+    },
+    "old_archives_preserved": true,
+    "user_app3190_untouched": true,
+    "browser3192_separate_generated_schema_refresh_owned_by_companion": true,
+    "keyword_control_note": "Pure natural prose words from early retained body returned both current messages. An initial long opaque body token returned no shared keyword hits; literal body membership still passed. No retrieval tuning occurred.",
+    "existing_sql_other_owner_denied_before_outbound": true
+  }
+}

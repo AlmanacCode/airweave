@@ -683,3 +683,28 @@ The private post-repair census is a separate immutable artifact, not an overwrit
 of the baseline. This gate does not qualify automatic capture-child dispatch or
 retrieval relevance. Remaining conversion failures and local OCR language/scope
 limits are described in [local OCR](../../docs/local_ocr.md).
+
+## Exact-two Gmail body publication with explicit attachment gaps
+
+[Sanitized runtime evidence](evidence/gmail-exact-two-partial-publication-20261002.json)
+records the existing Temporal workflow/activity/projector on only the two
+remaining original messages, using commit `f6c89e4`. One bounded sweep published
+both in 124.84 seconds: all 2,034 bodies are now available, with one complete
+parent and one partial parent whose vector-only PDF explicitly reports
+`failed` / `conversion_failed`. The workflow truthfully ended `FAILED` for that
+attachment; automatic `skip_failed` recovery has no admitted pending work.
+
+Independent verification checked 2,125 current text artifacts and 4,224 Vespa
+documents against SQL manifests, plus actual body literal queries, original
+thread reads, derived content reads, publication CAS gates, and current-body
+Vespa keyword hits for both messages. All four original PDFs remain downloadable
+and hash-valid. The earlier 2,032 publication pointers, body provenance and bytes,
+source SQL/blob digest, and frozen comparative censuses are unchanged. The new
+2,034-body census is separate; no earlier relevance population was regraded.
+Provider and paid-model calls were zero. Frozen comparative files and source archives were unchanged. After projection,
+only the owned loopback fork/product readers were refreshed to separate archived
+`f6c89e4`/`0a192fd9d` code, preserving the same synthetic database, account and
+authorization token. Actual HTTP reads, literal/shared keyword search membership,
+and bad-credential/wrong-account rejection passed for the new outcomes.
+The standalone browser generated contract has a separate companion-owned refresh.
+This gate does not claim retrieval relevance or automatic capture-child dispatch.
