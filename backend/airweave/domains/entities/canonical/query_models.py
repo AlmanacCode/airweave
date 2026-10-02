@@ -6,19 +6,13 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
 
-from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
+from airweave.domains.entities.canonical.models import IndexedRecordRead as IndexedRecordRead
 from airweave.domains.entities.canonical.models import ObservedChange, SourceRecord
 from airweave.domains.entities.canonical.models import RecordPage as RecordPage
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.platform.sources.records.sheets_manifest import GridBounds, GridGap
 from airweave.platform.sources.records.sheets_models import SpreadsheetCell
 from airweave.platform.sources.records.workspace_manifest import WorkspaceManifestV1
-
-
-class IndexedRecordRead(SourceRecord):
-    """Current original plus independently attested current extraction coverage."""
-
-    extraction: ExtractionCoverage | None = None
 
 
 class DocumentRead(BaseModel):

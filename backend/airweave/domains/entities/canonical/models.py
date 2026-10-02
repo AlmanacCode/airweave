@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from airweave.domains.entities.canonical.coverage_models import CaptureCoverage
+from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.requests import BlobReference, RecordIdentity
 
 
@@ -33,6 +34,12 @@ class SourceRecord(BaseModel):
     blobs: tuple[BlobReference, ...]
     indexed_revision: int | None
     indexed_pipeline_version: int | None
+
+
+class IndexedRecordRead(SourceRecord):
+    """Current original plus independently attested current extraction coverage."""
+
+    extraction: ExtractionCoverage | None = None
 
 
 class ObservedChange(BaseModel):

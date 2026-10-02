@@ -478,6 +478,8 @@ def test_http_dtos_and_help_import_without_server_settings_or_database(tmp_path)
     env = {"PATH": os.environ["PATH"], "PYTHONPATH": f"{root / 'backend'}:{root}"}
     code = (
         "from evaluation.replay_cli import main; import sys; "
+        "from airweave.domains.entities.canonical.models import IndexedRecordRead; "
+        "assert 'extraction' in IndexedRecordRead.model_json_schema()['properties']; "
         "assert 'airweave.core.config' not in sys.modules; "
         "assert 'airweave.platform.sources' not in sys.modules; "
         "assert 'sqlalchemy' not in sys.modules"
