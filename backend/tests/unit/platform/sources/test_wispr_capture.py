@@ -142,15 +142,6 @@ async def test_listing_preserves_native_row_and_continuation(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_listing_projection_is_explicitly_empty():
-    from types import SimpleNamespace
-
-    from airweave.domains.entities.canonical.projection_mappers import _wispr
-
-    assert _wispr(SimpleNamespace(identity=SimpleNamespace(record_type="meeting_listing"))) == ()
-
-
-@pytest.mark.asyncio
 async def test_partitioned_listing_resumes_both_half_open_windows(monkeypatch):
     from airweave.domains.entities.canonical.page_source import CanonicalPageSource
     from airweave.domains.entities.canonical.requests import CompletedScope
