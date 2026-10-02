@@ -91,8 +91,8 @@ async def test_wispr_ranges_do_not_duplicate_default_content():
         "summary": "summary",
         "content": "notes",
         "transcript": (
-            "abc\n(...truncated, 3 chars remaining; "
-            "continue with view_transcript.start_char=3...)\n\nProvider guidance."
+            "abc\n\n(...truncated, 3 chars remaining; "
+            "continue with view_transcript.start_char=3...)"
         ),
     }
     second = {"id": "meeting", "content": "notes", "transcript": "def"}
@@ -111,7 +111,7 @@ async def test_wispr_ranges_do_not_duplicate_default_content():
     async with map_record(record("meeting", payload), "wispr", AsyncMock()) as entities:
         entities = entities.entities
         assert entities[0].notes == "notes"
-        assert entities[0].transcript == "abc\ndef"
+        assert entities[0].transcript == "abcdef"
         assert "guidance" not in entities[0].transcript
 
 
@@ -127,7 +127,7 @@ async def test_wispr_unfinished_ranges_fail_instead_of_indexing_truncated_body()
                 "response": {
                     "content": "",
                     "transcript": (
-                        "(...truncated, 3 chars remaining; "
+                        "abc\n\n(...truncated, 3 chars remaining; "
                         "continue with view_transcript.start_char=3...)"
                     ),
                 },
@@ -239,7 +239,7 @@ async def test_wispr_scratchpad_retains_all_text_ranges_without_meeting_fields()
                     "id": "note",
                     "title": "Ideas",
                     "content": (
-                        "abc\n(...truncated, 3 chars remaining; "
+                        "abc\n\n(...truncated, 3 chars remaining; "
                         "continue with view_content.start_char=3...)"
                     ),
                     "modified_at": "2026-09-30T00:00:00Z",
@@ -262,7 +262,7 @@ async def test_wispr_scratchpad_retains_all_text_ranges_without_meeting_fields()
     async with map_record(original, "wispr", storage) as entities:
         entities = entities.entities
         assert entities[0].note_id == "note"
-        assert entities[0].content == "abc\ndef"
+        assert entities[0].content == "abcdef"
         assert entities[0].web_url == ""
     assert original.model_dump() == before
     assert storage.mock_calls == []
@@ -313,3 +313,107 @@ async def test_wispr_explicitly_absent_transcript_keeps_available_notes():
     with pytest.raises(ProjectionMappingError, match="unavailable or malformed"):
         async with map_record(record("meeting", payload), "wispr", AsyncMock()):
             pass
+
+
+@pytest.mark.parametrize("unit", ["codepoints", "utf16"])
+def test_wispr_ranges_preserve_unicode_and_source_whitespace(unit):
+    from airweave.domains.entities.canonical.projection_mappers import _wispr_text
+
+    first = "स्वीकृत 😀 \n"
+    offset = len(first) if unit == "codepoints" else len(first.encode("utf-16-le")) // 2
+    pages = [
+        {
+            "requested_ranges": {"view_content": {"start_char": 0}},
+            "response": {
+                "content": first
+                + "\n\n(...truncated, 3 chars remaining; "
+                + f"continue with view_content.start_char={offset}...)"
+            },
+        },
+        {
+            "requested_ranges": {"view_content": {"start_char": offset}},
+            "response": {"content": "done \n\n"},
+        },
+    ]
+    assert _wispr_text(pages, "content") == first + "done \n\n"
+
+
+def test_wispr_wrapped_transcript_preserves_midword_and_terminal_whitespace():
+    import copy
+
+    from airweave.domains.entities.canonical.projection_mappers import (
+        _WISPR_TRANSCRIPT_FOOTER,
+        _WISPR_TRANSCRIPT_HEADER,
+        _wispr_text,
+    )
+
+    pages = [
+        {
+            "requested_ranges": {"view_transcript": {"start_char": 0}},
+            "response": {
+                "transcript": _WISPR_TRANSCRIPT_HEADER
+                + "appro\n\n(...truncated, 3 chars remaining; "
+                "continue with view_transcript.start_char=5...)" + _WISPR_TRANSCRIPT_FOOTER
+            },
+        },
+        {
+            "requested_ranges": {"view_transcript": {"start_char": 5}},
+            "response": {
+                "transcript": _WISPR_TRANSCRIPT_HEADER + "ved \n" + _WISPR_TRANSCRIPT_FOOTER
+            },
+        },
+    ]
+    before = copy.deepcopy(pages)
+    assert _wispr_text(pages, "transcript") == "approved \n"
+    assert pages == before
+
+
+@pytest.mark.parametrize("defect", ["separator", "footer", "length", "gap", "unit_change"])
+def test_wispr_inconsistent_range_framing_fails(defect):
+    from airweave.domains.entities.canonical.projection_mappers import _wispr_text
+
+    pages = [
+        {
+            "requested_ranges": {"view_content": {"start_char": 0}},
+            "response": {
+                "content": "😀a\n\n(...truncated, 2 chars remaining; "
+                "continue with view_content.start_char=2...)"
+            },
+        },
+        {"requested_ranges": {"view_content": {"start_char": 2}}, "response": {"content": "bc"}},
+    ]
+    if defect == "separator":
+        pages[0]["response"]["content"] = pages[0]["response"]["content"].replace("\n\n", "\n")
+    elif defect == "footer":
+        pages[0]["response"]["content"] += "\nUnknown guidance"
+    elif defect == "length":
+        pages[0]["response"]["content"] = pages[0]["response"]["content"].replace(
+            "start_char=2", "start_char=7"
+        )
+    elif defect == "gap":
+        pages[1]["requested_ranges"]["view_content"]["start_char"] = 3
+    else:
+        # First range requires codepoints, the next would require UTF16 units.
+        pages[1]["response"]["content"] = (
+            "😀a\n\n(...truncated, 1 chars remaining; continue with view_content.start_char=5...)"
+        )
+    with pytest.raises(ProjectionMappingError):
+        _wispr_text(pages, "content")
+
+
+def test_wispr_terminal_transcript_rejects_incomplete_wrapper():
+    from airweave.domains.entities.canonical.projection_mappers import (
+        _WISPR_TRANSCRIPT_HEADER,
+        _wispr_text,
+    )
+
+    with pytest.raises(ProjectionMappingError, match="framing"):
+        _wispr_text(
+            [
+                {
+                    "requested_ranges": {"view_transcript": {"start_char": 0}},
+                    "response": {"transcript": _WISPR_TRANSCRIPT_HEADER + "intact text"},
+                }
+            ],
+            "transcript",
+        )
