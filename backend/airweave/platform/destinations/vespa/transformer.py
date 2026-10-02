@@ -471,12 +471,16 @@ class EntityTransformer:
 
     def _add_payload_field(self, fields: Dict[str, Any], entity: BaseEntity) -> None:
         """Extract extra fields into payload JSON."""
-        schema_fields = _get_schema_fields_for_entity(entity)
-        # Exclude airweave_system_metadata from dump to avoid serializing numpy arrays
-        # (sparse_embedding contains FastEmbed SparseEmbedding with numpy arrays)
-        entity_dict = entity.model_dump(mode="json", exclude={"airweave_system_metadata"})
-        payload = {k: v for k, v in entity_dict.items() if k not in schema_fields}
         metadata = entity.airweave_system_metadata
+        if metadata is not None and metadata.canonical_record_type is not None:
+            # Originals live in the canonical store. Chunk payloads carry only
+            # the read link and source-preview provenance, never repeated bodies.
+            payload = entity.model_dump(mode="json", include={"web_url"})
+        else:
+            schema_fields = _get_schema_fields_for_entity(entity)
+            # Sparse embeddings contain numpy arrays; metadata has its own fields.
+            entity_dict = entity.model_dump(mode="json", exclude={"airweave_system_metadata"})
+            payload = {k: v for k, v in entity_dict.items() if k not in schema_fields}
         if metadata is not None and metadata.content_provenance is not None:
             payload["content_provenance"] = metadata.content_provenance.model_dump(mode="json")
         if payload:

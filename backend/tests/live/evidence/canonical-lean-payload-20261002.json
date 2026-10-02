@@ -1,0 +1,188 @@
+{
+  "scope": "20 frozen manifest documents selected at round(i*(N-1)/19); production payload helper reserialization, no feed or embedding. This is a separate evenly spaced sample from the earlier root census.",
+  "documents": 20,
+  "provider_calls": 0,
+  "paid_calls": 0,
+  "index_writes": 0,
+  "totals": {
+    "before_bytes": 4943698,
+    "after_bytes": 822472,
+    "before_payload_bytes": 3616722,
+    "after_payload_bytes": 1840
+  },
+  "all_nonpayload_fields_equal": true,
+  "rows": [
+    {
+      "before_bytes": 23439,
+      "after_bytes": 16708,
+      "before_payload_bytes": 6088,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "28396bcfac4d21232f6a4c86d8eccbdbed17ede11ca313705255013788659edb",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 283480,
+      "after_bytes": 12603,
+      "before_payload_bytes": 234634,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "df27712fb6ae5743db1c4b2fae376477a11b1d6393bb8f4e714c49be645f0369",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 469426,
+      "after_bytes": 54427,
+      "before_payload_bytes": 360129,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "1f8182b156667cc55b7107dde4b03d73e5d2802d6848eef1b0c6fcd3176802e6",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 692157,
+      "after_bytes": 81836,
+      "before_payload_bytes": 536918,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "39fadda49f08327f0dd1f10c55b9353282aece0d7486f00915ba0e35c56beaee",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 502524,
+      "after_bytes": 47346,
+      "before_payload_bytes": 393942,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "b3e213a38c1b13e89dd0a1972ffc7185c63533096f37e9812c920ff8470a7917",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 104593,
+      "after_bytes": 37135,
+      "before_payload_bytes": 59342,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "6219b569ab81c5b388c9d7abdc619ec256caeca41c298c4ff8b753dec75dd3cc",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 58100,
+      "after_bytes": 30238,
+      "before_payload_bytes": 27679,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "9fbe5bca0772d0867de7370b7ed7a4243015d38ee43c1f932c8792f3c8434cbe",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 19659,
+      "after_bytes": 17047,
+      "before_payload_bytes": 2639,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "ac6d1324abebdaae4cd83ec012db84299fcfc516c5158e014f690e3e19a286af",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 239932,
+      "after_bytes": 43681,
+      "before_payload_bytes": 173136,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "276d69a4128173fa1d7d47ee600e920babba295b51bd746533d3f986d631c544",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 234879,
+      "after_bytes": 62634,
+      "before_payload_bytes": 151864,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "99eafd50060d4a10189464659996c427a1ffd78c0acae6ad22159e62ba6d9d5f",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 339574,
+      "after_bytes": 42675,
+      "before_payload_bytes": 259986,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "d2f6f994524fa8fbd370b6e246bc012b548a57b600b57c088e72876ec598debe",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 196025,
+      "after_bytes": 40902,
+      "before_payload_bytes": 136540,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "7eaa550666766872d51fdff3ee62a3a0afe9cf80a68a1191c4574e3c4e3a83c9",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 30777,
+      "after_bytes": 20940,
+      "before_payload_bytes": 8807,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "1764c59495be5fe9be1d40ad2f5d13eb975bae716d3a36cdec3f3c79e67cf11d",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 141410,
+      "after_bytes": 43738,
+      "before_payload_bytes": 96423,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "f5242e9b56870c8780c104ce338e5fb153cac6a89e4dd428515c9f28ae5a9406",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 511438,
+      "after_bytes": 82771,
+      "before_payload_bytes": 378080,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "4dd7f365acd95e8e389542d9e265c4fc81f1d84670105f23931b67a251307a27",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 233965,
+      "after_bytes": 43411,
+      "before_payload_bytes": 167085,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "402104935be0a14ee120327e33f20f9562df4c435778f411a159e939a7c804f7",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 18703,
+      "after_bytes": 16075,
+      "before_payload_bytes": 2657,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "821ea76bdf56586fbae88cd8be2d83c988ae6c564b2aa1fe7ebe1b3d49a9f188",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 520033,
+      "after_bytes": 50653,
+      "before_payload_bytes": 405531,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "9628d2d9a64ae5e4be7fa8e1cd0da06233388b9f43767fb90bb8f1798d86624f",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 266982,
+      "after_bytes": 45852,
+      "before_payload_bytes": 191383,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "5424d4720a6ae6776570314e636e96e8e5b126a8ffc09a5300628df19573e438",
+      "nonpayload_equal": true
+    },
+    {
+      "before_bytes": 56602,
+      "after_bytes": 31800,
+      "before_payload_bytes": 23859,
+      "after_payload_bytes": 92,
+      "nonpayload_sha256": "deaced24e7ad54ddf0fbc4a686c42756eae9fcf4d05878bf17fb1e13e853a5e9",
+      "nonpayload_equal": true
+    }
+  ],
+  "field_equivalence": "Every field except payload exactly equal, including text, vectors, schema/filter metadata, access and canonical publication identity; original response document ID unchanged.",
+  "test_results": {
+    "lean_payload_test": "passed",
+    "owned_ranking": "14passed,3pre-existing typed-fixture failures before any transformer invocation",
+    "legacy_transformer": "31passed,21MagicMock serialization failures reproduced identically with HEAD baseline; new test adds one pass",
+    "ruff": "passed",
+    "lean_payload_and_visible_vector_db": "11 passed in1.76seconds"
+  },
+  "limitations": [
+    "Not resident disk savings. Existing indexed documents are unchanged until republished.",
+    "Generic legacy payload serialization is unchanged."
+  ]
+}
