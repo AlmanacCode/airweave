@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from airweave.api.context import ApiContext
 from airweave.core.protocols.reranker import RerankerProtocol, RerankerResult
 from airweave.core.protocols.tokenizer import TokenizerProtocol
+from airweave.domains.entities.canonical.content_models import ContentProvenance, MatchedPart
 from airweave.domains.entities.canonical.coverage import capture_coverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
@@ -761,6 +762,7 @@ class OwnedSearchService:
             ):
                 exclusions += 1
                 continue
+            matched_part, preview = _matched_content(result, locator, coverage)
             if not self._matches(row, request):
                 postfiltered += 1
                 continue
@@ -778,6 +780,7 @@ class OwnedSearchService:
                     ),
                     title=result.name,
                     excerpts=(),
+                    matched_part=matched_part,
                     observed_at=row.observed_at,
                     source_created_at=row.source_created_at,
                     source_updated_at=row.source_updated_at,
@@ -796,29 +799,10 @@ class OwnedSearchService:
                 hits[row.id].group = self._conversation(row, hits[row.id])
                 scores[row.id] = (1 / (60 + rank), locator)
                 matched_text[row.id] = result.textual_representation
-            # Dynamic summaries are keyword fragments, not semantic explanations.
-            # No-mark and older-schema responses keep the existing chunk fallback.
-            snippet = result.query_snippet
-            if (
-                request.mode.value != "semantic"
-                and snippet
-                and "<hi>" in snippet
-                and "</hi>" in snippet
-            ):
-                # Remove only Vespa's presentation delimiters. All other markup is
-                # ordinary untrusted text, never parsed/rendered as HTML here.
-                excerpt = (
-                    snippet.replace("<hi>", "")
-                    .replace("</hi>", "")
-                    .replace("<sep />", " … ")
-                    .strip()
-                    or result.textual_representation
-                )[:2000]
-            else:
-                excerpt = result.textual_representation[:2000]
             current = hits[row.id]
-            if excerpt and excerpt not in current.excerpts and len(current.excerpts) < 3:
-                hits[row.id] = current.model_copy(update={"excerpts": (*current.excerpts, excerpt)})
+            # Present only the representative part. Ranking still uses its unchanged index text.
+            if preview and matched_part == current.matched_part and not current.excerpts:
+                hits[row.id] = current.model_copy(update={"excerpts": (preview,)})
         return hits, scores, matched_text, exclusions, postfiltered
 
     @staticmethod
@@ -928,12 +912,14 @@ class OwnedSearchService:
         has_indexed = ProjectionGeneration.extraction_coverage.contains(
             {"parts": [{"outcome": "indexed"}]}
         )
-        has_omitted = ProjectionGeneration.extraction_coverage.contains(
-            {"parts": [{"outcome": "unsupported"}]}
-        ) | ProjectionGeneration.extraction_coverage.contains(
-            {"parts": [{"outcome": "unavailable_original"}]}
-        ) | ProjectionGeneration.extraction_coverage.contains(
-            {"parts": [{"outcome": "failed"}]}
+        has_omitted = (
+            ProjectionGeneration.extraction_coverage.contains(
+                {"parts": [{"outcome": "unsupported"}]}
+            )
+            | ProjectionGeneration.extraction_coverage.contains(
+                {"parts": [{"outcome": "unavailable_original"}]}
+            )
+            | ProjectionGeneration.extraction_coverage.contains({"parts": [{"outcome": "failed"}]})
         )
         rows = await db.execute(
             select(
@@ -970,3 +956,25 @@ class OwnedSearchService:
             )
             for sync in request.sync_ids
         )
+
+
+def _matched_content(
+    result: SearchResult, locator: ProjectionLocator, coverage: ExtractionCoverage | None
+) -> tuple[MatchedPart | None, str | None]:
+    """Current extraction and immutable payload must agree; old text is never guessed."""
+    if coverage is None:
+        return None, None
+    part = next((part for part in coverage.parts if part.part_index == locator.part_index), None)
+    if part is None or part.outcome != "indexed":
+        return None, None
+    matched = MatchedPart(
+        part_index=part.part_index, key=part.key, kind=part.kind, title=result.name[:512]
+    )
+    raw = result.raw_source_fields.get("content_provenance")
+    if raw is None:
+        return matched, None
+    try:
+        provenance = ContentProvenance.model_validate(raw)
+    except ValidationError:
+        return matched, None
+    return matched, provenance.preview if provenance.part == matched else None

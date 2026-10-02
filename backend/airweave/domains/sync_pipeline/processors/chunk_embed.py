@@ -263,6 +263,16 @@ class ChunkEmbedProcessor:
                 chunk_entity.entity_id = f"{original_id}__chunk_{idx}"
                 chunk_entity.airweave_system_metadata.chunk_index = idx
                 chunk_entity.airweave_system_metadata.original_entity_id = original_id
+                provenance = chunk_entity.airweave_system_metadata.content_provenance
+                if provenance is not None:
+                    start, end = chunk.get("start_index"), chunk.get("end_index")
+                    if type(start) is not int or type(end) is not int:
+                        raise ValueError("Canonical chunk has no exact source offsets")
+                    chunk_entity.airweave_system_metadata.content_provenance = (
+                        provenance.chunk_preview(
+                            entity.textual_representation, chunk_text, start, end
+                        )
+                    )
 
                 chunk_entities.append(chunk_entity)
 

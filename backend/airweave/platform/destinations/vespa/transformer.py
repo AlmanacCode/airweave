@@ -476,5 +476,8 @@ class EntityTransformer:
         # (sparse_embedding contains FastEmbed SparseEmbedding with numpy arrays)
         entity_dict = entity.model_dump(mode="json", exclude={"airweave_system_metadata"})
         payload = {k: v for k, v in entity_dict.items() if k not in schema_fields}
+        metadata = entity.airweave_system_metadata
+        if metadata is not None and metadata.content_provenance is not None:
+            payload["content_provenance"] = metadata.content_provenance.model_dump(mode="json")
         if payload:
             fields["payload"] = json.dumps(payload)

@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from airweave.domains.embedders.types import SparseEmbedding
+from airweave.domains.entities.canonical.content_models import ContentProvenance
 
 
 class Breadcrumb(BaseModel):
@@ -63,6 +64,7 @@ class AirweaveSystemMetadata(BaseModel):
     )
 
     # Canonical projector-owned metadata. Provider entity fallbacks do not set these.
+    content_provenance: ContentProvenance | None = None
     canonical_record_type: Optional[str] = None
     native_type: Optional[str] = None
     source_created_us: Optional[int] = None

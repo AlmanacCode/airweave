@@ -14,6 +14,7 @@ from airweave.api import deps
 from airweave.api.v1.endpoints.records import router
 from airweave.db.session import get_db
 from airweave.domains.embedders.fakes.embedder import FakeDenseEmbedder, FakeSparseEmbedder
+from airweave.domains.entities.canonical.content_models import ContentProvenance, MatchedPart
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.tests.helpers import capture, observation, publish_prepared
@@ -168,8 +169,8 @@ async def test_owned_http_deduplicates_and_preserves_partial_engine(database, in
     assert item["completeness"] == "complete" and item["observed_at"]
     assert item["source_created_at"] is None and item["source_updated_at"] is None
     assert item["email_thread_id"] is None
-    assert item["excerpts"] == [first.textual_representation, "Other evidence"]
-    assert len(item["excerpts"]) == 2 and "payload" not in item
+    assert item["excerpts"] == []  # Old generations lack content provenance.
+    assert "payload" not in item
     assert body["engine_partial"] and body["retrieval_incomplete"]
     assert body["coverage"] == "bounded_candidates" and "next_cursor" not in body
     assert body["sources"][0]["pending_records"] == 0
@@ -526,8 +527,11 @@ async def test_capture_discovery_coverage_is_separate_from_retrieval(
     assert body["retrieval_incomplete"]
 
 
+@pytest.mark.parametrize(
+    "outcome,reason", [("unsupported", "unsupported_format"), ("failed", "conversion_failed")]
+)
 async def test_partial_extraction_http_hit_original_and_nonindexed_part_gate(
-    database, indexed, http_search
+    database, indexed, http_search, outcome, reason
 ):
     from airweave.domains.entities.canonical.extraction_models import (
         ExtractionCoverage,
@@ -545,8 +549,8 @@ async def test_partial_extraction_http_hit_original_and_nonindexed_part_gate(
                 kind="file",
                 media_type="video/mp4",
                 extension=".mp4",
-                outcome="unsupported",
-                reason="unsupported_format",
+                outcome=outcome,
+                reason=reason,
             ),
         )
     )
@@ -559,8 +563,18 @@ async def test_partial_extraction_http_hit_original_and_nonindexed_part_gate(
         await db.commit()
     client, vector, _, _, _ = http_search
     valid = hit(fence, locator.encode())
+    part = MatchedPart(part_index=0, key="/body", kind="body", title=valid.name)
+    valid.raw_source_fields["content_provenance"] = ContentProvenance(
+        part=part, content_start=10, content_end=40, preview="# Metadata is literal user text"
+    ).model_dump(mode="json")
     invalid = hit(fence, locator.model_copy(update={"part_index": 1}).encode())
     invalid.textual_representation = "unsupported attachment must never escape"
+    invalid.raw_source_fields["content_provenance"] = ContentProvenance(
+        part=MatchedPart(part_index=1, key="/payload/parts/1", kind="file", title=invalid.name),
+        content_start=0,
+        content_end=40,
+        preview="failed or unsupported part must never escape",
+    ).model_dump(mode="json")
     vector.seed_results(SearchResults(results=[valid, invalid]))
     response = await client.post(
         "/sync/search",
@@ -570,6 +584,8 @@ async def test_partial_extraction_http_hit_original_and_nonindexed_part_gate(
     payload = response.json()
     assert len(payload["items"]) == 1 and payload["retrieval_incomplete"]
     assert payload["items"][0]["extraction"] == coverage.model_dump(mode="json")
+    assert payload["items"][0]["matched_part"] == part.model_dump(mode="json")
+    assert payload["items"][0]["excerpts"] == ["# Metadata is literal user text"]
     assert "unsupported attachment must never escape" not in str(payload["items"])
     assert payload["sources"][0]["partially_indexed_records"] == 1
     response = await client.get(f"/sync/{fence.sync_id}/records/{locator.record_id}")
@@ -636,21 +652,17 @@ async def test_visibility_batches_exact_parts_generations_and_duplicate_chunks(d
 
 
 @pytest.mark.parametrize(
-    "mode,snippet,expected_fragment",
+    "mode,snippet",
     [
-        (
-            "keyword",
-            "<sep /><hi>नमस्ते</hi> 原文 <script>alert(1)</script><sep />",
-            "… नमस्ते 原文 <script>alert(1)</script> …",
-        ),
-        ("hybrid", "… <hi>नमस्ते</hi> 原文", "… नमस्ते 原文"),
-        ("semantic", "… <hi>नमस्ते</hi> 原文", None),
-        ("hybrid", "An unmatched lead without term markers", None),
-        ("keyword", None, None),
+        ("keyword", "<sep /><hi>नमस्ते</hi> 原文 <script>alert(1)</script><sep />"),
+        ("hybrid", "… <hi>नमस्ते</hi> 原文"),
+        ("semantic", "… <hi>नमस्ते</hi> 原文"),
+        ("hybrid", "An unmatched lead without term markers"),
+        ("keyword", None),
     ],
 )
-async def test_owned_lexical_fragment_keeps_original_chunk(
-    database, indexed, http_search, mode, snippet, expected_fragment
+async def test_unattested_lexical_fragment_is_not_content(
+    database, indexed, http_search, mode, snippet
 ):
     fence, locator, _ = indexed
     client, vector, _, _, _ = http_search
@@ -672,8 +684,9 @@ async def test_owned_lexical_fragment_keeps_original_chunk(
         },
     )
     assert response.status_code == 200, response.text
-    expected = expected_fragment if expected_fragment is not None else original[:2000]
-    assert response.json()["items"][0]["excerpts"] == [expected]
+    assert (
+        response.json()["items"][0]["excerpts"] == []
+    )  # Unattested lexical metadata is not content.
     assert response.json()["items"][0]["record_id"] == str(locator.record_id)
     assert candidate.textual_representation == original
 
@@ -807,7 +820,7 @@ async def test_candidate_http_never_reranks_and_preserves_exact_bounded_text(
         assert candidate["hit"]["record_id"] == str(locator.record_id)
         assert candidate["text"] == original.textual_representation[:32000]
         assert candidate["text_truncated"] is True
-        assert candidate["hit"]["excerpts"][0] == original.textual_representation[:2000]
+        assert candidate["hit"]["excerpts"] == []
 
 
 @pytest.mark.parametrize("operation", ["candidates", "rank"])

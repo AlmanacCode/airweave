@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.core.logging import ContextualLogger
+from airweave.domains.entities.canonical.content_models import ContentProvenance, MatchedPart
 from airweave.domains.entities.canonical.extraction_models import (
     ExtractionCoverage,
     ExtractionOutcome,
@@ -174,6 +175,7 @@ class CanonicalProjector:
                     built = await self._processor.build_text(
                         selected, context, runtime, native_bodies=native_bodies
                     )
+                _stamp_content(built, coverage)
                 artifacts = prepare_text(built.representations, generation)
                 chunks = await self._processor.process_built_text(
                     built.entities,
@@ -396,3 +398,24 @@ def _select_inputs(
         meta.db_entity_id = work.record.id
         stamp_search_metadata(meta, work.record)
     return selected, ExtractionCoverage(parts=tuple(outcomes))
+
+
+def _stamp_content(built: BuiltTextBatch, coverage: ExtractionCoverage) -> None:
+    """Capture exact construction boundaries before the existing chunker runs."""
+    texts = {item.entity_id: item for item in built.representations}
+    parts = {part.part_index: part for part in coverage.parts if part.outcome == "indexed"}
+    for entity in built.entities:
+        text = texts[entity.entity_id]
+        part = parts[_part_index(entity.entity_id)]
+        if entity.textual_representation != text.text or entity.airweave_system_metadata is None:
+            raise ValueError("Prepared text lost its canonical content identity")
+        entity.airweave_system_metadata.content_provenance = ContentProvenance(
+            part=MatchedPart(
+                part_index=part.part_index,
+                key=part.key,
+                kind=part.kind,
+                title=(entity.name or "")[:512],
+            ),
+            content_start=text.content_start,
+            content_end=len(text.text),
+        )

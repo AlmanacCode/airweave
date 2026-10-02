@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from airweave.domains.entities.canonical.content_models import MatchedPart
 from airweave.domains.entities.canonical.coverage_models import CaptureCoverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
@@ -71,6 +72,7 @@ class OwnedSearchMatch(BaseModel):
     native_version: NativeVersion | None = None
     title: str
     excerpts: tuple[str, ...]
+    matched_part: MatchedPart | None = None
     email_thread_id: str | None = Field(default=None, max_length=512, pattern=r"^[A-Za-z0-9_-]+$")
     observed_at: AwareDatetime
     source_created_at: AwareDatetime | None

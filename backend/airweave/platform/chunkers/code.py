@@ -228,7 +228,10 @@ class CodeChunker(BaseChunker):
                     # Replace with split sub-chunks
                     split_chunks = split_results_by_position[oversized_pos]
                     for sub_chunk in split_chunks:
-                        final_chunks.append(self._convert_chunk(sub_chunk))
+                        converted = self._convert_chunk(sub_chunk)
+                        converted["start_index"] += chunk.start_index
+                        converted["end_index"] += chunk.start_index
+                        final_chunks.append(converted)
                 else:
                     # Keep original chunk
                     final_chunks.append(self._convert_chunk(chunk))
