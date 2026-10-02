@@ -160,3 +160,31 @@ class OwnedCandidatesResponse(BaseModel):
     shortlist_truncated: bool
     authority: Literal["canonical_snapshot"] = "canonical_snapshot"
     order: Literal["retrieval_rank"] = "retrieval_rank"
+
+
+class OwnedRankRequest(BaseModel):
+    """Backend-approved candidates after current Almanac authority validation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    query: str = Field(min_length=1, max_length=4000)
+    sync_ids: tuple[UUID, ...] = Field(min_length=1, max_length=20)
+    candidates: tuple[OwnedCandidate, ...] = Field(max_length=200)
+
+    @model_validator(mode="after")
+    def distinct_scope(self):
+        """One candidate per exact record and one declaration per source."""
+        if not self.query.strip() or len(set(self.sync_ids)) != len(self.sync_ids):
+            raise ValueError("Query must be nonblank and source IDs unique")
+        ids = [candidate.hit.record_id for candidate in self.candidates]
+        if len(set(ids)) != len(ids):
+            raise ValueError("Ranking candidates must have distinct record IDs")
+        return self
+
+
+class OwnedRankResponse(BaseModel):
+    """Order only: the caller retains candidate cards and owns product grouping."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    record_ids: tuple[UUID, ...] = Field(max_length=200)
+    ranking: OwnedRanking
+    excluded_candidates: int = Field(ge=0)

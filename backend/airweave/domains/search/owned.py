@@ -9,7 +9,7 @@ from uuid import UUID
 from anyio import CapacityLimiter, create_task_group
 from fastapi import HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict
-from sqlalchemy import and_, case, func, or_, select, tuple_
+from sqlalchemy import and_, case, func, or_, select, true, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from airweave.api.context import ApiContext
@@ -32,6 +32,8 @@ from airweave.domains.search.owned_models import (
     OwnedCandidate,
     OwnedCandidatesResponse,
     OwnedRanking,
+    OwnedRankRequest,
+    OwnedRankResponse,
     OwnedSearchCoverage,
     OwnedSearchGroup,
     OwnedSearchHit,
@@ -251,6 +253,56 @@ class OwnedSearchService:
             excluded_candidates=found.excluded + len(found.hits.keys() - eligible),
             postfilter_excluded=found.postfiltered,
             shortlist_truncated=len(ordered) > request.limit,
+        )
+
+    async def rank_candidates(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        ctx: ApiContext,
+        request: OwnedRankRequest,
+    ) -> OwnedRankResponse:
+        """Recheck canonical authority around ranking a backend-approved shortlist."""
+        scope_request = OwnedSearchRequest(query=request.query, sync_ids=request.sync_ids)
+        async with sessions() as db:
+            scopes, _ = await self._resolve_scopes(db, ctx, scope_request)
+        snapshot = self._scope_identity(scopes)
+        hits, scores, text, expected_syncs = {}, {}, {}, {}
+        for candidate in request.candidates:
+            hit = candidate.hit
+            scope = scopes.get(hit.sync_id)
+            if (
+                scope is None
+                or hit.source_connection_id != scope.id
+                or hit.provider != scope.short_name
+                or (
+                    hit.group is not None
+                    and (hit.group.matched_records != 1 or hit.group.additional_matches)
+                )
+                or (hit.provider == "almanac" and hit.native_version is None)
+            ):
+                raise HTTPException(422, "Candidate does not match its declared source scope")
+            hits[hit.record_id] = hit
+            scores[hit.record_id] = (candidate.retrieval_score, candidate.projection)
+            text[hit.record_id] = candidate.text
+            expected_syncs[hit.record_id] = hit.sync_id
+        async with sessions() as db:
+            eligible = await self._final_publications(
+                db, ctx, scope_request, scores, snapshot, expected_syncs
+            )
+        candidates = sorted(eligible, key=lambda key: (-scores[key][0], str(key)))
+        ranked, ranking = await self._rank(request.query, candidates, hits, text)
+        async with sessions() as db:
+            fresh, _ = await self._resolve_scopes(db, ctx, scope_request)
+            if self._scope_identity(fresh) != snapshot:
+                raise HTTPException(404, "Requested indexed sources changed during ranking")
+            final = await self._final_publications(
+                db, ctx, scope_request, scores, snapshot, expected_syncs
+            )
+        approved = tuple(key for key in ranked if key in final)
+        return OwnedRankResponse(
+            record_ids=approved,
+            ranking=ranking,
+            excluded_candidates=len(request.candidates) - len(approved),
         )
 
     async def search(
@@ -748,6 +800,7 @@ class OwnedSearchService:
         request: OwnedSearchRequest,
         scores: dict[UUID, tuple[float, ProjectionLocator]],
         scope_snapshot: set[tuple],
+        expected_syncs: dict[UUID, UUID] | None = None,
     ) -> set[UUID]:
         # Later collection retrieval may outlive an edit/revocation of earlier hits.
         # Recheck the exact publication, including parent visibility, at the final
@@ -791,6 +844,9 @@ class OwnedSearchService:
                         Sync.index_pipeline_version,
                     ).in_(list(scope_snapshot)),
                     publications_match(locator for _, locator in scores.values()),
+                    true()
+                    if expected_syncs is None
+                    else tuple_(Entity.id, Entity.sync_id).in_(list(expected_syncs.items())),
                 )
             )
         )

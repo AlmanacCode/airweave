@@ -10,6 +10,7 @@ from pydantic import AwareDatetime, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from airweave.api import deps
+from airweave.api.backend_actor import backend_search_actor
 from airweave.api.context import ApiContext
 from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
@@ -43,6 +44,8 @@ from airweave.domains.entities.canonical.wispr_models import (
 from airweave.domains.entities.canonical.wispr_query import CanonicalWisprQuery
 from airweave.domains.search.owned_models import (
     OwnedCandidatesResponse,
+    OwnedRankRequest,
+    OwnedRankResponse,
     OwnedSearchRequest,
     OwnedSearchResponse,
 )
@@ -75,11 +78,24 @@ async def search_candidates(
     request: OwnedSearchRequest,
     http_request: Request,
     sessions: async_sessionmaker[AsyncSession] = Depends(deps.get_search_session_factory),
-    ctx: ApiContext = Depends(deps.get_owned_search_context),
+    ctx: ApiContext = Depends(backend_search_actor),
     container: Container = Depends(deps.get_container),
 ) -> OwnedCandidatesResponse:
     """Internal unranked candidates; the caller must check native Almanac authority."""
     work = create_task(container.owned_search.candidates(sessions, ctx, request))
+    return await _await_search(work, http_request)
+
+
+@router.post("/search/rank", response_model=OwnedRankResponse)
+async def rank_candidates(
+    request: OwnedRankRequest,
+    http_request: Request,
+    sessions: async_sessionmaker[AsyncSession] = Depends(deps.get_search_session_factory),
+    ctx: ApiContext = Depends(backend_search_actor),
+    container: Container = Depends(deps.get_container),
+) -> OwnedRankResponse:
+    """Rank only the shortlist already approved by the trusted product backend."""
+    work = create_task(container.owned_search.rank_candidates(sessions, ctx, request))
     return await _await_search(work, http_request)
 
 

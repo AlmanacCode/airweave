@@ -103,7 +103,9 @@ async def http_search(database, indexed):
     )
     executor._discover_federated_sources = AsyncMock(side_effect=AssertionError("No federation"))
     service = OwnedSearchService(executor, registry)
-    ctx = SimpleNamespace(organization=SimpleNamespace(id=fence.organization_id))
+    ctx = SimpleNamespace(
+        organization=SimpleNamespace(id=fence.organization_id), is_api_key_auth=True
+    )
     app = FastAPI()
     app.include_router(router, prefix="/sync")
 
@@ -806,3 +808,76 @@ async def test_candidate_http_never_reranks_and_preserves_exact_bounded_text(
         assert candidate["text"] == original.textual_representation[:32000]
         assert candidate["text_truncated"] is True
         assert candidate["hit"]["excerpts"][0] == original.textual_representation[:2000]
+
+
+@pytest.mark.parametrize("operation", ["candidates", "rank"])
+async def test_candidate_endpoint_rejects_user_context_before_retrieval(
+    indexed, http_search, operation
+):
+    fence, _, _ = indexed
+    client, _, ctx, executor, _ = http_search
+    ctx.is_api_key_auth = False
+    executor.execute = AsyncMock(
+        side_effect=AssertionError("User context must not retrieve candidates")
+    )
+    body = {"query": "budget", "sync_ids": [str(fence.sync_id)]}
+    body.update({"mode": "keyword"} if operation == "candidates" else {"candidates": []})
+    response = await client.post(f"/sync/search/{operation}", json=body)
+    assert response.status_code == 403
+    executor.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("change", [None, "before", "during"])
+async def test_two_phase_ranking_rechecks_without_retrieving_again(
+    database, source, indexed, http_search, change
+):
+    from airweave.core.protocols.reranker import RerankerResult
+
+    fence, locator, _ = indexed
+    client, vector, _, executor, _ = http_search
+    vector.seed_results(SearchResults(results=[hit(fence, locator.encode())]))
+    response = await client.post(
+        "/sync/search/candidates",
+        json={
+            "query": "budget",
+            "sync_ids": [str(fence.sync_id)],
+            "mode": "keyword",
+        },
+    )
+    assert response.status_code == 200, response.text
+    candidates = response.json()["candidates"]
+    assert len(candidates) == 1
+    executor.execute = AsyncMock(
+        side_effect=AssertionError("Ranking must not repeat index retrieval")
+    )
+    executor.prepare_query = AsyncMock(side_effect=AssertionError("Ranking must not embed again"))
+    service = client._transport.app.dependency_overrides[deps.get_container]().owned_search
+
+    async def change_record():
+        await capture(database, source[0], fence, observation(payload={"changed": True}))
+
+    async def rerank(query, documents, top_n):
+        assert query == "budget" and len(documents) == top_n == 1
+        if change == "during":
+            await change_record()
+        return [RerankerResult(0, 1.0)]
+
+    model = AsyncMock(side_effect=rerank)
+    service._reranker = SimpleNamespace(rerank=model)
+    service._tokenizer = SimpleNamespace(count_tokens=lambda text: len(text))
+    if change == "before":
+        await change_record()
+    response = await client.post(
+        "/sync/search/rank",
+        json={
+            "query": "budget",
+            "sync_ids": [str(fence.sync_id)],
+            "candidates": candidates,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["record_ids"] == ([] if change else [str(locator.record_id)])
+    assert response.json()["excluded_candidates"] == (1 if change else 0)
+    assert model.await_count == (0 if change == "before" else 1)
+    executor.execute.assert_not_awaited()
+    executor.prepare_query.assert_not_awaited()

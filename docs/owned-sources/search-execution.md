@@ -42,6 +42,22 @@ does not certify current wiki/session authority. Product validation and shared
 reranking of the eligible mixed shortlist are still required integration work.
 No candidate cache, second index lookup or durable search session is introduced.
 
+After validating current native authority, the product backend can submit its
+approved shortlist to `POST /sync/search/rank`. It returns ordered record IDs and
+ranking diagnostics. It does not embed the query or retrieve the index again;
+canonical publications and source bindings are checked before model disclosure
+and again after the model returns. A revision changed before ranking never reaches
+the reranker; a revision changed during ranking is absent from the response.
+The product retains the cards, owns grouping/result limits, and must revalidate
+current native authority before returning those cards to its caller.
+
+Both two-stage endpoints require the existing backend API-key gate and reject
+browser/system sessions. This fork does **not** distinguish different privileged
+organization API keys: deployment must keep these keys server-side, with no user
+access to the fork's key-administration surface. API-key authentication is not
+proof that product-native authority validation happened; that remains the trusted
+Almanac backend's responsibility. No new identity or credential store was added.
+
 Almanac's server-owned `CaptureTarget` chooses organization and collection for each
 owner/provider/project. Provisioning does not require an organization or collection
 per provider. Sources may share a collection, or use several collections in the
