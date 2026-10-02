@@ -362,3 +362,83 @@ async def test_real_minilm_paraphrase_retrieval_and_exact_keyword():
             for url in urls:
                 response = await http.delete(url)
                 assert response.status_code in (200, 404)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_summary_preserves_full_chunks_and_inherited_fields():
+    """Actual default summaries must expose lexical fragments without replacing originals."""
+    collection, sync = str(uuid4()), str(uuid4())
+    vector = [1.0] + [0.0] * 383
+    # The match is beyond the owned service's 2,000-character prefix fallback.
+    original = "Ordinary introductory context. " * 200 + (
+        "Uniquelexicalneedle नमस्ते 原文 <script>literal markup</script> concludes this record."
+    )
+    contextual = logger.with_context(request_id="synthetic-dynamic-summary")
+    engine = VespaVectorDB(
+        app=Vespa(url="http://localhost", port=8081),
+        logger=contextual,
+        filter_translator=FilterTranslator(logger=contextual),
+    )
+    embeddings = QueryEmbeddings(
+        dense_embeddings=[DenseEmbedding(vector=vector)],
+        sparse_embedding=SparseEmbedding(indices=[1], values=[1.0]),
+    )
+    urls, expected = [], set()
+    async with httpx.AsyncClient(timeout=120) as http:
+        await deploy_schema(http)
+        try:
+            for schema in ("file_entity", "email_entity"):
+                identity = f"snippet-{uuid4()}"
+                expected.add(identity)
+                url = f"http://localhost:8081/document/v1/airweave/{schema}/docid/{identity}"
+                urls.append(url)
+                fed = await http.post(
+                    url,
+                    json={
+                        "fields": {
+                            "entity_id": identity,
+                            "name": "Synthetic original",
+                            "payload": "{}",
+                            "url": "https://example.test/original",
+                            "textual_representation": original,
+                            "airweave_system_metadata_collection_id": collection,
+                            "airweave_system_metadata_sync_id": sync,
+                            "airweave_system_metadata_source_name": "gmail",
+                            "airweave_system_metadata_entity_type": "GmailMessageEntity",
+                            "airweave_system_metadata_original_entity_id": identity,
+                            "dense_embedding": {"values": vector},
+                            "sparse_embedding": {"cells": {"1": 1.0}},
+                        }
+                    },
+                )
+                assert fed.status_code == 200, fed.text
+            for mode in RetrievalStrategy:
+                compiled = await engine.compile_query(
+                    SearchPlan(
+                        query=SearchQuery(primary="Uniquelexicalneedle"),
+                        retrieval_strategy=mode,
+                        limit=10,
+                        offset=0,
+                    ),
+                    embeddings,
+                    collection,
+                )
+                assert "presentation.summary" not in compiled.raw["params"]
+                results = await engine.execute_query(compiled)
+                assert {hit.entity_id for hit in results.results} == expected
+                for hit in results.results:
+                    assert hit.textual_representation == original
+                    assert hit.airweave_system_metadata.original_entity_id == hit.entity_id
+                    assert hit.airweave_system_metadata.sync_id == sync
+                    assert hit.url == "https://example.test/original"
+                    if mode != RetrievalStrategy.SEMANTIC:
+                        assert hit.query_snippet is not None
+                        assert "<hi>uniquelexicalneedle</hi>" in hit.query_snippet.lower()
+                        assert len(hit.query_snippet) < len(original)
+                        assert "नमस्ते" in hit.query_snippet and "原文" in hit.query_snippet
+                    # Semantic-only summary contents are engine-dependent; owned
+                    # HTTP tests prove they never replace the semantic fallback.
+        finally:
+            for url in urls:
+                assert (await http.delete(url)).status_code in (200, 404)
+                assert (await http.get(url)).status_code == 404
