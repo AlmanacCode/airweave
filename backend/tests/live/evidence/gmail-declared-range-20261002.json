@@ -1,0 +1,377 @@
+{
+  "date": "2026-10-02",
+  "scope": {
+    "provider": "gmail",
+    "fixed_query": "after:1789733356 before:1790942956",
+    "window_start_utc": "2026-09-18T12:09:16+00:00",
+    "window_end_utc": "2026-10-02T12:09:16+00:00",
+    "coverage": "provider query enumeration observed during capture; stored_messages_only on reads",
+    "date_boundary_limit": "Gmail epoch boundaries avoid PST date parsing; precise native exclusive boundary semantics and snapshot isolation are not claimed",
+    "history_checkpoint_promoted": false,
+    "whole_mailbox_claimed": false,
+    "binding": "existing saved explicit principal; independently saved account/user/auth-config plus current ACTIVE binding and native profile checked"
+  },
+  "capture": {
+    "unique_records": 456,
+    "observations": 456,
+    "partial_records": 0,
+    "job_status": "completed",
+    "full_scope_completed": true,
+    "durable_canonical_cycle_saved": true,
+    "native_requests": 570,
+    "request_breakdown": {
+      "messages_list": 10,
+      "messages_get": 456,
+      "attachments_get": 103,
+      "native_profile": 1
+    },
+    "binding_metadata_reads": 1,
+    "total_known_provider_reads": 571,
+    "provider_writes": 0,
+    "seconds_including_schema_setup": 340.15,
+    "intermediate_retry_or_429_counts": "not separately instrumented; empty Slack rate observer is not Gmail evidence",
+    "runtime_caps": {
+      "request_limit": 4000,
+      "record_limit": 2000,
+      "timeout": 1800,
+      "blob_byte_limit": 536870912,
+      "file_byte_limit": 209715200,
+      "native_record_json_byte_limit": 33554432
+    },
+    "blob_bytes_written_including_rewrites": 9180954
+  },
+  "integrity": {
+    "unique_blob_references_sha256_and_size_verified": 72,
+    "originals_unchanged_by_preparation": true,
+    "metadata_gap_records": 0
+  },
+  "body_preparation": {
+    "prepared_messages": 453,
+    "superseded_messages": 0,
+    "failed_messages": 3,
+    "error_classes": {
+      "ValueError": 3
+    },
+    "prepared_body_bytes": 1465083,
+    "seconds": 4.691,
+    "provider_calls": 0,
+    "embedding_calls": 0,
+    "paid_model_calls": 0,
+    "index_publication_claimed": false,
+    "automatic_preparation_qualified": false,
+    "originals_unchanged": true,
+    "capture_only_indexing": {
+      "metadata_missing": 0,
+      "text_ready": 0,
+      "text_partial": 0,
+      "text_unavailable": 456
+    },
+    "after_manual_preparation_indexing": {
+      "metadata_missing": 0,
+      "text_ready": 453,
+      "text_partial": 0,
+      "text_unavailable": 3
+    },
+    "failed_body_diagnosis": "All three messages have zero visible text in every retained plain/HTML alternative. The strict runtime converter rejects empty content; no useful alternative was discarded. They remain unavailable, not indexed or silently complete."
+  },
+  "installed_cli_http": {
+    "packaged_cli_version": "0.14.0 candidate isolated installation; not public release verification",
+    "product_backend_basis": "frozen candidate 5385b8c1f reported by harness owner",
+    "binding": "synthetic isolated actor and source binding; no WorkOS or product account provisioning claim",
+    "date_messages": 456,
+    "date_unique_messages": 456,
+    "date_pages": 5,
+    "date_consistency": "sequence_fenced",
+    "date_basis": "gmail_internal_date",
+    "kushagra_messages": 68,
+    "kushagra_unique_messages": 68,
+    "kushagra_pages": 1,
+    "relevance_judgment": "not scored; match count observed only",
+    "thread": {
+      "returned_reference_used": true,
+      "messages": 1,
+      "body_complete": true,
+      "text_characters": 6396,
+      "html_characters": 13469,
+      "attachments": 0,
+      "coverage": "stored_messages_only",
+      "consistency": "live"
+    },
+    "calls": [
+      {
+        "operation": "cli-date-page1",
+        "wall_seconds": 0.747
+      },
+      {
+        "operation": "cli-date-page2",
+        "wall_seconds": 0.724
+      },
+      {
+        "operation": "cli-date-page3",
+        "wall_seconds": 0.519
+      },
+      {
+        "operation": "cli-date-page4",
+        "wall_seconds": 0.494
+      },
+      {
+        "operation": "cli-date-page5",
+        "wall_seconds": 0.594
+      },
+      {
+        "operation": "cli-kushagra-page1",
+        "wall_seconds": 0.505
+      },
+      {
+        "operation": "cli-thread-read",
+        "wall_seconds": 0.491
+      }
+    ],
+    "warm_product_http_ms": [
+      108.461,
+      39.584,
+      19.495,
+      20.365,
+      21.714,
+      21.983,
+      24.058
+    ],
+    "http_statuses": [
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200
+    ],
+    "provider_attempts": 0
+  },
+  "storage": {
+    "retained_original_json_text_bytes": 13274324,
+    "prepared_body_payload_bytes": 1465083,
+    "physical_blob_file_count": 72,
+    "physical_blob_bytes": 5671657,
+    "postgres_heap_bytes": 1253376,
+    "postgres_index_bytes": 2433024,
+    "postgres_table_total_including_toast_bytes": 19578880,
+    "postgres_tables": [
+      {
+        "name": "access_control_membership",
+        "heap_bytes": 0,
+        "index_bytes": 65536,
+        "total_bytes_including_toast": 73728
+      },
+      {
+        "name": "api_key",
+        "heap_bytes": 0,
+        "index_bytes": 24576,
+        "total_bytes_including_toast": 32768
+      },
+      {
+        "name": "auth_provider",
+        "heap_bytes": 0,
+        "index_bytes": 24576,
+        "total_bytes_including_toast": 32768
+      },
+      {
+        "name": "billing_period",
+        "heap_bytes": 0,
+        "index_bytes": 24576,
+        "total_bytes_including_toast": 32768
+      },
+      {
+        "name": "capture_scan",
+        "heap_bytes": 8192,
+        "index_bytes": 57344,
+        "total_bytes_including_toast": 73728
+      },
+      {
+        "name": "collection",
+        "heap_bytes": 8192,
+        "index_bytes": 65536,
+        "total_bytes_including_toast": 81920
+      },
+      {
+        "name": "connection",
+        "heap_bytes": 0,
+        "index_bytes": 32768,
+        "total_bytes_including_toast": 40960
+      },
+      {
+        "name": "connection_init_session",
+        "heap_bytes": 0,
+        "index_bytes": 32768,
+        "total_bytes_including_toast": 40960
+      },
+      {
+        "name": "entity",
+        "heap_bytes": 647168,
+        "index_bytes": 942080,
+        "total_bytes_including_toast": 8904704
+      },
+      {
+        "name": "entity_change",
+        "heap_bytes": 73728,
+        "index_bytes": 98304,
+        "total_bytes_including_toast": 7749632
+      },
+      {
+        "name": "entity_count",
+        "heap_bytes": 8192,
+        "index_bytes": 65536,
+        "total_bytes_including_toast": 114688
+      },
+      {
+        "name": "entity_definition",
+        "heap_bytes": 0,
+        "index_bytes": 16384,
+        "total_bytes_including_toast": 24576
+      },
+      {
+        "name": "entity_relation",
+        "heap_bytes": 0,
+        "index_bytes": 32768,
+        "total_bytes_including_toast": 40960
+      },
+      {
+        "name": "feature_flag",
+        "heap_bytes": 0,
+        "index_bytes": 24576,
+        "total_bytes_including_toast": 24576
+      },
+      {
+        "name": "integration_credential",
+        "heap_bytes": 0,
+        "index_bytes": 16384,
+        "total_bytes_including_toast": 24576
+      },
+      {
+        "name": "node_selection",
+        "heap_bytes": 0,
+        "index_bytes": 32768,
+        "total_bytes_including_toast": 40960
+      },
+      {
+        "name": "organization",
+        "heap_bytes": 8192,
+        "index_bytes": 32768,
+        "total_bytes_including_toast": 49152
+      },
+      {
+        "name": "organization_billing",
+        "heap_bytes": 0,
+        "index_bytes": 24576,
+        "total_bytes_including_toast": 32768
+      },
+      {
+        "name": "owned_provisioning",
+        "heap_bytes": 0,
+        "index_bytes": 24576,
+        "total_bytes_including_toast": 32768
+      },
+      {
+        "name": "processed_webhook_event",
+        "heap_bytes": 0,
+        "index_bytes": 16384,
+        "total_bytes_including_toast": 24576
+      },
+      {
+        "name": "projection_generation",
+        "heap_bytes": 442368,
+        "index_bytes": 237568,
+        "total_bytes_including_toast": 1392640
+      },
+      {
+        "name": "redirect_session",
+        "heap_bytes": 0,
+        "index_bytes": 32768,
+        "total_bytes_including_toast": 40960
+      },
+      {
+        "name": "search_queries",
+        "heap_bytes": 0,
+        "index_bytes": 81920,
+        "total_bytes_including_toast": 90112
+      },
+      {
+        "name": "source_connection",
+        "heap_bytes": 8192,
+        "index_bytes": 81920,
+        "total_bytes_including_toast": 98304
+      },
+      {
+        "name": "source_rate_limits",
+        "heap_bytes": 0,
+        "index_bytes": 24576,
+        "total_bytes_including_toast": 32768
+      },
+      {
+        "name": "sync",
+        "heap_bytes": 24576,
+        "index_bytes": 32768,
+        "total_bytes_including_toast": 98304
+      },
+      {
+        "name": "sync_connection",
+        "heap_bytes": 0,
+        "index_bytes": 32768,
+        "total_bytes_including_toast": 32768
+      },
+      {
+        "name": "sync_cursor",
+        "heap_bytes": 8192,
+        "index_bytes": 49152,
+        "total_bytes_including_toast": 65536
+      },
+      {
+        "name": "sync_job",
+        "heap_bytes": 8192,
+        "index_bytes": 98304,
+        "total_bytes_including_toast": 114688
+      },
+      {
+        "name": "usage",
+        "heap_bytes": 0,
+        "index_bytes": 32768,
+        "total_bytes_including_toast": 32768
+      },
+      {
+        "name": "user",
+        "heap_bytes": 0,
+        "index_bytes": 24576,
+        "total_bytes_including_toast": 32768
+      },
+      {
+        "name": "user_organization",
+        "heap_bytes": 0,
+        "index_bytes": 16384,
+        "total_bytes_including_toast": 24576
+      },
+      {
+        "name": "vector_db_deployment_metadata",
+        "heap_bytes": 8192,
+        "index_bytes": 32768,
+        "total_bytes_including_toast": 49152
+      }
+    ],
+    "measurement_limit": "isolated fully migrated schema includes empty table/index overhead and retained entity_change originals; JSON/body payload bytes are not allocated PostgreSQL sizes. No 14-day-to-mailbox or all-provider extrapolation."
+  },
+  "private_artifacts_retained": true,
+  "no_embeddings_or_index_feed": true,
+  "not_verified": [
+    "automatic capture to body preparation scheduling",
+    "Gmail history delta cost or checkpoint",
+    "whole mailbox coverage",
+    "paid or semantic relevance/indexing",
+    "production authentication/bindings/deployment",
+    "automatic recurring activation"
+  ],
+  "artifact_hashes": {
+    "evidence.json": "d26491871191cff5dc70344bce052116d79605748f9605fe0480751fd9daa452",
+    "verification.json": "f9a06b440a3d6c45d40ea53b45fcc66c3e9b3401a9127f755181ed12bc21f091",
+    "preparation.json": "d7236c108a08057fdcc149415fb5e3dce9e5ad2fcc21385a7a7f46441d814907",
+    "cli-summary.json": "631ce5048187567b0e69096f3d76756f66fabefd02b7f9a7d95ef294967e2c5f",
+    "cost.json": "6ef20c32abf7105b560280925e7ef464cebc97f47c5e3f4ac46d424afc2d37dc"
+  }
+}

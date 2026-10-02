@@ -493,3 +493,54 @@ incorrectly assumed any loaded cursor implies a changes pass; it now distinguish
 unfinished full-scan continuation from subsequent/resumed changes while still requiring
 checkpoint promotion. This was a harness assertion failure, separately recorded from
 the actual completed source job. PDF text/read verification remains a separate check.
+
+## Fixed fourteen-day retained Gmail qualification
+
+`gmail_declared_range.py` runs one explicitly authorized fixed fourteen-day query
+in a new private schema and blob directory, preserving other corpora. Run with the
+fork Python environment, `PYTHONPATH=.` from `backend`, and the existing private
+Unix-socket `CANONICAL_TEST_DATABASE_URL`. Capture requires `--inputs` (existing
+private provider credential file), `--attestation` (independent saved native binding
+attestation), and `--mailbox` (the explicitly authorized principal). Both files must
+be current-user-owned and private. The requested principal must match both saved
+sources; the existing auth provider rechecks the exact account/user/auth-config,
+then Gmail profile verification precedes source authentication and capture.
+
+The fixed epoch query is created once from runtime UTC, with no rolling query,
+size, or category filter. Gmail documents epoch seconds as the timezone-precise
+alternative to calendar dates, which use PST midnight
+([Gmail filtering](https://developers.google.com/workspace/gmail/api/guides/filtering)).
+Completeness means the provider query's observed enumeration completed; this is
+not a whole-mailbox or exact snapshot/boundary guarantee. Runtime caps are 2,000
+records, 4,000 native requests, 30 minutes, and 512 MiB aggregate blob writes. The
+existing production MIME limit remains 200 MiB and native JSON remains 32 MiB.
+Exceeding a bound stops partial capture; it does not narrow the coverage filter.
+
+The operator retains a mode0700 directory with mode0600 manifests and evidence;
+these include original identities and local service routing and must never be
+committed. No encrypted production credentials, AWS resources, hosted schedules,
+or real product account rows are created. `--verify PRIVATE_MANIFEST` hashes all
+immutable blobs and traverses the actual mail SQL pages without provider access.
+`--prepare-text PRIVATE_MANIFEST` uses the existing mapper, MIME conversion, strict
+text builder, and revision/pipeline-bound prepared-body CAS. It stops before
+chunking, embedding, or index feed; failures remain explicit. This is a manual
+runtime-stage qualification, not automatic capture-to-preparation activation.
+
+The [2026-10-02 evidence](evidence/gmail-declared-range-20261002.json) records 456
+captured messages, 570 native requests plus one binding metadata read, and 72
+verified blobs. Capture alone had 456 unavailable bodies. Manual preparation made
+453 bodies ready in 4.691 seconds; the other three contain no visible text in any
+retained MIME alternative and remain explicitly unavailable. Through an isolated
+installed CLI and the actual Almanac/fork HTTP readers, five date pages returned
+456 unique messages, `kushagra` returned 68, and a returned thread read completed.
+These calls made no provider requests. Match counts are observed, not a relevance
+score. The companion actor and binding were synthetic; production auth is not
+qualified.
+
+Allocated PostgreSQL tables/indexes/TOAST totalled 19,578,880 bytes, including
+empty-schema overhead and change history; filesystem blobs used 5,671,657 bytes.
+Original JSON text (13,274,324 bytes) and prepared-body payload (1,465,083 bytes)
+are separate payload measurements, not allocated database sizes. This fixed
+filtered scan has no Gmail history checkpoint: its cost is not the future
+unfiltered delta-sync cost model. All private corpus/schema data remains available
+for subsequent relevance checks and must be cleaned only by exact manifest scope.

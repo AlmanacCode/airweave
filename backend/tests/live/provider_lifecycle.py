@@ -25,6 +25,7 @@ import canonical_capture as harness  # settings must precede application imports
 from calendar_lifecycle import count_calendar_request, event_checkpoint, verify_calendar_scopes
 from capture_comparison import compare_observations
 from provider_sample import rest_source, wispr_source
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -53,7 +54,7 @@ from airweave.domains.syncs.cursors.cursor import SyncCursor
 from airweave.domains.syncs.cursors.service import SyncCursorService
 from airweave.domains.syncs.jobs.repository import SyncJobRepository
 from airweave.domains.syncs.jobs.state_machine import SyncJobStateMachine
-from airweave.models import Entity, Organization, Sync, SyncJob
+from airweave.models import Entity, Organization, SourceConnection, Sync, SyncJob
 from airweave.models import SyncCursor as StoredCursor
 from airweave.platform.configs.config import GoogleCalendarConfig
 from airweave.platform.cursors.gmail import GmailCursor
@@ -61,6 +62,15 @@ from airweave.platform.cursors.google_calendar import GoogleCalendarCursor
 from airweave.platform.cursors.google_drive import GoogleDriveCursor
 from airweave.platform.http_client.composio_transport import ComposioProxyError
 from airweave.platform.sources.slack import SlackApiError
+
+
+class RetainedCaptureBinding(BaseModel):
+    """Optional real isolated collection/source routing for retained operator proofs."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    enabled: bool = False
+    collection_id: UUID = Field(default_factory=uuid4)
+    source_connection_id: UUID = Field(default_factory=uuid4)
 
 
 class BudgetExceeded(RuntimeError):
@@ -328,6 +338,16 @@ def count_gmail_request(name, request, previous, counters, identity_verified):
     if request.url.path.endswith("/profile"):
         key = "capture_profile_requests" if identity_verified else "identity_profile_requests"
         counters[key] += 1
+    operation = (
+        "attachment_get_requests"
+        if "/attachments/" in request.url.path
+        else "message_list_requests"
+        if request.url.path.endswith("/messages")
+        else "message_get_requests"
+        if "/messages/" in request.url.path
+        else "other_gmail_requests"
+    )
+    counters[operation] = counters.get(operation, 0) + 1
     if request.url.path.endswith("/history"):
         boundary = previous.get("canonical_cycle", {}).get("promoted_checkpoint")
         if (
@@ -350,6 +370,25 @@ def count_drive_request(name, request, previous, counters):
         counters["resumed_changes_requests"] += 1
 
 
+async def authenticate_retained_source(sessions, binding, organization_id, sync_id, name):
+    """Source creation already verified its pinned profile; retain that attestation only."""
+    if not binding.enabled:
+        return
+    async with sessions() as db:
+        bound = await db.get(SourceConnection, binding.source_connection_id)
+        if (
+            bound is None
+            or bound.organization_id != organization_id
+            or bound.sync_id != sync_id
+            or bound.short_name != name
+            or not bound.config_fields
+            or bound.config_fields.get("expected_mailbox") != os.environ["LIVE_EXPECTED_EMAIL"]
+        ):
+            raise ValueError("Retained capture source binding does not match")
+        bound.is_authenticated = True
+        await db.commit()
+
+
 async def child(manifest):
     engine = create_async_engine(
         harness.test_database_url(),
@@ -359,6 +398,7 @@ async def child(manifest):
     organization_id, sync_id = UUID(manifest["organization_id"]), UUID(manifest["sync_id"])
     job_id = UUID(manifest["job_id"]) if "job_id" in manifest else uuid4()
     attempt_number = manifest.get("attempt_number", 1)
+    retained_binding = RetainedCaptureBinding.model_validate(manifest.get("retained_binding", {}))
     counters = {"provider_requests": 0, "records_observed": 0, "started": 0, "completed": 0}
     result = {"failed": True}
     previous = {}
@@ -444,8 +484,8 @@ async def child(manifest):
             sync=sync,
             sync_job=job,
             logger=logger,
-            collection_id=uuid4(),
-            source_connection_id=uuid4(),
+            collection_id=retained_binding.collection_id,
+            source_connection_id=retained_binding.source_connection_id,
             source_short_name=name,
             connection=SimpleNamespace(id=uuid4(), short_name=name),
             execution_config=config,
@@ -515,6 +555,9 @@ async def child(manifest):
             connection as (source, identity_verification),
         ):
             identity_verified = True
+            await authenticate_retained_source(
+                sessions, retained_binding, organization_id, sync_id, name
+            )
             assert source.cursor_class == cursor_schema
             bus = FakeEventBus()
             attempt = CaptureAttempt(id=uuid4(), number=attempt_number)
