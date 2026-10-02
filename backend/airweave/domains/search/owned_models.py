@@ -1,0 +1,123 @@
+"""Bounded original-record retrieval; unsupported controls fail validation."""
+
+from typing import Literal
+from uuid import UUID
+
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+
+from airweave.domains.entities.canonical.coverage_models import CaptureCoverage
+from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
+from airweave.domains.entities.canonical.requests import RecordIdentity
+from airweave.domains.search.retrieval_strategy import RetrievalStrategy
+
+
+class OwnedSearchRequest(BaseModel):
+    """Source IDs are organization-scoped; the product separately owns account authorization."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    query: str = Field(min_length=1, max_length=4000)
+    sync_ids: tuple[UUID, ...] = Field(min_length=1, max_length=20)
+    mode: RetrievalStrategy = RetrievalStrategy.HYBRID
+    record_types: tuple[str, ...] = Field(default=(), max_length=20)
+    created_after: AwareDatetime | None = None
+    created_before: AwareDatetime | None = None
+    updated_after: AwareDatetime | None = None
+    updated_before: AwareDatetime | None = None
+    limit: int = Field(default=20, ge=1, le=200)
+
+    @model_validator(mode="after")
+    def validate_scope(self):
+        """Reject ambiguous requests rather than silently correcting them."""
+        if not self.query.strip() or len(set(self.sync_ids)) != len(self.sync_ids):
+            raise ValueError("Query must be nonblank and source IDs unique")
+        if any(not item.strip() for item in self.record_types):
+            raise ValueError("Record types must be nonblank")
+        for after, before in (
+            (self.created_after, self.created_before),
+            (self.updated_after, self.updated_before),
+        ):
+            if after is not None and before is not None and after >= before:
+                raise ValueError("Time interval must have after before before")
+        return self
+
+
+class OwnedSearchMatch(BaseModel):
+    """Canonical identity plus excerpts; no native payload or generation IDs."""
+
+    record_id: UUID
+    revision: int
+    sync_id: UUID
+    source_connection_id: UUID
+    provider: str
+    identity: RecordIdentity
+    title: str
+    excerpts: tuple[str, ...]
+    email_thread_id: str | None = Field(default=None, max_length=512, pattern=r"^[A-Za-z0-9_-]+$")
+    observed_at: AwareDatetime
+    source_created_at: AwareDatetime | None
+    source_updated_at: AwareDatetime | None
+    completeness: Literal["complete", "partial", "metadata_only"]
+    extraction: ExtractionCoverage | None = None
+
+
+class OwnedSearchGroup(BaseModel):
+    """Observed eligible shortlist members, never a complete conversation count."""
+
+    kind: Literal["session", "email_thread"]
+    native_id: str
+    matched_records: int = Field(ge=1)
+    additional_matches: tuple[OwnedSearchMatch, ...] = Field(default=(), max_length=3)
+
+
+class OwnedSearchHit(OwnedSearchMatch):
+    """An exact representative match, optionally with other conversation matches."""
+
+    group: OwnedSearchGroup | None = None
+
+
+class OwnedSearchCoverage(BaseModel):
+    """Counts are source-store state, never total matches for this query."""
+
+    sync_id: UUID
+    active_records: int
+    capture: CaptureCoverage | None = None
+    pending_records: int
+    partially_indexed_records: int = 0
+    extraction_unavailable_records: int = 0
+    extraction_unknown_records: int = 0
+
+
+class OwnedRanking(BaseModel):
+    """Ranking applies only to this request's bounded canonical-source candidates."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    method: Literal["shared_rerank", "retrieval_rank"] = "retrieval_rank"
+    fallback_reason: (
+        Literal["unconfigured", "timeout", "provider_error", "invalid_output"] | None
+    ) = "unconfigured"
+    candidates_considered: int = Field(default=0, ge=0)
+    candidates_reranked: int = Field(default=0, ge=0)
+    shortlisted_candidates: int = Field(default=0, ge=0, le=200)
+    shortlist_limit: Literal[200] = 200
+    document_token_limit: Literal[2048] = 2048
+    token_count_basis: Literal["local_tokenizer"] = "local_tokenizer"
+    timeout_seconds: Literal[10] = 10
+    input_truncated_documents: int = Field(default=0, ge=0)
+    shortlist_truncated: bool = False
+
+
+class OwnedSearchResponse(BaseModel):
+    """Top results from bounded live candidate windows, without traversal promises."""
+
+    items: tuple[OwnedSearchHit, ...]
+    ranking: OwnedRanking = Field(default_factory=OwnedRanking)
+    sources: tuple[OwnedSearchCoverage, ...]
+    consistency: Literal["live"] = "live"
+    order: Literal["relevance"] = "relevance"
+    coverage: Literal["bounded_candidates"] = "bounded_candidates"
+    candidate_limit_per_collection: int = 200
+    candidate_window_full: bool
+    engine_partial: bool
+    excluded_candidates: int
+    postfilter_excluded: int
+    retrieval_incomplete: bool

@@ -9,11 +9,18 @@ from airweave.core.shared_models import AirweaveFieldFlag
 from airweave.domains.converters.protocols import ConverterRegistryProtocol
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, SyncFailureError
 from airweave.domains.sync_pipeline.file_types import SUPPORTED_FILE_EXTENSIONS
+from airweave.domains.sync_pipeline.pipeline.text_models import (
+    BuiltText,
+    BuiltTextBatch,
+    NativeTextBody,
+)
 from airweave.platform.entities._base import BaseEntity, CodeFileEntity, FileEntity, WebEntity
 
 if TYPE_CHECKING:
-    from airweave.domains.sync_pipeline.contexts import SyncContext
-    from airweave.domains.sync_pipeline.contexts.runtime import SyncRuntime
+    from airweave.domains.sync_pipeline.processors.context import (
+        ProcessingContext,
+        ProcessingRuntime,
+    )
 
 
 class TextualRepresentationBuilder:
@@ -43,8 +50,8 @@ class TextualRepresentationBuilder:
     async def build_for_batch(
         self,
         entities: List[BaseEntity],
-        sync_context: "SyncContext",
-        runtime: "SyncRuntime",
+        sync_context: "ProcessingContext",
+        runtime: "ProcessingRuntime",
     ) -> List[BaseEntity]:
         """Build textual_representation for all entities in batch.
 
@@ -60,47 +67,109 @@ class TextualRepresentationBuilder:
             Modifies entities in-place, setting textual_representation.
             Failed entities are removed and counted as skipped.
         """
+        return (await self.build_with_text(entities, sync_context, runtime)).entities
+
+    async def build_with_text(
+        self,
+        entities: List[BaseEntity],
+        sync_context: "ProcessingContext",
+        runtime: "ProcessingRuntime",
+        *,
+        native_bodies: dict[str, NativeTextBody] | None = None,
+    ) -> BuiltTextBatch:
+        """Retain exact converted text and content boundaries before chunking clears them."""
+        native_bodies = native_bodies or {}
+        if set(native_bodies) - {entity.entity_id for entity in entities}:
+            raise EntityProcessingError("Native body does not belong to this text batch")
+        if any(
+            entity.entity_id in native_bodies and isinstance(entity, (FileEntity, WebEntity))
+            for entity in entities
+        ):
+            raise EntityProcessingError("Native body cannot override converted content")
+        content_starts: dict[str, int] = {}
         source_name = sync_context.source_short_name
 
         # Step 1: Build metadata section for all entities
-        await self._build_metadata_for_all(entities, source_name)
+        await self._build_metadata_for_all(entities, source_name, native_bodies)
+        for entity in entities:
+            body = native_bodies.get(entity.entity_id)
+            if body is not None:
+                prefix = f"{entity.textual_representation}\n\n# Content\n\n"
+                content_starts[entity.entity_id] = len(prefix)
+                entity.textual_representation = prefix + body.text
 
         # Step 2: Partition entities by converter
         converter_groups, failed_entities = self._partition_by_converter(entities, sync_context)
 
         # Step 3: Convert each partition
-        additional_failures = await self._convert_partitions(converter_groups, sync_context)
+        additional_failures = await self._convert_partitions(
+            converter_groups, sync_context, content_starts
+        )
         failed_entities.extend(additional_failures)
 
         # Step 4: Handle failures
         await self._handle_conversion_failures(entities, failed_entities, sync_context, runtime)
 
-        return entities
+        return BuiltTextBatch(
+            entities=entities,
+            representations=tuple(
+                BuiltText(
+                    entity_id=entity.entity_id,
+                    text=entity.textual_representation or "",
+                    content_start=content_starts.get(entity.entity_id),
+                    kind=(
+                        "native_text"
+                        if entity.entity_id in native_bodies
+                        else "extracted_text"
+                        if entity.entity_id in content_starts
+                        else "generated_text"
+                    ),
+                )
+                for entity in entities
+            ),
+        )
 
     # ------------------------------------------------------------------------------------
     # Metadata Building
     # ------------------------------------------------------------------------------------
 
-    async def _build_metadata_for_all(self, entities: List[BaseEntity], source_name: str) -> None:
+    async def _build_metadata_for_all(
+        self,
+        entities: List[BaseEntity],
+        source_name: str,
+        native_bodies: dict[str, NativeTextBody],
+    ) -> None:
         """Build metadata section for all entities.
 
         Args:
             entities: Entities to build metadata for
             source_name: Name of the source connector
+            native_bodies: Explicit source bodies whose fields leave the metadata section
 
         Note:
             CodeFileEntity is exempt because code is self-documenting.
         """
 
         async def build_metadata(entity: BaseEntity):
-            metadata = self.build_metadata_section(entity, source_name)
+            body = native_bodies.get(entity.entity_id)
+            metadata = self.build_metadata_section(
+                entity,
+                source_name,
+                exclude_fields=body.metadata_fields if body else (),
+            )
             if not metadata and not isinstance(entity, CodeFileEntity):
                 raise EntityProcessingError(f"Empty metadata for {entity.entity_id}")
             entity.textual_representation = metadata
 
         await asyncio.gather(*[build_metadata(e) for e in entities])
 
-    def build_metadata_section(self, entity: BaseEntity, source_name: str) -> str:
+    def build_metadata_section(
+        self,
+        entity: BaseEntity,
+        source_name: str,
+        *,
+        exclude_fields: tuple[str, ...] = (),
+    ) -> str:
         """Build metadata section for any entity type.
 
         This method is public to allow federated search sources to build
@@ -111,6 +180,7 @@ class TextualRepresentationBuilder:
         Args:
             entity: Entity to build metadata for
             source_name: Name of the source (e.g., "slack", "github")
+            exclude_fields: Explicit fields represented in the separate native body
 
         Returns:
             Markdown formatted metadata section
@@ -134,7 +204,11 @@ class TextualRepresentationBuilder:
             lines.append(f"**Path**: {path_str}")
 
         # Add embeddable fields
-        embeddable_fields = self._extract_embeddable_fields(entity)
+        embeddable_fields = {
+            key: value
+            for key, value in self._extract_embeddable_fields(entity).items()
+            if key not in exclude_fields
+        }
         if embeddable_fields:
             lines.append("")
             lines.append(self._format_embeddable_fields_as_markdown(embeddable_fields))
@@ -247,7 +321,7 @@ class TextualRepresentationBuilder:
     def _partition_by_converter(
         self,
         entities: List[BaseEntity],
-        sync_context: "SyncContext",
+        sync_context: "ProcessingContext",
     ) -> Tuple[Dict[Any, List[Tuple[BaseEntity, str]]], List[BaseEntity]]:
         """Partition entities by their converter type.
 
@@ -313,13 +387,15 @@ class TextualRepresentationBuilder:
     async def _convert_partitions(
         self,
         converter_groups: Dict[Any, List[Tuple[BaseEntity, str]]],
-        sync_context: "SyncContext",
+        sync_context: "ProcessingContext",
+        content_starts: dict[str, int],
     ) -> List[BaseEntity]:
         """Execute batch conversion for each converter group.
 
         Args:
             converter_groups: Dict mapping converter to (entity, key) tuples
             sync_context: Sync context for logging
+            content_starts: Per-entity converter-content offsets to populate
 
         Returns:
             List of entities that failed conversion
@@ -331,7 +407,9 @@ class TextualRepresentationBuilder:
 
             for i in range(0, len(entity_key_pairs), batch_size):
                 sub_batch = entity_key_pairs[i : i + batch_size]
-                failures = await self._convert_sub_batch(converter, sub_batch, sync_context)
+                failures = await self._convert_sub_batch(
+                    converter, sub_batch, sync_context, content_starts
+                )
                 failed_entities.extend(failures)
 
         return failed_entities
@@ -340,7 +418,8 @@ class TextualRepresentationBuilder:
         self,
         converter: Any,
         sub_batch: List[Tuple[BaseEntity, str]],
-        sync_context: "SyncContext",
+        sync_context: "ProcessingContext",
+        content_starts: dict[str, int],
     ) -> List[BaseEntity]:
         """Convert a sub-batch of entities using the given converter.
 
@@ -348,6 +427,7 @@ class TextualRepresentationBuilder:
             converter: Converter module to use
             sub_batch: List of (entity, key) tuples
             sync_context: Sync context for logging
+            content_starts: Per-entity converter-content offsets to populate
 
         Returns:
             List of entities that failed conversion
@@ -372,7 +452,9 @@ class TextualRepresentationBuilder:
                     failed_entities.append(entity)
                     continue
 
-                entity.textual_representation += f"\n\n# Content\n\n{text_content}"
+                prefix = f"{entity.textual_representation}\n\n# Content\n\n"
+                content_starts[entity.entity_id] = len(prefix)
+                entity.textual_representation = prefix + text_content
 
         except SyncFailureError:
             # Infrastructure failure - propagate to fail entire sync
@@ -403,8 +485,8 @@ class TextualRepresentationBuilder:
         self,
         entities: List[BaseEntity],
         failed_entities: List[BaseEntity],
-        sync_context: "SyncContext",
-        runtime: "SyncRuntime",
+        sync_context: "ProcessingContext",
+        runtime: "ProcessingRuntime",
     ) -> None:
         """Remove failed entities and update progress.
 

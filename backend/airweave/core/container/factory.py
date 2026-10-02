@@ -85,9 +85,14 @@ from airweave.domains.embedders.registry import DenseEmbedderRegistry, SparseEmb
 from airweave.domains.embedders.sparse.fastembed import (
     FastEmbedSparseEmbedder as DomainFastEmbedSparseEmbedder,
 )
+from airweave.domains.entities.canonical.store import CanonicalRecordStore
 from airweave.domains.entities.entity_count_repository import EntityCountRepository
 from airweave.domains.entities.entity_repository import EntityRepository
 from airweave.domains.entities.registry import EntityDefinitionRegistry
+from airweave.domains.native_ingestion.import_service import NativeImports
+from airweave.domains.native_ingestion.import_store import NativeImportStore
+from airweave.domains.native_ingestion.source_service import NativeSources
+from airweave.domains.native_ingestion.source_store import NativeSourceStore
 from airweave.domains.oauth.callback_service import OAuthCallbackService
 from airweave.domains.oauth.flow_service import OAuthFlowService
 from airweave.domains.oauth.oauth1_service import OAuth1Service
@@ -98,11 +103,14 @@ from airweave.domains.oauth.repository import (
 )
 from airweave.domains.ocr.docling import DoclingOcrAdapter
 from airweave.domains.ocr.fallback import FallbackOcrProvider
+from airweave.domains.ocr.local import LocalOcrProvider
 from airweave.domains.ocr.mistral.converter import MistralOCR
 from airweave.domains.ocr.protocols import OcrProvider
 from airweave.domains.organizations.protocols import UserOrganizationRepositoryProtocol
 from airweave.domains.organizations.repository import OrganizationRepository as OrgRepo
 from airweave.domains.organizations.repository import UserOrganizationRepository
+from airweave.domains.owned_provisioning.service import OwnedProvisioningService
+from airweave.domains.owned_provisioning.store import ProvisioningStore
 from airweave.domains.search.adapters.vector_db.filter_translator import FilterTranslator
 from airweave.domains.search.adapters.vector_db.vespa_client import VespaVectorDB
 from airweave.domains.search.agentic.service import AgenticSearchService
@@ -113,6 +121,7 @@ from airweave.domains.search.classic.service import ClassicSearchService
 from airweave.domains.search.config import SearchConfig
 from airweave.domains.search.executor import SearchPlanExecutor
 from airweave.domains.search.instant.service import InstantSearchService
+from airweave.domains.search.owned import OwnedSearchService
 from airweave.domains.source_connections.create import SourceConnectionCreationService
 from airweave.domains.source_connections.delete import SourceConnectionDeletionService
 from airweave.domains.source_connections.repository import SourceConnectionRepository
@@ -613,6 +622,19 @@ def create_container(settings: Settings) -> Container:
         organization_service=org_service,
         user_service=user_service,
         email_service=email_service,
+        owned_search=search_deps["owned_search"],
+        native_sources=NativeSources(NativeSourceStore()),
+        native_imports=NativeImports(
+            NativeImportStore(NativeSourceStore(), CanonicalRecordStore())
+        ),
+        owned_provisioning=OwnedProvisioningService(
+            store=ProvisioningStore(create_service, source_validation),
+            lifecycle=source_deps["source_lifecycle_service"],
+            jobs=source_deps["sync_job_repo"],
+            syncs=source_deps["sync_repo"],
+            schedules=sync_deps["temporal_schedule_service"],
+            workflows=sync_deps["temporal_workflow_service"],
+        ),
         instant_search=search_deps["instant_search"],
         classic_search=search_deps["classic_search"],
         agentic_search=search_deps["agentic_search"],
@@ -748,18 +770,28 @@ def _create_ocr_provider(
 ) -> Optional[OcrProvider]:
     """Create OCR provider with fallback chain.
 
-    Chain order: Mistral (cloud) -> Docling (local service, if configured).
+    Chain order: local Tesseract (if configured) -> Mistral -> Docling.
     Docling is only added when DOCLING_BASE_URL is set.
 
     Returns None with a warning when no providers are available.
     """
+    providers = []
+    if settings.LOCAL_OCR_TESSDATA_PATH:
+        providers.append(
+            (
+                "local-tesseract",
+                LocalOcrProvider(
+                    tessdata_path=settings.LOCAL_OCR_TESSDATA_PATH,
+                    languages=settings.LOCAL_OCR_LANGUAGES,
+                ),
+            )
+        )
     try:
-        mistral_ocr = MistralOCR()
+        mistral_ocr = MistralOCR() if settings.MISTRAL_API_KEY else None
     except Exception as e:
         logger.error(f"Error creating Mistral OCR adapter: {e}")
         mistral_ocr = None
 
-    providers = []
     if mistral_ocr:
         providers.append(("mistral-ocr", mistral_ocr))
 
@@ -774,7 +806,7 @@ def _create_ocr_provider(
     if not providers:
         logger.warning(
             "No OCR providers available — document processing will be disabled. "
-            "Set MISTRAL_API_KEY or DOCLING_BASE_URL to enable OCR."
+            "Set LOCAL_OCR_TESSDATA_PATH, MISTRAL_API_KEY or DOCLING_BASE_URL to enable OCR."
         )
         return None
 
@@ -791,11 +823,19 @@ def _create_dense_embedder(
     Uses the domain config constants (DENSE_EMBEDDER, EMBEDDING_DIMENSIONS)
     and the registry to look up the spec and construct the correct embedder.
     """
+    from airweave.domains.embedders.dense.cohere import CohereDenseEmbedder
     from airweave.domains.embedders.dense.local import LocalDenseEmbedder
     from airweave.domains.embedders.dense.mistral import MistralDenseEmbedder
     from airweave.domains.embedders.dense.openai import OpenAIDenseEmbedder
 
     spec = registry.get(DENSE_EMBEDDER)
+
+    if spec.embedder_class_ref is CohereDenseEmbedder:
+        return CohereDenseEmbedder(
+            api_key=settings.COHERE_API_KEY,
+            model=spec.api_model_name,
+            dimensions=EMBEDDING_DIMENSIONS,
+        )
 
     if spec.embedder_class_ref is OpenAIDenseEmbedder:
         return OpenAIDenseEmbedder(
@@ -1079,7 +1119,7 @@ def _create_usage_ledger(settings: Settings, billing_deps: dict) -> UsageLedgerP
 
 def _create_identity_provider(settings: Settings) -> IdentityProvider:
     """Create identity provider: Auth0 if enabled, otherwise null implementation."""
-    if settings.AUTH_ENABLED:
+    if settings.AUTH_MODE == "auth0":
         from airweave.adapters.identity.auth0 import auth0_management_client
 
         if auth0_management_client:
@@ -1354,16 +1394,21 @@ def _create_search_services(
         reranker=reranker,
         executor=executor,
         vector_db=vector_db,
+        source_registry=source_registry,
         metadata_builder=metadata_builder,
         collection_repo=collection_repo,
         event_bus=event_bus,
     )
     browse_service = BrowseService(
         vector_db=vector_db,
+        source_registry=source_registry,
         collection_repo=collection_repo,
     )
 
     return {
+        "owned_search": OwnedSearchService(
+            executor, source_registry, reranker=reranker, tokenizer=tokenizer
+        ),
         "instant_search": instant_search,
         "classic_search": classic_search,
         "agentic_search": agentic_search,

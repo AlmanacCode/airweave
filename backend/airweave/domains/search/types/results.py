@@ -100,13 +100,16 @@ class SearchResult(BaseModel):
     )
 
     textual_representation: str = Field(..., description="Semantically searchable text content")
+    query_snippet: str | None = Field(
+        default=None, exclude=True, description="Optional Vespa lexical fragment; display only."
+    )
     airweave_system_metadata: SearchSystemMetadata = Field(..., description="System metadata")
 
     access: SearchAccessControl = Field(..., description="Access control")
 
     web_url: str = Field(
         ...,
-        description="URL to view the entity in its source application (e.g., Notion, Asana).",
+        description="Source application URL, or empty when the record uses a canonical locator.",
     )
 
     url: Optional[str] = Field(
@@ -237,6 +240,19 @@ class SearchResults(BaseModel):
     results: list[SearchResult] = Field(
         default_factory=list,
         description="Search results ordered by relevance (highest first).",
+    )
+
+    engine_partial: bool = False
+    engine_coverage_percent: float | None = None
+
+    retrieval_incomplete: bool = Field(
+        default=False,
+        description="Some retrieved candidates were unavailable; this page may underfill.",
+    )
+    excluded_candidates: int = Field(
+        default=0,
+        ge=0,
+        description="Stale or unauthorized index candidates omitted from this page.",
     )
 
     def __len__(self) -> int:

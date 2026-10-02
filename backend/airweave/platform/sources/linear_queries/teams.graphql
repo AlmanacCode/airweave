@@ -1,0 +1,6 @@
+query OwnedLinearTeamChoices($first: Int!, $after: String) {
+  teams(first: $first, after: $after, includeArchived: true, orderBy: createdAt) {
+    nodes { id name key visibility archivedAt updatedAt }
+    pageInfo { hasNextPage endCursor }
+  }
+}

@@ -16,6 +16,7 @@ from typing import List, Optional, Tuple
 from uuid import UUID
 
 from fastapi import HTTPException
+from pydantic import JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave import schemas
@@ -29,6 +30,10 @@ from airweave.core.shared_models import (
 )
 from airweave.db.session import get_db_context
 from airweave.db.unit_of_work import UnitOfWork
+from airweave.domains.entities.canonical.page_source import CanonicalPageSource
+from airweave.domains.entities.canonical.search_metadata import SEARCH_METADATA_PIPELINE_VERSION
+from airweave.domains.entities.canonical.source import CanonicalSource
+from airweave.domains.owned_provisioning.guard import require_provider_sync
 from airweave.domains.sources.exceptions.classifier import classify_error
 from airweave.domains.sources.types import SourceRegistryEntry
 from airweave.domains.sync_pipeline.config import SyncConfig
@@ -54,6 +59,7 @@ from airweave.domains.temporal.protocols import (
     TemporalScheduleServiceProtocol,
     TemporalWorkflowServiceProtocol,
 )
+from airweave.platform.configs.config import OutlookCalendarConfig, OutlookMailConfig, StripeConfig
 from airweave.schemas.source_connection import ScheduleConfig
 from airweave.schemas.sync import SyncCreate
 from airweave.schemas.sync_job import SyncJobCreate
@@ -106,6 +112,8 @@ class SyncService(SyncServiceProtocol):
         run_immediately: bool,
         ctx: ApiContext,
         uow: UnitOfWork,
+        defer_execution: bool = False,
+        source_config: dict[str, JsonValue] | None = None,
     ) -> SyncProvisionResult:
         """Create sync + optional job + Temporal schedule atomically.
 
@@ -124,6 +132,22 @@ class SyncService(SyncServiceProtocol):
         if cron:
             self._validate_cron_for_source(cron, source_entry)
 
+        canonical = isinstance(
+            source_entry.source_class_ref, (CanonicalSource, CanonicalPageSource)
+        )
+        if source_entry.short_name in {"outlook_mail", "outlook_calendar"}:
+            # Outlook composes its canonical adapter only for explicit original capture.
+            config_type = (
+                OutlookMailConfig
+                if source_entry.short_name == "outlook_mail"
+                else OutlookCalendarConfig
+            )
+            canonical = config_type.model_validate(source_config or {}).capture_originals
+        elif source_entry.short_name == "stripe":
+            canonical = (
+                StripeConfig.model_validate(source_config or {}).original_capture is not None
+            )
+
         sync_schema, sync_job_schema = await self._create_sync_records(
             uow.session,
             name=f"Sync for {name}",
@@ -131,11 +155,12 @@ class SyncService(SyncServiceProtocol):
             destination_connection_ids=destination_connection_ids,
             cron_schedule=cron,
             run_immediately=run_immediately,
+            initial_pipeline_version=(SEARCH_METADATA_PIPELINE_VERSION if canonical else 1),
             ctx=ctx,
             uow=uow,
         )
 
-        if cron:
+        if cron and not defer_execution:
             await self._temporal_schedule_service.create_or_update_schedule(
                 sync_id=sync_schema.id,
                 cron_schedule=cron,
@@ -306,6 +331,8 @@ class SyncService(SyncServiceProtocol):
                 detail=f"Cannot cancel job in {sync_job.status} state",
             )
 
+        await require_provider_sync(db, sync_job.sync_id, ctx.organization.id)
+
         if sync_job.status == SyncJobStatus.PENDING:
             # PENDING → CANCELLED directly (PENDING → CANCELLING is invalid)
             await self._job_state_machine.transition(
@@ -470,6 +497,7 @@ class SyncService(SyncServiceProtocol):
         destination_connection_ids: List[UUID],
         cron_schedule: Optional[str],
         run_immediately: bool,
+        initial_pipeline_version: int,
         ctx: ApiContext,
         uow: UnitOfWork,
     ) -> Tuple[schemas.Sync, Optional[schemas.SyncJob]]:
@@ -486,7 +514,13 @@ class SyncService(SyncServiceProtocol):
             run_immediately=run_immediately,
         )
 
-        sync_schema = await self._sync_repo.create(uow.session, obj_in=sync_in, ctx=ctx, uow=uow)
+        sync_schema = await self._sync_repo.create(
+            uow.session,
+            obj_in=sync_in,
+            ctx=ctx,
+            uow=uow,
+            initial_pipeline_version=initial_pipeline_version,
+        )
         await uow.session.flush()
 
         sync_job_schema: Optional[schemas.SyncJob] = None

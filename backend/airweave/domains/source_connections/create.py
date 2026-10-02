@@ -2,6 +2,7 @@
 
 import hashlib
 import secrets
+from contextlib import nullcontext
 from typing import Any, Optional
 from uuid import UUID
 
@@ -22,6 +23,7 @@ from airweave.domains.collections.protocols import CollectionRepositoryProtocol
 from airweave.domains.connections.protocols import ConnectionRepositoryProtocol
 from airweave.domains.credentials.protocols import IntegrationCredentialServiceProtocol
 from airweave.domains.oauth.protocols import OAuthFlowServiceProtocol
+from airweave.domains.owned_provisioning.guard import require_provider_source
 from airweave.domains.source_connections.protocols import (
     ResponseBuilderProtocol,
     SourceConnectionCreateServiceProtocol,
@@ -163,6 +165,25 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
         )
         return result
 
+    async def create_deferred(
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: SourceConnectionCreate,
+        ctx: ApiContext,
+        uow: UnitOfWork,
+    ) -> SourceConnectionSchema:
+        """Persist managed source in caller transaction without Temporal side effects."""
+        if obj_in.sync_immediately:
+            raise ValueError("Deferred creation cannot start a job before native verification")
+        entry = self._get_source_entry(obj_in.short_name)
+        self._validate_auth_compatibility(
+            entry.source_class_ref, entry.short_name, AuthenticationMethod.AUTH_PROVIDER
+        )
+        return await self._create_with_auth_provider(
+            db, obj_in=obj_in, entry=entry, ctx=ctx, transaction=uow
+        )
+
     async def reinitiate_oauth(
         self,
         db: AsyncSession,
@@ -178,6 +199,7 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
         source_conn = await self._sc_repo.get(db, id=id, ctx=ctx)
         if not source_conn:
             raise NotFoundException("Source connection not found")
+        require_provider_source(source_conn.short_name)
         if source_conn.is_authenticated and not await self._has_credential_error(db, source_conn):
             raise HTTPException(
                 status_code=400,
@@ -388,7 +410,13 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
         )
 
     async def _create_with_auth_provider(
-        self, db: AsyncSession, *, obj_in: SourceConnectionCreate, entry, ctx: ApiContext
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: SourceConnectionCreate,
+        entry,
+        ctx: ApiContext,
+        transaction: UnitOfWork | None = None,
     ) -> SourceConnectionSchema:
         if not obj_in.authentication or not isinstance(
             obj_in.authentication, AuthProviderAuthentication
@@ -430,7 +458,7 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
         connection_schema: Optional[schemas.Connection] = None
         collection_schema: Optional[schemas.CollectionRecord] = None
 
-        async with UnitOfWork(db) as uow:
+        async with nullcontext(transaction) if transaction else UnitOfWork(db) as uow:
             collection = await self._get_collection(uow.session, obj_in.readable_collection_id, ctx)
             collection_schema = schemas.CollectionRecord.model_validate(
                 collection, from_attributes=True
@@ -460,10 +488,12 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
                     collection_id=collection.id,
                     collection_readable_id=collection.readable_id,
                     source_entry=entry,
+                    source_config=validated_config,
                     schedule_config=obj_in.schedule,
                     run_immediately=bool(obj_in.sync_immediately),
                     ctx=ctx,
                     uow=uow,
+                    **({"defer_execution": True} if transaction else {}),
                 )
                 await uow.session.flush()
 
@@ -485,11 +515,12 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
                 uow=uow,
             )
             await uow.session.flush()
-            await uow.commit()
+            if transaction is None:
+                await uow.commit()
             await uow.session.refresh(source_conn)
 
         response = await self._response_builder.build_response(db, source_conn, ctx)
-        if sync_result and sync_result.sync_job and obj_in.sync_immediately:
+        if transaction is None and sync_result and sync_result.sync_job and obj_in.sync_immediately:
             if connection_schema is None or collection_schema is None:
                 raise RuntimeError("Connection or collection schema not materialized")
             await self._trigger_sync_workflow(
@@ -672,6 +703,7 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
                     collection_id=collection.id,
                     collection_readable_id=collection.readable_id,
                     source_entry=entry,
+                    source_config=validated_config,
                     schedule_config=obj_in.schedule,
                     run_immediately=bool(obj_in.sync_immediately),
                     ctx=ctx,

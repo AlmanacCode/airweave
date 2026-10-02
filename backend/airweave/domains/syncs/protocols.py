@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import List, Optional, Protocol, Tuple
 from uuid import UUID
 
+from pydantic import JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave import schemas
@@ -53,6 +54,7 @@ class SyncRepositoryProtocol(Protocol):
         obj_in: SyncCreate,
         ctx: ApiContext,
         uow: Optional[UnitOfWork] = None,
+        initial_pipeline_version: int = 1,
     ) -> schemas.Sync:
         """Create a new sync with its connection associations."""
         ...
@@ -122,6 +124,8 @@ class SyncServiceProtocol(Protocol):
         run_immediately: bool,
         ctx: ApiContext,
         uow: UnitOfWork,
+        defer_execution: bool = False,
+        source_config: dict[str, JsonValue] | None = None,
     ) -> SyncProvisionResult:
         """Create sync + optional job + Temporal schedule atomically."""
         ...

@@ -31,12 +31,12 @@ from airweave.platform.entities.gitlab import (
     _require_gl_datetime,
 )
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
-from airweave.platform.sources._base import BaseSource
-from airweave.platform.sources.http_helpers import raise_for_status
-from airweave.platform.sources.retry_helpers import (
+from airweave.platform.http_client.retry_helpers import (
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
 )
+from airweave.platform.sources._base import BaseSource
+from airweave.platform.sources.http_helpers import raise_for_status
 from airweave.platform.utils.file_extensions import (
     get_language_for_extension,
     is_text_file,

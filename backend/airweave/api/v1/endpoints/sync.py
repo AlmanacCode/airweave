@@ -5,23 +5,33 @@ import json
 from typing import AsyncGenerator
 from uuid import UUID
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from airweave import crud
 from airweave.api import deps
 from airweave.api.context import ApiContext
 from airweave.api.deps import Inject
 from airweave.api.router import TrailingSlashRouter
 from airweave.core.logging import logger
 from airweave.core.protocols import PubSub
+from airweave.db.session import get_db
 
 router = TrailingSlashRouter()
+
+
+async def authorize_job(db: AsyncSession, ctx: ApiContext, job_id: UUID) -> None:
+    """Authorize ownership before subscribing to an otherwise unscoped pubsub topic."""
+    if await crud.sync_job.get(db, id=job_id, ctx=ctx) is None:
+        raise HTTPException(status_code=404, detail="Sync job not found")
 
 
 @router.get("/job/{job_id}/subscribe")
 async def subscribe_sync_job(
     job_id: UUID,
     ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(get_db),
     pubsub: PubSub = Inject(PubSub),
 ) -> StreamingResponse:
     """Server-Sent Events (SSE) endpoint to subscribe to a sync job's progress.
@@ -30,12 +40,15 @@ async def subscribe_sync_job(
     -----
         job_id: The ID of the job to subscribe to
         ctx: The API context
+        db: Database session for organization-scoped job authorization
         pubsub: PubSub adapter for event streaming
 
     Returns:
     --------
         StreamingResponse: The streaming response
     """
+    await authorize_job(db, ctx, job_id)
+
     logger.info(f"SSE sync subscription authenticated for user: {ctx}, job: {job_id}")
 
     # Track active SSE connections
@@ -91,6 +104,7 @@ async def subscribe_sync_job(
 async def subscribe_entity_state(
     job_id: UUID,
     ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(get_db),
     pubsub: PubSub = Inject(PubSub),
 ) -> StreamingResponse:
     """SSE endpoint for total entity state updates during sync.
@@ -103,12 +117,15 @@ async def subscribe_entity_state(
     -----
         job_id: The ID of the job to subscribe to
         ctx: The API context
+        db: Database session for organization-scoped job authorization
         pubsub: PubSub adapter for event streaming
 
     Returns:
     --------
         StreamingResponse: Server-sent events with entity state updates
     """
+    await authorize_job(db, ctx, job_id)
+
     logger.info(f"SSE entity state subscription for user: {ctx}, job: {job_id}")
 
     channel = f"sync_job_state:{job_id}"

@@ -19,6 +19,7 @@ from typing import (
 
 if TYPE_CHECKING:
     from airweave.domains.access_control.schemas import MembershipTuple
+    from airweave.domains.entities.canonical.page_source import CanonicalPageSource
 
 from pydantic import BaseModel
 
@@ -40,6 +41,8 @@ class BaseSource:
     ``create()`` and stored on self. Operation-time deps (cursor, files,
     node_selections) are passed as params to ``generate_entities()``.
     """
+
+    _capture_page_source: CanonicalPageSource | None = None
 
     # Identity (set by @source decorator — required)
     is_source: ClassVar[bool] = False
@@ -103,6 +106,15 @@ class BaseSource:
     def http_client(self) -> AirweaveHttpClient:
         """Pre-built HTTP client with rate limiting."""
         return self._http_client
+
+    @property
+    def capture_page_source(self) -> CanonicalPageSource | None:
+        """The active page adapter; source identity and authentication stay on this object."""
+        from airweave.domains.entities.canonical.page_source import CanonicalPageSource
+
+        if self._capture_page_source is not None:
+            return self._capture_page_source
+        return self if isinstance(self, CanonicalPageSource) else None
 
     # ------------------------------------------------------------------
     # Auth convenience methods

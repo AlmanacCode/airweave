@@ -38,7 +38,14 @@ class TestSearchTool:
         executor = FakeSearchPlanExecutor()
         executor.seed_result(SearchResults(results=[r1, r2]))
 
-        tool = SearchTool(executor=executor, user_filter=[], collection_id="col-1", db=AsyncMock(), ctx=AsyncMock(), collection_readable_id="col-readable")
+        tool = SearchTool(
+            executor=executor,
+            user_filter=[],
+            collection_id="col-1",
+            db=AsyncMock(),
+            ctx=AsyncMock(),
+            collection_readable_id="col-readable",
+        )
         state = make_state()
         result = await tool.execute(
             {
@@ -64,7 +71,14 @@ class TestSearchTool:
         executor.seed_result(SearchResults(results=[r1, r2]))
 
         state = make_state(results={"ent-1": r1})
-        tool = SearchTool(executor=executor, user_filter=[], collection_id="col-1", db=AsyncMock(), ctx=AsyncMock(), collection_readable_id="col-readable")
+        tool = SearchTool(
+            executor=executor,
+            user_filter=[],
+            collection_id="col-1",
+            db=AsyncMock(),
+            ctx=AsyncMock(),
+            collection_readable_id="col-readable",
+        )
         result = await tool.execute(
             {
                 "query": {"primary": "test"},
@@ -86,7 +100,14 @@ class TestSearchTool:
         executor.seed_result(SearchResults(results=[r1]))
 
         state = make_state()
-        tool = SearchTool(executor=executor, user_filter=[], collection_id="col-1", db=AsyncMock(), ctx=AsyncMock(), collection_readable_id="col-readable")
+        tool = SearchTool(
+            executor=executor,
+            user_filter=[],
+            collection_id="col-1",
+            db=AsyncMock(),
+            ctx=AsyncMock(),
+            collection_readable_id="col-readable",
+        )
         await tool.execute(
             {
                 "query": {"primary": "test"},
@@ -555,3 +576,43 @@ class TestToolErrorPaths:
 
         with pytest.raises(ToolValidationError, match="bad args"):
             await dispatcher.dispatch(tc, make_state())
+
+
+@pytest.mark.asyncio
+async def test_search_accumulates_excluded_candidates_without_claiming_empty_complete():
+    executor = FakeSearchPlanExecutor()
+    executor.seed_result_sequence(
+        [
+            SearchResults(results=[], retrieval_incomplete=True, excluded_candidates=2),
+            SearchResults(results=[], retrieval_incomplete=True, excluded_candidates=3),
+        ]
+    )
+    tool = SearchTool(executor, [], "col", AsyncMock(), AsyncMock(), "readable")
+    state = make_state()
+    first = await tool.execute(
+        {"query": {"primary": "first"}, "limit": 10, "offset": 0, "retrieval_strategy": "hybrid"},
+        state,
+    )
+    second = await tool.execute(
+        {"query": {"primary": "second"}, "limit": 10, "offset": 0, "retrieval_strategy": "hybrid"},
+        state,
+    )
+    assert first.retrieval_incomplete is True
+    assert first.excluded_candidates == 2
+    assert second.excluded_candidates == 3
+    assert state.retrieval_incomplete is True
+    assert state.excluded_candidates == 5
+
+
+@pytest.mark.asyncio
+async def test_unavailable_exact_count_is_correctable_not_a_transient_outage():
+    from airweave.domains.search.agentic.exceptions import ToolExecutionError, ToolTransientError
+    from airweave.domains.search.visible_vector_db import UnavailableExactCount
+
+    vector = AsyncMock()
+    vector.count.side_effect = UnavailableExactCount("not supported")
+    tool = CountTool(vector, "collection", [])
+    with pytest.raises(ToolExecutionError, match="Search or browse") as failure:
+        await tool.execute({"filter_groups": []}, make_state())
+    assert not isinstance(failure.value, ToolTransientError)
+    assert "do not infer zero" in str(failure.value)

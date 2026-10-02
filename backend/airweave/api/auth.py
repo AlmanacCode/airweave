@@ -5,7 +5,7 @@ import logging
 from fastapi_auth0 import Auth0, Auth0User
 from jose import jwt
 
-from airweave.core.config import settings
+from airweave.core.config import AuthMode, settings
 
 
 # Add a method to auth0 instance to verify tokens directly
@@ -19,8 +19,11 @@ async def get_user_from_token(token: str):
         Auth0User if token is valid, None otherwise
     """
     # If auth is disabled, just return a mock user
-    if not settings.AUTH_ENABLED:
+    if settings.AUTH_MODE == AuthMode.LOCAL:
         return Auth0User(sub="mock-user-id", email=settings.FIRST_SUPERUSER)
+
+    if settings.AUTH_MODE != AuthMode.AUTH0:
+        return None
 
     try:
         if not token:
@@ -63,7 +66,7 @@ async def get_user_from_token(token: str):
 
 
 # Initialize Auth0 only if authentication is enabled
-if settings.AUTH_ENABLED:
+if settings.AUTH_MODE == AuthMode.AUTH0:
     auth0 = Auth0(
         domain=settings.AUTH0_DOMAIN,
         api_audience=settings.AUTH0_AUDIENCE,
@@ -71,11 +74,11 @@ if settings.AUTH_ENABLED:
     )
 else:
     # Create a mock Auth0 instance that doesn't make network calls
-    class MockAuth0:
-        """A mock Auth0 class that doesn't make network calls for testing/development."""
+    class InactiveAuth0:
+        """Dependency for modes without Auth0; only explicit local mode returns a demo user."""
 
         def __init__(self):
-            """Initialize the mock Auth0 instance."""
+            """Initialize a network-free Auth0 dependency."""
             self.domain = "mock-domain.auth0.com"
             self.audience = "https://mock-api/"
             self.algorithms = ["RS256"]
@@ -83,9 +86,11 @@ else:
             self.auth0_user_model = Auth0User
 
         async def get_user(self):
-            """Always return a mock user in development mode."""
+            """Return a demo user only when insecure local mode is explicit."""
             # For development and testing
-            return Auth0User(sub="mock-user-id", email=settings.FIRST_SUPERUSER)
+            if settings.AUTH_MODE == AuthMode.LOCAL:
+                return Auth0User(sub="mock-user-id", email=settings.FIRST_SUPERUSER)
+            return None
 
-    auth0 = MockAuth0()
-    logging.info("Using mock Auth0 instance because AUTH_ENABLED=False")
+    auth0 = InactiveAuth0()
+    logging.info("Auth0 disabled for authentication mode %s", settings.AUTH_MODE.value)

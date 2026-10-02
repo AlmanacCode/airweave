@@ -323,6 +323,16 @@ class EntityTransformer:
             if value is not None:
                 meta_fields[field_name] = transform(value) if transform else value
 
+        # Explicit canonical fields; do not derive them from BaseEntity dates.
+        meta_fields.update(
+            {
+                "canonical_record_type": meta.canonical_record_type,
+                "source_created_us": meta.source_created_us,
+                "source_updated_us": meta.source_updated_us,
+                "source_created_known": meta.source_created_known,
+                "source_updated_known": meta.source_updated_known,
+            }
+        )
         return meta_fields
 
     def _add_type_specific_fields(self, fields: Dict[str, Any], entity: BaseEntity) -> None:

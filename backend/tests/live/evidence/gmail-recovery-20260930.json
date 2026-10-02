@@ -1,0 +1,68 @@
+{
+  "verified_at": "2026-09-30",
+  "source_commit": "6c45db8",
+  "provider": "gmail",
+  "mode": "bounded_unfiltered_same_job_recovery",
+  "provider_writes": false,
+  "limits": {
+    "requests": 600,
+    "observations": 250,
+    "seconds": 600,
+    "blob_bytes": 268435456
+  },
+  "initial_attempt": {
+    "source_commit": "75d85b5",
+    "harness_exit_code": 1,
+    "error_type": "AttributeError",
+    "identified_harness_gap": "missing force_full_sync context field",
+    "provider_requests": 1,
+    "records_observed": 0,
+    "schema_removed": true,
+    "blob_directory_removed": true
+  },
+  "stages": [
+    {
+      "stage": "interrupt",
+      "intentional_exit": 75,
+      "provider_requests": 68,
+      "records_observed": 50,
+      "identity_profile_requests": 1,
+      "capture_profile_requests": 1,
+      "blob_bytes_written": 3039870,
+      "full_scope_completed": false,
+      "checkpoint_saved": false
+    },
+    {
+      "stage": "resume",
+      "intentional_exit": 76,
+      "provider_requests": 2,
+      "records_observed": 0,
+      "identity_profile_requests": 1,
+      "capture_profile_requests": 0,
+      "blob_bytes_written": 0,
+      "resumed_saved_page": true,
+      "saved_cursor_expired": false,
+      "resumed_page_committed": true,
+      "full_scope_completed": false,
+      "checkpoint_saved": false
+    }
+  ],
+  "successful_trial": {
+    "harness_exit_code": 0,
+    "provider_requests": 70,
+    "records_observed": 50,
+    "gmail_recovery_verified": true,
+    "schema_removed": true,
+    "blob_directory_removed": true
+  },
+  "independent_cleanup": {
+    "remaining_private_schemas": 0,
+    "remaining_private_live_directories": 0,
+    "immutable_archive_removed": true
+  },
+  "limitations": [
+    "Resumed commit was an empty history-check page; no additional messages were captured by the resumed process.",
+    "No completed full-mailbox baseline, subsequent change cycle, deletion or hosted owner-binding proof.",
+    "This trial uses local disposable PostgreSQL and fixture collaborators for non-capture services; it is not a staging deployment."
+  ]
+}

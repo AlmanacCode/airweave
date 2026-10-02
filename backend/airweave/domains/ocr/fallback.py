@@ -54,9 +54,9 @@ class FallbackOcrProvider:
     async def convert_batch(self, file_paths: List[str]) -> Dict[str, Optional[str]]:
         """Convert files to markdown, trying providers in order.
 
-        Skips circuit-broken providers. On failure, records the failure
-        and tries the next provider. If all providers are exhausted,
-        returns None for every file.
+        Retains successful results and sends only unresolved files to later providers.
+        Skips circuit-broken providers. Unresolved files remain None when the chain
+        is exhausted; successful files are never processed or charged twice.
 
         Args:
             file_paths: Local file paths to convert.
@@ -64,29 +64,36 @@ class FallbackOcrProvider:
         Returns:
             Mapping of ``file_path -> markdown`` (``None`` on failure).
         """
+        combined = {path: None for path in file_paths}
         for provider_key, provider in self._providers:
+            pending = [path for path, result in combined.items() if result is None]
+            if not pending:
+                break
             if not await self._circuit_breaker.is_available(provider_key):
                 logger.info(f"[FallbackOCR] Skipping '{provider_key}' (circuit-broken)")
                 continue
 
             try:
-                results = await provider.convert_batch(file_paths)
-
-                if results and all(v is None for v in results.values()):
+                results = await provider.convert_batch(pending)
+                succeeded = {
+                    path: results[path] for path in pending if results.get(path) is not None
+                }
+                if succeeded:
+                    combined.update(succeeded)
+                    await self._circuit_breaker.record_success(provider_key)
+                else:
                     await self._circuit_breaker.record_failure(provider_key)
                     logger.warning(
-                        f"[FallbackOCR] '{provider_key}' returned all-None results "
-                        f"({len(results)} files), trying next provider"
+                        f"[FallbackOCR] '{provider_key}' produced no usable results "
+                        f"for {len(pending)} files, trying next provider"
                     )
-                    continue
-
-                await self._circuit_breaker.record_success(provider_key)
-                return results
             except Exception as exc:
                 await self._circuit_breaker.record_failure(provider_key)
                 logger.warning(
-                    f"[FallbackOCR] '{provider_key}' failed ({exc}), trying next provider"
+                    f"[FallbackOCR] '{provider_key}' failed ({type(exc).__name__}), "
+                    "trying next provider"
                 )
 
-        logger.error("[FallbackOCR] All OCR providers unavailable or failed")
-        return {path: None for path in file_paths}
+        if any(result is None for result in combined.values()):
+            logger.warning("[FallbackOCR] Some files have no successful OCR result")
+        return combined

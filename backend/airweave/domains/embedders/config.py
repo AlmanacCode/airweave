@@ -107,6 +107,13 @@ async def validate_embedding_config(db: AsyncSession) -> None:
     await _reconcile_db(db)
 
 
+async def initialize_embedding_config(db: AsyncSession) -> None:
+    """Persist first-deployment metadata only from explicit database bootstrap."""
+    if not DENSE_EMBEDDER or not EMBEDDING_DIMENSIONS or not SPARSE_EMBEDDER:
+        raise EmbeddingConfigError("Set dense/sparse embedder and dimensions before bootstrap")
+    await _reconcile_db(db, initialize=True)
+
+
 def _validate_dimensions(dense_spec: DenseEmbedderEntry) -> None:
     """Validate EMBEDDING_DIMENSIONS against the dense embedder spec."""
     if dense_spec.supports_matryoshka:
@@ -158,7 +165,7 @@ def _validate_local_reachability(dense_spec: DenseEmbedderEntry) -> None:
         return
 
     inference_url = settings.TEXT2VEC_INFERENCE_URL
-    health_url = f"{inference_url}/health"
+    health_url = f"{inference_url}/.well-known/ready"
 
     try:
         with httpx.Client(timeout=httpx.Timeout(5.0)) as client:
@@ -175,12 +182,17 @@ def _validate_local_reachability(dense_spec: DenseEmbedderEntry) -> None:
         ) from exc
 
 
-async def _reconcile_db(db: AsyncSession) -> None:
+async def _reconcile_db(db: AsyncSession, *, initialize: bool = False) -> None:
     """Reconcile code config against the vector_db_deployment_metadata table."""
     result = await db.execute(select(VectorDbDeploymentMetadata).limit(1))
     row = result.scalar_one_or_none()
 
     if row is None:
+        if not initialize:
+            raise EmbeddingConfigError(
+                "Embedding metadata is missing; run python -m airweave.db.bootstrap "
+                "against the intended database before starting the service."
+            )
         row = VectorDbDeploymentMetadata(
             dense_embedder=DENSE_EMBEDDER,
             embedding_dimensions=EMBEDDING_DIMENSIONS,

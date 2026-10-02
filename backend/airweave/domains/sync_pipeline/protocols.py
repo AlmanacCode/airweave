@@ -12,6 +12,7 @@ from airweave.platform.entities._base import BaseEntity
 
 if TYPE_CHECKING:
     from airweave.core.context import BaseContext
+    from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
     from airweave.domains.sync_pipeline.config import SyncConfig
     from airweave.domains.sync_pipeline.contexts import SyncContext
     from airweave.domains.sync_pipeline.contexts.runtime import SyncRuntime
@@ -105,6 +106,7 @@ class SyncFactoryProtocol(Protocol):
         force_full_sync: bool = False,
         execution_config: Optional[SyncConfig] = None,
         access_token: Optional[str] = None,
+        capture_attempt: CaptureAttempt | None = None,
     ) -> SyncOrchestrator:
         """Create and return a fully-wired SyncOrchestrator."""
         ...

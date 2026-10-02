@@ -33,6 +33,19 @@ from airweave.core.logging import logger
 from airweave.core.protocols import HttpMetrics
 
 
+def _native_request(request: Request) -> bool:
+    """Native publisher paths carry identities and retained source data."""
+    path = request.url.path
+    return "/native/sources/" in path or path.endswith("/native/sources")
+
+
+def _observable_url(request: Request) -> str:
+    """Keep route shape for native requests without publisher keys or query values."""
+    if not _native_request(request):
+        return str(request.url)
+    return _build_endpoint_name(request, fallback="/native/sources/{native_path}")
+
+
 async def add_request_id(request: Request, call_next: callable) -> Response:
     """Middleware to generate and add a request ID to the request for tracing.
 
@@ -68,7 +81,8 @@ async def log_requests(request: Request, call_next: callable) -> Response:
     duration = time.time() - start_time
     logger.info(
         (
-            f"Handled request {request.method} {request.url} in {duration:.2f} seconds."
+            f"Handled request {request.method} {_observable_url(request)} "
+            f"in {duration:.2f} seconds."
             f"Response code: {response.status_code}"
         )
     )
@@ -92,6 +106,9 @@ async def exception_logging_middleware(request: Request, call_next: callable) ->
         response = await call_next(request)
         return response
     except Exception as exc:
+        if _native_request(request):
+            logger.error(f"Native request failed: {type(exc).__name__}")
+            return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
         # Always log the full exception details
         logger.error(f"Unhandled exception: {exc}\n{traceback.format_exc()}")
 
@@ -144,7 +161,7 @@ async def request_timeout_middleware(request: Request, call_next: callable) -> R
     except asyncio.TimeoutError:
         logger.warning(
             f"Request timeout after {settings.API_REQUEST_TIMEOUT_SECONDS}s: "
-            f"{request.method} {request.url}"
+            f"{request.method} {_observable_url(request)}"
         )
         return JSONResponse(
             status_code=504,
@@ -180,7 +197,7 @@ async def request_body_size_middleware(request: Request, call_next: callable) ->
                 actual_size_mb = content_length_bytes / (1024 * 1024)
                 logger.warning(
                     f"Request body too large: {actual_size_mb:.2f}MB exceeds limit "
-                    f"of {max_size_mb:.2f}MB for {request.method} {request.url}"
+                    f"of {max_size_mb:.2f}MB for {request.method} {_observable_url(request)}"
                 )
                 return JSONResponse(
                     status_code=413,
@@ -288,12 +305,18 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
                 )
                 response.headers["Access-Control-Allow-Headers"] = "*"
                 response.headers["Access-Control-Allow-Credentials"] = "true"
-                logger.debug(f"Handled OPTIONS preflight for {path} from origin {origin}")
+                logger.debug(
+                    f"Handled OPTIONS preflight for "
+                    f"{_observable_url(request) if _native_request(request) else path} "
+                    f"from origin {origin}"
+                )
                 return response
             else:
                 # Not allowed, return 403
                 logger.debug(
-                    f"Rejected OPTIONS preflight for {path} from disallowed origin {origin}"
+                    f"Rejected OPTIONS preflight for "
+                    f"{_observable_url(request) if _native_request(request) else path} "
+                    f"from disallowed origin {origin}"
                 )
                 return Response(status_code=403)
 
@@ -358,6 +381,9 @@ async def validation_exception_handler(
     """
     # Extract basic error messages
     error_messages = unpack_validation_error(exc)
+    if _native_request(request):
+        logger.error(f"Native request validation failed: {len(exc.errors())} errors")
+        return JSONResponse(status_code=422, content=error_messages)
     logger.error(f"Validation error: {error_messages}")
 
     if settings.LOCAL_CURSOR_DEVELOPMENT:
@@ -705,6 +731,9 @@ def _build_endpoint_name(request: Request, *, fallback: str | None = None) -> st
         # e.g., "/collections/{readable_id}/sources/{source_short_name}"
         return route.path
 
+    if _native_request(request):
+        return fallback if fallback is not None else "/native/sources/{native_path}"
+
     # Fallback to raw path if route not available (shouldn't happen in normal operation)
     return fallback if fallback is not None else request.url.path.rstrip("/")
 
@@ -732,14 +761,14 @@ async def _track_api_call_async(
     properties = {
         "endpoint": endpoint,
         "request_method": request.method,
-        "request_path": request.url.path,
+        "request_path": _observable_url(request) if _native_request(request) else request.url.path,
         "status_code": response.status_code,
         "duration_ms": duration_ms,
     }
 
     # Flatten all path parameters directly into properties
     # Convert all values to strings to ensure JSON serialization works
-    if request.path_params:
+    if request.path_params and not _native_request(request):
         properties.update({k: str(v) for k, v in request.path_params.items()})
 
     # Determine event name

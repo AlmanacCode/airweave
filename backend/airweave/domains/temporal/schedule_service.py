@@ -200,7 +200,6 @@ class TemporalScheduleService(TemporalScheduleServiceProtocol):
                 {
                     "temporal_schedule_id": schedule_id,
                     "sync_type": sync_type,
-                    "status": "ACTIVE",
                     "cron_schedule": cron_expression,
                 },
                 ctx,
@@ -265,11 +264,16 @@ class TemporalScheduleService(TemporalScheduleServiceProtocol):
         sync_id: UUID,
         db: AsyncSession,
         ctx: ApiContext,
+        uow: Optional[UnitOfWork] = None,
     ) -> None:
         """Delete a single Temporal schedule and clear sync DB fields."""
         client = await self._get_client()
         handle = client.get_schedule_handle(schedule_id)
-        await handle.delete()
+        try:
+            await handle.delete()
+        except RPCError as exc:
+            if exc.status != RPCStatusCode.NOT_FOUND:
+                raise
 
         sync_obj = await self._sync_repo.get_without_connections(db, sync_id, ctx)
         await self._sync_repo.update(
@@ -281,6 +285,7 @@ class TemporalScheduleService(TemporalScheduleServiceProtocol):
                 "sync_type": "full",
             },
             ctx,
+            uow=uow,
         )
         logger.info(f"Deleted schedule {schedule_id}")
 
@@ -385,7 +390,7 @@ class TemporalScheduleService(TemporalScheduleServiceProtocol):
         if sync.temporal_schedule_id:
             status = await self._check_schedule_exists(sync.temporal_schedule_id)
             if status["exists"]:
-                await self.delete_all_schedules_for_sync(sync_id, db, ctx)
+                await self.delete_all_schedules_for_sync(sync_id, db, ctx, uow=uow, strict=True)
             else:
                 logger.warning(
                     f"Schedule {sync.temporal_schedule_id} not found in Temporal "
@@ -430,12 +435,17 @@ class TemporalScheduleService(TemporalScheduleServiceProtocol):
         sync_id: UUID,
         db: AsyncSession,
         ctx: ApiContext,
+        *,
+        uow: Optional[UnitOfWork] = None,
+        strict: bool = False,
     ) -> None:
         """Delete all schedules (regular + minute + daily cleanup) for a sync."""
         for sid in sched_ids.all_schedule_ids(sync_id):
             try:
-                await self._delete_schedule_by_id(sid, sync_id, db, ctx)
+                await self._delete_schedule_by_id(sid, sync_id, db, ctx, uow=uow)
             except Exception as e:
+                if strict:
+                    raise
                 logger.info(f"Schedule {sid} not deleted (may not exist): {e}")
 
     async def delete_schedule_handle(self, schedule_id: str) -> None:

@@ -27,6 +27,7 @@ from airweave.domains.sources.exceptions import (
     SourceEntityForbiddenError,
     SourceEntityNotFoundError,
     SourceError,
+    SourceGoneError,
     SourceRateLimitError,
     SourceServerError,
 )
@@ -107,6 +108,8 @@ def _handle_redirect(
 def _handle_fallback(
     resp: httpx.Response, status: int, detail: str, ctx: str, sn: str, _tpk: AuthProviderKind
 ) -> None:
+    if status == 410:
+        raise SourceGoneError(f"Resource or continuation expired (410){ctx}", source_short_name=sn)
     if status >= 500:
         raise SourceServerError(
             f"Server error ({status}){ctx}: {detail}",
@@ -157,7 +160,7 @@ def translate_httpx_error(
 
 
 def _extract_detail(response: httpx.Response, max_length: int = 200) -> str:
-    """Pull a human-readable snippet from the response body."""
+    """Use buffered detail only; status translation must never consume a stream."""
     try:
         data = response.json()
         for key in ("message", "error_description", "error", "detail", "errors"):
@@ -165,6 +168,8 @@ def _extract_detail(response: httpx.Response, max_length: int = 200) -> str:
             if val:
                 return str(val)[:max_length]
         return str(data)[:max_length]
+    except httpx.ResponseNotRead:
+        return f"(unread response body, status {response.status_code})"
     except Exception:
         text = response.text[:max_length] if response.text else ""
         return text or f"(no body, status {response.status_code})"

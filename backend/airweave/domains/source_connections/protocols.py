@@ -188,6 +188,17 @@ class SourceConnectionCreateServiceProtocol(Protocol):
         """Create a source connection."""
         ...
 
+    async def create_deferred(
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: SourceConnectionCreate,
+        ctx: ApiContext,
+        uow: UnitOfWork,
+    ) -> SourceConnectionSchema:
+        """Create a managed source in the caller transaction without execution."""
+        ...
+
     async def reinitiate_oauth(
         self,
         db: AsyncSession,

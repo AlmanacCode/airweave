@@ -15,6 +15,7 @@ from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.collections.protocols import CollectionRepositoryProtocol
 from airweave.domains.connections.protocols import ConnectionRepositoryProtocol
 from airweave.domains.credentials.protocols import IntegrationCredentialRepositoryProtocol
+from airweave.domains.owned_provisioning.guard import require_unmanaged_source
 from airweave.domains.source_connections.protocols import (
     ResponseBuilderProtocol,
     SourceConnectionRepositoryProtocol,
@@ -30,6 +31,7 @@ from airweave.domains.syncs.protocols import SyncRepositoryProtocol, SyncService
 from airweave.domains.syncs.types import InvalidSyncTransitionError, OptimisticLockError
 from airweave.domains.temporal.protocols import TemporalScheduleServiceProtocol
 from airweave.models.source_connection import SourceConnection
+from airweave.platform.configs.config import OutlookCalendarConfig, OutlookMailConfig, StripeConfig
 from airweave.schemas.source_connection import (
     AuthenticationMethod,
     ScheduleConfig,
@@ -38,6 +40,43 @@ from airweave.schemas.source_connection import (
 from airweave.schemas.source_connection import (
     SourceConnection as SourceConnectionSchema,
 )
+
+
+def _validate_outlook_capture_mode(source: SourceConnection, config: dict[str, Any]) -> None:
+    """Mutable legacy IDs and immutable originals cannot share an existing sync."""
+    if source.short_name not in {"outlook_mail", "outlook_calendar"}:
+        return
+    config_type = (
+        OutlookMailConfig if source.short_name == "outlook_mail" else OutlookCalendarConfig
+    )
+    previous = config_type.model_validate(source.config_fields or {})
+    proposed = config_type.model_validate(config)
+    if previous.capture_originals != proposed.capture_originals:
+        raise HTTPException(
+            status_code=400,
+            detail="Create a new source to change Outlook original capture mode",
+        )
+    if (
+        previous.capture_originals
+        and previous.expected_principal_id != proposed.expected_principal_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Create a new source to change the Outlook original capture principal",
+        )
+
+
+def _validate_stripe_capture_binding(source: SourceConnection, config: dict[str, Any]) -> None:
+    """Account, API version, mode and capture representation require fresh identities."""
+    if source.short_name != "stripe":
+        return
+    previous = StripeConfig.model_validate(source.config_fields or {})
+    proposed = StripeConfig.model_validate(config)
+    if previous.original_capture != proposed.original_capture:
+        raise HTTPException(
+            status_code=400,
+            detail="Create a new source to change Stripe original capture binding",
+        )
 
 
 class SourceConnectionUpdateService(SourceConnectionUpdateServiceProtocol):
@@ -93,6 +132,10 @@ class SourceConnectionUpdateService(SourceConnectionUpdateServiceProtocol):
             if not source_conn:
                 raise NotFoundException("Source connection not found")
 
+            await require_unmanaged_source(
+                db, id, ctx.organization.id, short_name=source_conn.short_name
+            )
+
             # Update fields
             update_data = obj_in.model_dump(exclude_unset=True)
 
@@ -110,6 +153,8 @@ class SourceConnectionUpdateService(SourceConnectionUpdateServiceProtocol):
                 validated_config = self._source_validation.validate_config(
                     source_conn.short_name, update_data["config"], ctx
                 )
+                _validate_outlook_capture_mode(source_conn, validated_config)
+                _validate_stripe_capture_binding(source_conn, validated_config)
                 update_data["config_fields"] = validated_config
                 del update_data["config"]
 
@@ -233,6 +278,7 @@ class SourceConnectionUpdateService(SourceConnectionUpdateServiceProtocol):
                 collection_id=collection.id,
                 collection_readable_id=collection.readable_id,
                 source_entry=source_entry,
+                source_config=source_conn.config_fields,
                 schedule_config=ScheduleConfig(cron=new_cron),
                 run_immediately=False,
                 ctx=ctx,

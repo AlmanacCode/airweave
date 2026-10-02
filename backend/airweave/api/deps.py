@@ -9,7 +9,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import Depends, Header, HTTPException, Request
 from fastapi_auth0 import Auth0User
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from airweave import crud, schemas
 from airweave.api.auth import auth0
@@ -17,13 +17,17 @@ from airweave.api.context import ApiContext  # noqa: F401 — re-exported for ba
 from airweave.api.context_resolver import ContextResolver
 from airweave.api.inject import Inject  # noqa: F401 — re-exported for backward compat
 from airweave.core import container as container_mod
-from airweave.core.config import settings
+from airweave.core.config import AuthMode, settings
 from airweave.core.container import Container
 from airweave.core.logging import ContextualLogger
 from airweave.core.protocols.cache import ContextCache
 from airweave.core.protocols.rate_limiter import RateLimiter
 from airweave.core.shared_models import AuthMethod
+from airweave.db import session as db_session
 from airweave.db.session import get_db
+from airweave.domains.entities.canonical.query import CanonicalQueryService
+from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
+from airweave.domains.entities.canonical.store import CanonicalRecordStore
 from airweave.domains.organizations.repository import ApiKeyRepository, OrganizationRepository
 from airweave.domains.users.repository import UserRepository
 
@@ -106,6 +110,38 @@ async def get_context(
     return await resolver.resolve(request, db, auth0_user, x_api_key, x_organization_id)
 
 
+def get_search_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Resolve the configured factory dynamically, including isolated local deployments."""
+    return db_session.AsyncSessionLocal
+
+
+async def get_owned_search_context(
+    request: Request,
+    sessions: async_sessionmaker[AsyncSession] = Depends(get_search_session_factory),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_organization_id: Optional[str] = Header(None, alias="X-Organization-ID"),
+    auth0_user: Optional[Auth0User] = Depends(auth0.get_user),
+    cache: ContextCache = Inject(ContextCache),
+    rate_limiter: RateLimiter = Inject(RateLimiter),
+) -> ApiContext:
+    """Finish this read route's authentication transaction before search network waits.
+
+    Reuse ordinary context resolution. Closing our own session preserves the previous
+    read route's rollback semantics, including Auth0's uncommitted last-active update.
+    Other routes retain their existing request-owned session.
+    """
+    async with sessions() as db:
+        return await get_context(
+            request=request,
+            db=db,
+            x_api_key=x_api_key,
+            x_organization_id=x_organization_id,
+            auth0_user=auth0_user,
+            cache=cache,
+            rate_limiter=rate_limiter,
+        )
+
+
 async def get_logger(
     context: ApiContext = Depends(get_context),
 ) -> ContextualLogger:
@@ -139,7 +175,7 @@ async def get_user_from_token(token: str, db: AsyncSession) -> Optional[schemas.
         if token.startswith("Bearer "):
             token = token[7:]
 
-        if not settings.AUTH_ENABLED:
+        if settings.AUTH_MODE == AuthMode.LOCAL:
             user = await crud.user.get_by_email(db, email=settings.FIRST_SUPERUSER)
             if user:
                 return schemas.User.model_validate(user)
@@ -230,3 +266,10 @@ async def get_connect_session(
         )
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=401, detail="Invalid session token payload") from e
+
+
+def get_canonical_query_service() -> CanonicalQueryService:
+    """Wire stateless exact-record reads with the deployment's cursor signing key."""
+    return CanonicalQueryService(
+        CanonicalRecordStore(), CanonicalQueryStore(), settings.STATE_SECRET
+    )

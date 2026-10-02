@@ -55,3 +55,7 @@ class FileSkippedException(Exception):
         self.reason = reason
         self.filename = filename
         super().__init__(f"File '{filename}' skipped: {reason}")
+
+
+class StorageReadLimitExceeded(StorageException):
+    """Actual stored object exceeds the explicitly requested read bound."""

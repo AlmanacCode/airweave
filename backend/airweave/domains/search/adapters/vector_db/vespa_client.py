@@ -155,7 +155,14 @@ class VespaVectorDB:
             f"coverage={coverage_pct:.1f}%"
         )
 
-        return self._convert_hits_to_results(hits)
+        results = self._convert_hits_to_results(hits)
+        results.engine_coverage_percent = coverage.get("coverage")
+        results.engine_partial = bool(
+            coverage.get("degraded") or coverage.get("full") is False
+            or coverage.get("coverage", 100) < 100 or root.get("errors")
+        )
+        results.retrieval_incomplete = results.engine_partial
+        return results
 
     async def count(
         self,
@@ -377,6 +384,10 @@ class VespaVectorDB:
             RetrievalStrategy.SEMANTIC,
             RetrievalStrategy.HYBRID,
         ):
+            # Filter-first graph traversal can miss all eligible neighbors in
+            # selectively scoped collections. Keep pre-filtering, but compute
+            # distances before checking the filter to preserve candidate recall.
+            params["ranking.matching.filterFirstThreshold"] = 0.0
             for i, dense_emb in enumerate(embeddings.dense_embeddings):
                 params[f"input.query(q{i})"] = {"values": dense_emb.vector}
 
@@ -452,9 +463,16 @@ class VespaVectorDB:
                 textual_representation=self._get_required_field(
                     fields, "textual_representation", entity_id
                 ),
+                query_snippet=(
+                    fields.get("query_snippet")
+                    if isinstance(fields.get("query_snippet"), str)
+                    else None
+                ),
                 airweave_system_metadata=self._extract_system_metadata(fields, entity_id),
                 access=self._extract_access_control(fields),
-                web_url=self._get_required_field(raw_source_fields, "web_url", entity_id),
+                # Native snapshots can be opened by canonical record ID without
+                # a provider web URL. Absence is valid, not a malformed index hit.
+                web_url=str(raw_source_fields.get("web_url") or ""),
                 url=fields.get("url"),
                 raw_source_fields=raw_source_fields,
             )

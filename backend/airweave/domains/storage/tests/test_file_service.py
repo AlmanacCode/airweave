@@ -5,6 +5,7 @@ import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from airweave.domains.storage.exceptions import FileSkippedException
@@ -19,9 +20,7 @@ def _make_service(tmpdir: str) -> FileService:
     storage.write_file = AsyncMock()
     storage.delete_directory = AsyncMock()
 
-    with patch(
-        "airweave.domains.storage.file_service.paths.temp_sync_dir", return_value=tmpdir
-    ):
+    with patch("airweave.domains.storage.file_service.paths.temp_sync_dir", return_value=tmpdir):
         svc = FileService(sync_job_id=sync_job_id, storage_backend=storage)
 
     return svc, storage
@@ -128,3 +127,170 @@ class TestCleanupSyncDirectory:
 
         # tmpdir has been deleted by the context manager exit
         await svc.cleanup_sync_directory(logger=MagicMock())
+
+
+class TestCanonicalBlobs:
+    @pytest.mark.asyncio
+    async def test_canonical_capture_keeps_original_bytes_and_cleans_temp(self, tmp_path):
+        from airweave.domains.sources.token_providers.static import StaticTokenProvider
+
+        svc, storage = _make_service(str(tmp_path))
+        svc.sync_id = uuid4()
+        content = b"original unsupported format"
+
+        async def download(
+            client,
+            url,
+            headers,
+            destination,
+            logger,
+            *,
+            follow_redirects=True,
+            expected_media_type=None,
+        ):
+            with open(destination, "wb") as output:
+                output.write(content)
+
+        svc._stream_download = download
+        blob = await svc.capture_canonical_url(
+            "https://example.com/file.unknown",
+            MagicMock(),
+            StaticTokenProvider("token"),
+            MagicMock(),
+        )
+        assert blob.key.startswith(f"canonical/{svc.sync_id}/blobs/sha256/")
+        storage.write_file.assert_awaited_once_with(blob.key, content)
+        assert not list(tmp_path.iterdir())
+
+    @pytest.mark.asyncio
+    async def test_storage_failure_does_not_publish_reference(self, tmp_path):
+        svc, storage = _make_service(str(tmp_path))
+        svc.sync_id = uuid4()
+        storage.write_file.side_effect = OSError("storage down")
+        with pytest.raises(OSError, match="storage down"):
+            await svc.store_canonical_blob(b"bytes")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("canonical", [True, False])
+@pytest.mark.parametrize("signed", [True, False])
+async def test_401_refresh_requires_original_bearer_request(tmp_path, canonical, signed):
+    from airweave.domains.sources.token_providers.protocol import TokenProviderProtocol
+    from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+
+    auth = MagicMock(spec=TokenProviderProtocol)
+    auth.supports_refresh = True
+    auth.get_token = AsyncMock(return_value="fixture-old")
+    auth.force_refresh = AsyncMock(return_value="fixture-new")
+    requests = []
+
+    async def download(request):
+        if request.method == "HEAD":
+            return httpx.Response(200)
+        requests.append(request.headers.get("Authorization"))
+        return httpx.Response(401 if len(requests) == 1 else 200, content=b"original")
+
+    service, storage = _make_service(str(tmp_path))
+    service.sync_id = uuid4()
+    url = "https://files.example/original.pdf"
+    if signed:
+        url += "?X-Amz-Algorithm=fixture"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(download)) as raw:
+        client = AirweaveHttpClient(raw, uuid4(), "fixture", feature_flag_enabled=False)
+        if canonical:
+            operation = service.capture_canonical_url(url, client, auth, MagicMock())
+        else:
+            entity = MagicMock(name="entity")
+            entity.name, entity.url = "original.pdf", url
+            operation = service.download_from_url(entity, client, auth, MagicMock())
+        if signed:
+            with pytest.raises(httpx.HTTPStatusError):
+                await operation
+            auth.force_refresh.assert_not_awaited()
+            assert requests == [None]
+            storage.write_file.assert_not_awaited()
+            assert not list(tmp_path.iterdir())
+        else:
+            await operation
+            auth.force_refresh.assert_awaited_once()
+            assert requests == ["Bearer fixture-old", "Bearer fixture-new"]
+
+
+@pytest.mark.asyncio
+async def test_canonical_can_reject_redirect_without_storing_its_body(tmp_path):
+    from airweave.domains.sources.token_providers.static import StaticTokenProvider
+    from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+
+    service, storage = _make_service(str(tmp_path))
+    service.sync_id = uuid4()
+    calls = []
+
+    async def download(request):
+        if request.method == "HEAD":
+            return httpx.Response(200)
+        calls.append(request.url.path)
+        if request.url.path == "/original.pdf":
+            return httpx.Response(302, headers={"location": "/target.pdf"}, content=b"redirect")
+        return httpx.Response(200, content=b"original")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(download)) as raw:
+        client = AirweaveHttpClient(raw, uuid4(), "fixture", feature_flag_enabled=False)
+        with pytest.raises(httpx.HTTPStatusError) as error:
+            await service.capture_canonical_url(
+                "https://files.example/original.pdf",
+                client,
+                StaticTokenProvider("fixture"),
+                MagicMock(),
+                follow_redirects=False,
+            )
+        assert error.value.response.status_code == 302
+        assert calls == ["/original.pdf"]
+        storage.write_file.assert_not_awaited()
+        assert not list(tmp_path.iterdir())
+        # Existing callers retain their redirect behavior without a new argument.
+        blob = await service.capture_canonical_url(
+            "https://files.example/original.pdf",
+            client,
+            StaticTokenProvider("fixture"),
+            MagicMock(),
+        )
+        assert calls == ["/original.pdf", "/original.pdf", "/target.pdf"]
+        storage.write_file.assert_awaited_once_with(blob.key, b"original")
+
+        entity = MagicMock(name="entity")
+        entity.name, entity.url = "original.pdf", "https://files.example/original.pdf"
+        downloaded = await service.download_from_url(
+            entity, client, StaticTokenProvider("fixture"), MagicMock()
+        )
+        assert calls[-2:] == ["/original.pdf", "/target.pdf"]
+        with open(downloaded.local_path, "rb") as original:
+            assert original.read() == b"original"
+
+
+@pytest.mark.asyncio
+async def test_expected_file_type_rejects_login_html_but_accepts_binary(tmp_path):
+    from airweave.domains.sources.token_providers.static import StaticTokenProvider
+    from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+
+    service, storage = _make_service(str(tmp_path))
+    service.sync_id = uuid4()
+    responses = [
+        httpx.Response(200, headers={"Content-Type": "text/html; charset=utf-8"}, content=b"login"),
+        httpx.Response(
+            200, headers={"Content-Type": "application/octet-stream"}, content=b"original"
+        ),
+    ]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: responses.pop(0))) as raw:
+        client = AirweaveHttpClient(raw, uuid4(), "fixture", feature_flag_enabled=False)
+        args = (
+            "https://files.example/original.pdf",
+            client,
+            StaticTokenProvider("fixture"),
+            MagicMock(),
+        )
+        with pytest.raises(ValueError, match="content type does not match"):
+            await service.capture_canonical_url(*args, expected_media_type="application/pdf")
+        storage.write_file.assert_not_awaited()
+        assert not list(tmp_path.iterdir())
+        blob = await service.capture_canonical_url(*args, expected_media_type="application/pdf")
+        storage.write_file.assert_awaited_once_with(blob.key, b"original")

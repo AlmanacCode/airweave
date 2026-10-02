@@ -66,11 +66,12 @@ class StorageBackend(Protocol):
         """
         ...
 
-    async def read_file(self, path: str) -> bytes:
-        """Read binary content from storage.
+    async def read_file(self, path: str, *, max_bytes: int | None = None) -> bytes:
+        """Read binary content from storage; optional bound stops reads at max_bytes + 1.
 
         Args:
             path: Relative path
+            max_bytes: Optional maximum actual bytes; oversized objects raise a storage error.
 
         Returns:
             Binary content
@@ -88,6 +89,14 @@ class StorageBackend(Protocol):
 
         Returns:
             True if exists
+        """
+        ...
+
+    async def delete_file(self, path: str) -> None:
+        """Delete exactly one object; absence succeeds, other failures raise.
+
+        Never fall back to prefix/directory deletion. Backend retention/versioning
+        policies still govern physical historical-byte reclamation.
         """
         ...
 

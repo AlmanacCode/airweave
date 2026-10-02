@@ -1,0 +1,64 @@
+{
+  "date": "2026-09-30",
+  "mode": "filtered_full_reconciliation",
+  "scope": "fixed seven-day after/before epoch query; no size/category filter",
+  "provider_writes": false,
+  "runs": [
+    {
+      "process": 1,
+      "provider_requests": 287,
+      "records_observed": 239,
+      "stored_records": 239,
+      "partial_records": 0,
+      "scope_started": 1,
+      "scope_completed": 1,
+      "blob_bytes_written": 5501801,
+      "checkpoint_saved": true,
+      "loaded_durable_checkpoint": false,
+      "job_status": "completed",
+      "payload_revision_digest": "06bec711f3e00a2101e68c1b8fd56120f91a4c18cc4ecdff54e52f015a17a556"
+    },
+    {
+      "process": 2,
+      "provider_requests": 287,
+      "records_observed": 239,
+      "stored_records": 239,
+      "partial_records": 0,
+      "scope_started": 1,
+      "scope_completed": 1,
+      "blob_bytes_written": 5501801,
+      "checkpoint_saved": true,
+      "loaded_durable_checkpoint": true,
+      "observed_change_sequence": 270,
+      "job_status": "completed",
+      "payload_revision_digest": "d282ee7546026cfdc02af2bc3da16010bd94271eec5ef9bb2666a85339f79d83"
+    }
+  ],
+  "identical_second_read": false,
+  "additional_changes": 31,
+  "repeated_native_get_diagnostic": {
+    "same_message": true,
+    "changed_paths": [
+      "/payload/parts/1/body/attachmentId",
+      "/payload/parts/2/body/attachmentId"
+    ],
+    "limitation": "One immediate repeated GET isolated native attachment locator volatility; it does not attribute every earlier change."
+  },
+  "cleanup": {
+    "remaining_live_schemas": 0,
+    "remaining_private_live_directories": 0
+  },
+  "verification": {
+    "gmail_source_tests_passed": 15,
+    "postgres_pipeline_tests_passed": 4,
+    "simulated_budget_guard": "251st observation raises before completed scope"
+  },
+  "not_verified": [
+    "Gmail history-delta mode",
+    "whole mailbox completeness",
+    "Temporal worker or hosted factory",
+    "hosted authentication or real product binding",
+    "live induced failure/recovery",
+    "search quality"
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "date": "2026-09-30",
+  "scope": "existing exposed meeting/text enumeration; no added filter",
+  "limits": {
+    "actual_http_requests": 150,
+    "records": 1000,
+    "seconds": 300
+  },
+  "first_attempt": {
+    "failed": true,
+    "error_type": "ValueError",
+    "provider_requests": 18,
+    "records_observed": 9,
+    "started": 0,
+    "completed": 0,
+    "checkpoint_unchanged": true,
+    "job_status": "failed"
+  },
+  "fresh_process_repeat": false,
+  "scope_completion_claimed": false,
+  "checkpoint_support": false,
+  "deletion_guarantee": false,
+  "provider_writes": false,
+  "cleanup": {
+    "schema_removed": true,
+    "blob_directory_removed": true
+  },
+  "limitation": "Initial safe diagnostics did not identify the fixed source error; a separate diagnostic attempt is required. All captured Wispr originals remain partial.",
+  "diagnostic_retry": {
+    "provider_requests": 18,
+    "observations": 9,
+    "safe_reason": "Wispr tool execution failed; capture is incomplete",
+    "job_status": "failed",
+    "started_scopes": 0,
+    "completed_scopes": 0,
+    "checkpoint_unchanged": true,
+    "schema_removed": true,
+    "blob_directory_removed": true
+  },
+  "read_only_targeted_diagnostic": {
+    "requests": 18,
+    "operation": "get_meeting",
+    "error_shape": "string",
+    "structured_status_or_code": false,
+    "recognized_categories": [
+      "failed"
+    ],
+    "source_parser_failure": false,
+    "cause_attribution": "Upstream execution boundary reported an opaque tool error; root provider versus intermediary cause is unknown."
+  }
+}

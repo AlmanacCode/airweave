@@ -1,0 +1,42 @@
+{
+  "date": "2026-09-30",
+  "commit": "cf14b4e",
+  "provider": "wispr",
+  "method": "real provider reads through actual pipeline, intentional process interruption; disposable PostgreSQL and files",
+  "earlier_preflight_requests": 6,
+  "trial_request_limit": 14,
+  "aggregate_trial_requests": 14,
+  "aggregate_batch_requests": 20,
+  "runs": [
+    {
+      "stage": "interrupt",
+      "provider_requests": 12,
+      "records_observed": 256,
+      "completed_meeting_bodies": 3,
+      "intentional_interruption": true,
+      "full_scope_completed": false
+    },
+    {
+      "stage": "resume",
+      "provider_requests": 2,
+      "records_observed": 0,
+      "failed": true,
+      "error_type": "BudgetExceeded",
+      "safe_reason": "provider_requests",
+      "last_operation": "session",
+      "last_http_status": 201,
+      "checkpoint_unchanged": true,
+      "job_status": "running",
+      "full_scope_completed": false
+    }
+  ],
+  "wispr_recovery_verified": false,
+  "schema_removed": true,
+  "independent_live_schema_count": 0,
+  "blob_directory_removed": true,
+  "limitations": [
+    "Resume budget expired during setup before a new body could be read.",
+    "No complete discovery, deletion detection or full-sync proof.",
+    "No hosted authentication or product owner attestation."
+  ]
+}

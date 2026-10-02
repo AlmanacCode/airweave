@@ -19,15 +19,27 @@ Then, we yield them as entities using the respective entity schemas defined in e
 from __future__ import annotations
 
 import base64
+import json
+from contextlib import aclosing
 from datetime import datetime
+from functools import partial
 from typing import AsyncGenerator, Optional
 
-from tenacity import retry, stop_after_attempt
+import httpx
+from pydantic import JsonValue
+from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
+from airweave.domains.auth_provider.exceptions import AuthProviderRateLimitError
 from airweave.domains.browse_tree.types import NodeSelectionData
-from airweave.domains.sources.token_providers.protocol import AuthProviderKind, SourceAuthProvider
+from airweave.domains.sources.exceptions import SourceError
+from airweave.domains.sources.token_providers.protocol import (
+    AuthProviderKind,
+    ManagedAuthProvider,
+    SourceAuthProvider,
+    authorization_headers,
+)
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.syncs.cursors.cursor import SyncCursor
 from airweave.platform.configs.auth import StripeAuthConfig
@@ -49,12 +61,13 @@ from airweave.platform.entities.stripe import (
     _parse_stripe_ts,
 )
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
-from airweave.platform.sources._base import BaseSource
-from airweave.platform.sources.http_helpers import raise_for_status
-from airweave.platform.sources.retry_helpers import (
+from airweave.platform.http_client.retry_helpers import (
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
 )
+from airweave.platform.sources._base import BaseSource
+from airweave.platform.sources.http_helpers import raise_for_status
+from airweave.platform.sources.stripe_capture import StripeCapture
 from airweave.schemas.source_connection import AuthenticationMethod
 
 _parse_unix_timestamp = _parse_stripe_ts
@@ -80,6 +93,9 @@ class StripeSource(BaseSource):
     including transactions, customers, subscriptions, and account analytics.
     """
 
+    canonical_record_types = StripeCapture.canonical_record_types
+    MAX_CAPTURE_RESPONSE_BYTES = 16 * 1024 * 1024
+
     @classmethod
     async def create(
         cls,
@@ -91,11 +107,75 @@ class StripeSource(BaseSource):
     ) -> StripeSource:
         """Create a new Stripe source instance."""
         instance = cls(auth=auth, logger=logger, http_client=http_client)
+        if config.original_capture is not None:
+            instance._capture_page_source = await StripeCapture.create(
+                instance._read_original, config.original_capture
+            )
+            return instance
+        if isinstance(auth, ManagedAuthProvider):
+            raise SourceError(
+                "Managed Stripe requires an explicitly bound original capture configuration",
+                source_short_name="stripe",
+            )
         if auth.provider_kind == AuthProviderKind.CREDENTIAL:
             instance._api_key = auth.credentials.api_key
         else:
             instance._api_key = await auth.get_token()
         return instance
+
+    @retry(
+        stop=stop_after_attempt(5),
+        retry=retry_if_rate_limit_or_timeout | retry_if_exception_type(AuthProviderRateLimitError),
+        wait=partial(wait_rate_limit_with_backoff, max_rate_limit_wait=None),
+        reraise=True,
+    )
+    async def _read_original(
+        self, path: str, *, params: dict[str, str | int], headers: dict[str, str]
+    ) -> dict[str, JsonValue]:
+        """Read the fixed Stripe origin using the existing managed/direct transport."""
+        if not path.startswith("/v1/") or "?" in path or "#" in path or ".." in path:
+            raise SourceError("Invalid Stripe capture path", source_short_name="stripe")
+        if self.auth.provider_kind == AuthProviderKind.CREDENTIAL:
+            credentials = StripeAuthConfig.model_validate(self.auth.credentials.model_dump())
+            auth_headers = {"Authorization": f"Bearer {credentials.api_key}"}
+        else:
+            auth_headers = await authorization_headers(self.auth)
+        async with self.http_client.stream(
+            "GET",
+            "https://api.stripe.com" + path,
+            params=params,
+            headers={**headers, **auth_headers},
+            timeout=20.0,
+            follow_redirects=False,
+        ) as response:
+            if not response.is_success:
+                # Do not read provider error bodies, which may echo private fields.
+                safe_response = httpx.Response(
+                    response.status_code,
+                    headers={k: v for k, v in response.headers.items() if k == "retry-after"},
+                    request=httpx.Request("GET", "https://api.stripe.com/v1/"),
+                )
+                raise_for_status(
+                    safe_response,
+                    source_short_name="stripe",
+                    token_provider_kind=self.auth.provider_kind,
+                )
+            content = bytearray()
+            async with aclosing(response.aiter_bytes(chunk_size=64 * 1024)) as chunks:
+                async for chunk in chunks:
+                    if len(content) + len(chunk) > self.MAX_CAPTURE_RESPONSE_BYTES:
+                        raise SourceError(
+                            "Stripe capture response exceeds the 16 MiB decoded-body limit; "
+                            "the page was not committed",
+                            source_short_name="stripe",
+                        )
+                    content.extend(chunk)
+            try:
+                return json.loads(content)
+            except (ValueError, UnicodeError):
+                raise SourceError(
+                    "Stripe returned invalid JSON", source_short_name="stripe"
+                ) from None
 
     @retry(
         stop=stop_after_attempt(5),
@@ -551,4 +631,7 @@ class StripeSource(BaseSource):
 
     async def validate(self) -> None:
         """Verify Stripe API key by pinging a lightweight endpoint (/v1/balance)."""
+        if self._capture_page_source is not None:
+            await self._capture_page_source.prepare_cycle(None)
+            return
         await self._get("https://api.stripe.com/v1/balance")

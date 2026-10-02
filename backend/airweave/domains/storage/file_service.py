@@ -10,6 +10,7 @@ Does NOT handle domain exception translation — that's the source's job.
 Raw httpx errors propagate to the caller.
 """
 
+import hashlib
 import os
 import shutil
 from typing import Optional
@@ -20,14 +21,20 @@ import httpx
 from tenacity import retry, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
-from airweave.domains.sources.token_providers.protocol import SourceAuthProvider
+from airweave.domains.entities.canonical.requests import BlobReference
+from airweave.domains.sources.token_providers.protocol import (
+    ManagedAuthProvider,
+    SourceAuthProvider,
+    authorization_headers,
+)
 from airweave.domains.storage.exceptions import FileSkippedException
+from airweave.domains.storage.limits import MAX_FILE_SIZE_BYTES
 from airweave.domains.storage.paths import paths
 from airweave.domains.storage.protocols import StorageBackend
 from airweave.domains.sync_pipeline.file_types import SUPPORTED_FILE_EXTENSIONS
 from airweave.platform.entities._base import FileEntity
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
-from airweave.platform.sources.retry_helpers import (
+from airweave.platform.http_client.retry_helpers import (
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
 )
@@ -37,18 +44,86 @@ from airweave.platform.utils.ssrf import validate_url
 class FileService:
     """Unified file service for downloading and restoring files."""
 
-    MAX_FILE_SIZE_BYTES = 209715200
+    MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_BYTES
 
     def __init__(
         self,
         sync_job_id: UUID,
         storage_backend: StorageBackend,
+        *,
+        sync_id: UUID | None = None,
     ) -> None:
         """Initialize file service."""
         self.sync_job_id = sync_job_id
+        self.sync_id = sync_id
         self.storage = storage_backend
         self.base_temp_dir = paths.temp_sync_dir(sync_job_id)
         self._ensure_base_dir()
+
+    async def store_canonical_blob(
+        self, content: bytes, *, media_type: str | None = None
+    ) -> BlobReference:
+        """Persist immutable source bytes before publishing their record reference."""
+        if self.sync_id is None:
+            raise ValueError("Canonical blob storage requires a sync identity")
+        if len(content) > self.MAX_FILE_SIZE_BYTES:
+            raise ValueError("Canonical blob exceeds the file size limit")
+        digest = hashlib.sha256(content).hexdigest()
+        key = f"canonical/{self.sync_id}/blobs/sha256/{digest}"
+        await self.storage.write_file(key, content)
+        return BlobReference(key=key, sha256=digest, size_bytes=len(content), media_type=media_type)
+
+    async def capture_canonical_url(
+        self,
+        url: str,
+        client: AirweaveHttpClient,
+        auth: SourceAuthProvider,
+        logger: ContextualLogger,
+        media_type: str | None = None,
+        *,
+        follow_redirects: bool = True,
+        expected_media_type: str | None = None,
+    ) -> BlobReference:
+        """Capture original bytes with size/auth checks, independent of search file types."""
+        if self.sync_id is None:
+            raise ValueError("Canonical blob storage requires a sync identity")
+        validate_url(url)
+        headers = await self._resolve_headers(auth, url)
+        temp_path = f"{self.base_temp_dir}/{uuid4()}-canonical"
+        try:
+            try:
+                await self._stream_download(
+                    client,
+                    url,
+                    headers,
+                    temp_path,
+                    logger,
+                    follow_redirects=follow_redirects,
+                    expected_media_type=expected_media_type,
+                )
+            except httpx.HTTPStatusError as exc:
+                if (
+                    exc.response.status_code != 401
+                    or not headers.get("Authorization")
+                    or not auth.supports_refresh
+                ):
+                    raise
+                # Never promote an unauthenticated signed URL to provider credentials.
+                headers = await authorization_headers(auth, refresh=True)
+                await self._stream_download(
+                    client,
+                    url,
+                    headers,
+                    temp_path,
+                    logger,
+                    follow_redirects=follow_redirects,
+                    expected_media_type=expected_media_type,
+                )
+            async with aiofiles.open(temp_path, "rb") as downloaded:
+                content = await downloaded.read(self.MAX_FILE_SIZE_BYTES + 1)
+            return await self.store_canonical_blob(content, media_type=media_type)
+        finally:
+            self._cleanup_temp(temp_path)
 
     def _ensure_base_dir(self) -> None:
         """Ensure temp directory exists."""
@@ -61,12 +136,11 @@ class FileService:
     @staticmethod
     async def _resolve_headers(auth: SourceAuthProvider, url: str) -> dict:
         """Build auth headers. Pre-signed URLs skip the bearer token."""
+        if isinstance(auth, ManagedAuthProvider):
+            return {}
         if "X-Amz-Algorithm" in url or "tempauth=" in url:
             return {}
-        token = await auth.get_token() if hasattr(auth, "get_token") else None
-        if not token:
-            raise ValueError(f"No access token available for downloading {url}")
-        return {"Authorization": f"Bearer {token}"}
+        return await authorization_headers(auth)
 
     # =========================================================================
     # URL Download
@@ -115,16 +189,31 @@ class FileService:
         headers: dict,
         temp_path: str,
         logger: ContextualLogger,
+        *,
+        follow_redirects: bool = True,
+        expected_media_type: str | None = None,
     ) -> None:
         """Stream-download a file to disk with retry on 429/5xx/timeout."""
         async with client.stream(
             "GET",
             url,
             headers=headers,
-            follow_redirects=True,
+            follow_redirects=follow_redirects,
             timeout=httpx.Timeout(180.0, read=540.0),
         ) as response:
             response.raise_for_status()
+            if expected_media_type is not None:
+                actual_type = (
+                    response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                )
+                expected_type = expected_media_type.split(";", 1)[0].strip().lower()
+                if not actual_type or actual_type not in {
+                    expected_type,
+                    "application/octet-stream",
+                }:
+                    raise ValueError(
+                        "Downloaded file content type does not match provider metadata"
+                    )
 
             content_length = response.headers.get("Content-Length")
             if content_length and int(content_length) > self.MAX_FILE_SIZE_BYTES:
@@ -188,10 +277,13 @@ class FileService:
             self._cleanup_temp(temp_path)
             raise
         except httpx.HTTPStatusError as first_error:
-            if first_error.response.status_code == 401 and auth.supports_refresh:
+            if (
+                first_error.response.status_code == 401
+                and headers.get("Authorization")
+                and auth.supports_refresh
+            ):
                 logger.info("Download got 401, refreshing token and retrying")
-                new_token = await auth.force_refresh()
-                headers = {"Authorization": f"Bearer {new_token}"}
+                headers = await authorization_headers(auth, refresh=True)
                 try:
                     await self._stream_download(client, entity.url, headers, temp_path, logger)
                 except Exception:
@@ -200,6 +292,10 @@ class FileService:
             else:
                 self._cleanup_temp(temp_path)
                 raise
+
+        except BaseException:
+            self._cleanup_temp(temp_path)
+            raise
 
         logger.debug(f"Downloaded file to: {temp_path}")
         entity.local_path = temp_path

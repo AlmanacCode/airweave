@@ -7,13 +7,18 @@ from airweave.api.v1.endpoints import (
     auth_providers,
     billing,
     browse_tree,
+    calendar_records,
     collections,
     connect,
     entities,
     entity_counts,
     file_retrieval,
     health,
+    native_imports,
+    native_sources,
     organizations,
+    owned_provisioning,
+    records,
     search,
     search_legacy,
     source_connections,
@@ -47,6 +52,7 @@ api_router.include_router(
     source_rate_limits.router, prefix="/source-rate-limits", tags=["source-rate-limits"]
 )
 api_router.include_router(sync.router, prefix="/sync", tags=["sync"])
+api_router.include_router(records.router, prefix="/sync", tags=["records"])
 api_router.include_router(entities.router, prefix="/entities", tags=["entities"])
 api_router.include_router(entity_counts.router, prefix="/entity-counts", tags=["entity-counts"])
 api_router.include_router(file_retrieval.router, prefix="/files", tags=["files"])
@@ -59,3 +65,12 @@ api_router.include_router(
 )
 api_router.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 api_router.include_router(connect.router, prefix="/connect", tags=["connect"])
+api_router.include_router(native_imports.router, prefix="/native/sources", tags=["native-imports"])
+api_router.include_router(native_sources.router, prefix="/native/sources", tags=["native-sources"])
+
+
+api_router.include_router(calendar_records.router, prefix="/sync", tags=["records"])
+
+api_router.include_router(
+    owned_provisioning.router, prefix="/owned-sources", tags=["owned-sources"]
+)

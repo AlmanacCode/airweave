@@ -1,0 +1,40 @@
+{
+  "probe": "native_google_workspace_read_access",
+  "date": "2026-09-30",
+  "transport_revision": "f47eb90",
+  "temporary_probe_sha256": "1295b94da8446e7b517aeee4b7cc0457ceeb04cf6a857f5ba7194215152dd1bb",
+  "read_only": true,
+  "actual_http_calls": 5,
+  "call_limit": 6,
+  "timeout_seconds": 150,
+  "identity_checks": [
+    "Exact Composio connected-account ID",
+    "Active googledrive toolkit",
+    "Native Drive account email matches selected account"
+  ],
+  "docs": {
+    "sample_source": "Drive files.list, MIME document, pageSize1",
+    "native_request": "GET docs.googleapis.com/v1/documents/{same_file_id}?includeTabsContent=true",
+    "status": 200,
+    "document_id_matches_drive_file": true,
+    "response_bytes": 47353,
+    "tabs_array_returned": true
+  },
+  "sheets": {
+    "sample_source": "Drive files.list, MIME spreadsheet, pageSize1",
+    "sample_returned": false,
+    "native_api_tested": false
+  },
+  "privacy": {
+    "provider_content_persisted": false,
+    "provider_identities_in_evidence": false,
+    "grants_changed": false,
+    "production_host_allowlist_changed": false,
+    "provider_writes": false
+  },
+  "limitations": [
+    "One document proves account capability, not complete Docs capture",
+    "No Sheets native API request or scope proof",
+    "No durable structured representations, indexing, widgets or hosted authorization verified"
+  ]
+}

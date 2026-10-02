@@ -30,3 +30,11 @@ class Environment(str, Enum):
     TEST = "test"
     DEV = "dev"
     PRD = "prd"
+
+
+class AuthMode(str, Enum):
+    """Authentication authority; local explicitly opts into insecure development."""
+
+    API_KEY = "api_key"
+    AUTH0 = "auth0"
+    LOCAL = "local"

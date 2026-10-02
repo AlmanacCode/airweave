@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from airweave.domains.search.protocols import SearchPlanExecutorProtocol
-from airweave.domains.search.types import FilterGroup, SearchPlan, SearchResults
+from airweave.domains.search.types import FilterGroup, QueryEmbeddings, SearchPlan, SearchResults
+from airweave.domains.search.types.embeddings import PreparedQueryEmbeddings
 
 
 class FakeSearchPlanExecutor(SearchPlanExecutorProtocol):
@@ -32,6 +33,17 @@ class FakeSearchPlanExecutor(SearchPlanExecutorProtocol):
         """Seed a sequence of results/errors for successive execute calls."""
         self._sequence = list(sequence)
 
+    async def prepare_query(self, plan: SearchPlan) -> PreparedQueryEmbeddings:
+        """Mirror the internal preparation contract without inference."""
+        result = PreparedQueryEmbeddings(
+            primary=plan.query.primary,
+            variations=tuple(plan.query.variations),
+            strategy=plan.retrieval_strategy,
+            embeddings=QueryEmbeddings(),
+        )
+        result._owner = self
+        return result
+
     async def execute(
         self,
         plan: SearchPlan,
@@ -41,6 +53,8 @@ class FakeSearchPlanExecutor(SearchPlanExecutorProtocol):
         ctx: Any = None,
         collection_readable_id: str = "",
         user_principal: str | None = None,
+        indexed_only: bool = False,
+        prepared_query: PreparedQueryEmbeddings | None = None,
     ) -> SearchResults:
         """Record the call and return seeded result, or raise seeded error."""
         self._calls.append(("execute", plan, user_filter, collection_id))

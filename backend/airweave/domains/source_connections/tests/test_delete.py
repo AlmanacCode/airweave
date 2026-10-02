@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
 from airweave.api.context import ApiContext
 from airweave.core.exceptions import NotFoundException
@@ -32,6 +33,11 @@ ORG_ID = uuid4()
 COLLECTION_ID = uuid4()
 
 
+def _unmanaged_db():
+    """Legacy scenarios have no owned account relationship."""
+    return AsyncMock(scalar=AsyncMock(return_value=None))
+
+
 def _make_ctx() -> ApiContext:
     org = Organization(id=str(ORG_ID), name="Test Org", created_at=NOW, modified_at=NOW)
     return ApiContext(
@@ -42,7 +48,9 @@ def _make_ctx() -> ApiContext:
     )
 
 
-def _make_sc(*, id=None, sync_id=None, readable_collection_id="test-col", name="Test SC", short_name="github"):
+def _make_sc(
+    *, id=None, sync_id=None, readable_collection_id="test-col", name="Test SC", short_name="github"
+):
     sc = MagicMock(spec=SourceConnection)
     sc.id = id or uuid4()
     sc.sync_id = sync_id
@@ -123,7 +131,7 @@ async def test_delete_happy_path(case: DeleteCase):
         sync_service=sync_service,
     )
 
-    result = await svc.delete(AsyncMock(), id=sc.id, ctx=_make_ctx())
+    result = await svc.delete(_unmanaged_db(), id=sc.id, ctx=_make_ctx())
 
     assert result.id == sc.id
     assert sc_repo._store.get(sc.id) is None
@@ -149,8 +157,20 @@ class DeleteErrorCase:
 
 
 DELETE_ERROR_CASES = [
-    DeleteErrorCase("not_found", seed_sc=False, seed_collection=False, expect_exception=NotFoundException, expect_match="Source connection not found"),
-    DeleteErrorCase("collection_not_found", seed_sc=True, seed_collection=False, expect_exception=NotFoundException, expect_match="Collection not found"),
+    DeleteErrorCase(
+        "not_found",
+        seed_sc=False,
+        seed_collection=False,
+        expect_exception=NotFoundException,
+        expect_match="Source connection not found",
+    ),
+    DeleteErrorCase(
+        "collection_not_found",
+        seed_sc=True,
+        seed_collection=False,
+        expect_exception=NotFoundException,
+        expect_match="Collection not found",
+    ),
 ]
 
 
@@ -168,7 +188,7 @@ async def test_delete_error(case: DeleteErrorCase):
     svc = _build_service(sc_repo=sc_repo, collection_repo=col_repo)
 
     with pytest.raises(case.expect_exception, match=case.expect_match):
-        await svc.delete(AsyncMock(), id=sc.id, ctx=_make_ctx())
+        await svc.delete(_unmanaged_db(), id=sc.id, ctx=_make_ctx())
 
 
 async def test_delete_sync_service_failure_propagates():
@@ -192,4 +212,17 @@ async def test_delete_sync_service_failure_propagates():
     )
 
     with pytest.raises(RuntimeError, match="sync delete boom"):
-        await svc.delete(AsyncMock(), id=sc.id, ctx=_make_ctx())
+        await svc.delete(_unmanaged_db(), id=sc.id, ctx=_make_ctx())
+
+
+async def test_native_delete_rejected_before_cleanup():
+    sc = _make_sc(short_name="almanac")
+    repo = FakeSourceConnectionRepository()
+    repo.seed(sc.id, sc)
+    sync_service = AsyncMock()
+    with pytest.raises(HTTPException) as error:
+        await _build_service(sc_repo=repo, sync_service=sync_service).delete(
+            _unmanaged_db(), id=sc.id, ctx=_make_ctx()
+        )
+    assert error.value.status_code == 409
+    sync_service.delete.assert_not_awaited()

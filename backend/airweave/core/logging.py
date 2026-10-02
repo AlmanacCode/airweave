@@ -331,5 +331,11 @@ class LoggerConfigurator:
         return ContextualLogger(logger, prefix, dimensions)
 
 
+# HTTPX INFO includes full URLs; HTTPCore DEBUG includes response headers/cookies.
+# Application DEBUG must not implicitly enable those raw credential-bearing traces.
+# Sanitized source diagnostics remain owned by AirweaveHttpClient.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 # Default logger instance
 logger = LoggerConfigurator.configure_logger(__name__)

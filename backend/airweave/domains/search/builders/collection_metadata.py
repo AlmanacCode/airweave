@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api.context import ApiContext
 from airweave.domains.collections.protocols import CollectionRepositoryProtocol
+from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.protocols import (
     EntityCountRepositoryProtocol,
     EntityDefinitionRegistryProtocol,
@@ -181,6 +182,10 @@ class CollectionMetadataBuilder:
             "A modern knowledge base and team wiki for documenting and sharing "
             "information with powerful search and integrations."
         ),
+        "wispr": (
+            "Captured meeting notes and transcripts from Wispr. Search covers the "
+            "content exposed by the connected account; capture may be partial."
+        ),
         "slack": (
             "A team communication platform featuring channels, direct messages, and "
             "integrations for real-time collaboration."
@@ -315,12 +320,25 @@ class CollectionMetadataBuilder:
         # 3. Build metadata for each source connection
         sources: list[SourceMetadata] = []
         for sc in source_connections:
+            if not sc.is_authenticated:
+                continue
             # Get entity definitions this source can produce (in-memory, sync)
             entity_definitions = self._entity_definition_registry.list_for_source(sc.short_name)
 
-            # Get entity counts for this source connection's sync
+            entry = self._source_registry.get(sc.short_name)
+            canonical_types = tuple(getattr(entry.source_class_ref, "canonical_record_types", ()))
+            captured_counts = None
+            if canonical_types:
+                counts = (
+                    await CanonicalQueryStore().captured_counts(db, ctx.organization.id, sc.sync_id)
+                    if sc.sync_id
+                    else {}
+                )
+                captured_counts = {kind: counts.get(kind, 0) for kind in canonical_types}
+
+            # Legacy counts describe indexed entity classes, not captured records.
             counts_by_short_name: dict[str, int] = {}
-            if sc.sync_id:
+            if sc.sync_id and not canonical_types:
                 entity_counts = await self._entity_count_repo.get_counts_per_sync_and_type(
                     db, sc.sync_id
                 )
@@ -330,7 +348,9 @@ class CollectionMetadataBuilder:
             # Build entity type metadata with fields and counts
             entity_types: list[EntityTypeMetadata] = []
             for entity_def in entity_definitions:
-                count = counts_by_short_name.get(entity_def.short_name, 0)
+                count = (
+                    None if canonical_types else counts_by_short_name.get(entity_def.short_name, 0)
+                )
                 fields = self._extract_fields(entity_def.entity_schema)
 
                 entity_types.append(
@@ -349,7 +369,8 @@ class CollectionMetadataBuilder:
                     short_name=sc.short_name,
                     description=self._get_source_description(sc.short_name),
                     entity_types=entity_types,
-                    federated=entry.federated_search,
+                    federated=entry.federated_search and not canonical_types,
+                    captured_record_counts=captured_counts,
                 )
             )
 

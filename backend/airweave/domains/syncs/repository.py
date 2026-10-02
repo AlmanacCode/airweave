@@ -52,9 +52,16 @@ class SyncRepository(SyncRepositoryProtocol):
         obj_in: SyncCreate,
         ctx: ApiContext,
         uow: Optional[UnitOfWork] = None,
+        initial_pipeline_version: int = 1,
     ) -> schemas.Sync:
         """Create a new sync with its connection associations."""
-        return await crud.sync.create(db=db, obj_in=obj_in, ctx=ctx, uow=uow)
+        return await crud.sync.create(
+            db=db,
+            obj_in=obj_in,
+            ctx=ctx,
+            uow=uow,
+            initial_pipeline_version=initial_pipeline_version,
+        )
 
     async def update(
         self,

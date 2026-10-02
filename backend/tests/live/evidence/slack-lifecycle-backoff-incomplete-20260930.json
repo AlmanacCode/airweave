@@ -1,0 +1,178 @@
+{
+  "provider": "slack",
+  "date": "2026-09-30",
+  "scope": "full accessible history without hidden filter",
+  "limits": {
+    "requests": 600,
+    "observations": 10000,
+    "seconds": 1800
+  },
+  "attempt": {
+    "provider_requests": 74,
+    "observations": 328,
+    "started_scopes": 2,
+    "completed_scopes": 0,
+    "job_status": "cancelled",
+    "reported_error_type": "AttributeError",
+    "checkpoint_unchanged": true,
+    "rate_limits": [
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 12
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 14
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 17
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 19
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 21
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 23
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 25
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 27
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 30
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 33
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 35
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 37
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 39
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 41
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 43
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 45
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 47
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 49
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 51
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 54
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 56
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 58
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 60
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 62
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 64
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 66
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 68
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 70
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 72
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 74
+      }
+    ]
+  },
+  "diagnosis": "Deadline cancellation transitioned job to cancelled; fixture lacked connection metadata accessed by cancellation telemetry, masking timeout with AttributeError. Fixture corrected after run; no rerun.",
+  "free_disk_bytes_before": 9485815808,
+  "second_process_started": false,
+  "schema_removed": true,
+  "blob_directory_removed": true,
+  "full_scope_verified": false,
+  "provider_writes": false
+}

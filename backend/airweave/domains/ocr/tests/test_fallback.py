@@ -137,8 +137,8 @@ async def test_fallback_ocr(case: Case):
 
 
 @pytest.mark.asyncio
-async def test_partial_none_does_not_trigger_fallback():
-    """When a provider returns some None and some real results, don't fall back."""
+async def test_partial_failure_retries_only_unresolved_files():
+    """Keep successful local work while later providers handle unsupported files."""
     primary = FakeOcrProvider(
         overrides={"/tmp/a.pdf": "# A", "/tmp/b.pdf": None},
         default_markdown=None,
@@ -153,10 +153,10 @@ async def test_partial_none_does_not_trigger_fallback():
     result = await fallback.convert_batch(["/tmp/a.pdf", "/tmp/b.pdf"])
 
     assert result["/tmp/a.pdf"] == "# A"
-    assert result["/tmp/b.pdf"] is None
-    assert cb.successes == ["primary"]
+    assert result["/tmp/b.pdf"] == "# Secondary"
+    assert cb.successes == ["primary", "secondary"]
     assert cb.failures == []
-    assert secondary.call_count == 0
+    assert secondary.calls == [["/tmp/b.pdf"]]
 
 
 def test_rejects_empty_providers():

@@ -17,7 +17,7 @@ import httpx
 from httpx_ntlm import HttpNtlmAuth
 from tenacity import retry, stop_after_attempt
 
-from airweave.platform.sources.retry_helpers import (
+from airweave.platform.http_client.retry_helpers import (
     retry_if_ntlm_auth_or_rate_limit_or_timeout,
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,

@@ -74,9 +74,10 @@ class FakeSyncRepository:
         obj_in: SyncCreate,
         ctx: ApiContext,
         uow: Optional[UnitOfWork] = None,
+        initial_pipeline_version: int = 1,
     ) -> schemas.Sync:
         """Record call and return canned result."""
-        self._calls.append(("create", db, obj_in, ctx, uow))
+        self._calls.append(("create", db, obj_in, ctx, uow, initial_pipeline_version))
         if self._create_result is None:
             raise RuntimeError("FakeSyncRepository.create_result not configured")
         return self._create_result

@@ -55,13 +55,13 @@ from airweave.platform.entities.sharepoint_online import (
     SharePointOnlineFileDeletionEntity,
 )
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
-from airweave.platform.sources._base import BaseSource
-from airweave.platform.sources.http_helpers import raise_for_status
-from airweave.platform.sources.microsoft_sensitivity_labels import SensitivityLabelFilter
-from airweave.platform.sources.retry_helpers import (
+from airweave.platform.http_client.retry_helpers import (
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
 )
+from airweave.platform.sources._base import BaseSource
+from airweave.platform.sources.http_helpers import raise_for_status
+from airweave.platform.sources.microsoft_sensitivity_labels import SensitivityLabelFilter
 from airweave.platform.sources.sharepoint_online.acl import extract_access_control
 from airweave.platform.sources.sharepoint_online.builders import (
     build_drive_entity,

@@ -9,6 +9,10 @@ from uuid import UUID
 from airweave.core.protocols.registry import BaseRegistryEntry
 from airweave.domains.auth_provider._base import BaseAuthProvider
 from airweave.domains.credentials.types import DecryptedCredential
+from airweave.domains.sources.token_providers.protocol import (
+    ManagedAuthProvider,
+    ManagedToolAuthProvider,
+)
 from airweave.models.connection import Connection
 from airweave.models.source_connection import SourceConnection
 from airweave.platform.configs._base import BaseConfig, Fields
@@ -91,3 +95,4 @@ class AuthConfig:
     credentials: Any
     auth_provider_instance: Optional[BaseAuthProvider]
     decrypted_credential: Optional[DecryptedCredential] = field(default=None)
+    managed_auth: ManagedAuthProvider | ManagedToolAuthProvider | None = None

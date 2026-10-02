@@ -1,6 +1,6 @@
 """Fake embedder implementations for testing."""
 
-from airweave.domains.embedders.types import DenseEmbedding, SparseEmbedding
+from airweave.domains.embedders.types import DenseEmbedding, EmbeddingPurpose, SparseEmbedding
 
 
 class FakeDenseEmbedder:
@@ -44,7 +44,9 @@ class FakeDenseEmbedder:
         self._check_error()
         return DenseEmbedding(vector=[0.0] * self._dimensions)
 
-    async def embed_many(self, texts: list[str]) -> list[DenseEmbedding]:
+    async def embed_many(
+        self, texts: list[str], *, purpose: EmbeddingPurpose = "document"
+    ) -> list[DenseEmbedding]:
         """Return zero-vectors for each text."""
         self._check_error()
         return [DenseEmbedding(vector=[0.0] * self._dimensions) for _ in texts]

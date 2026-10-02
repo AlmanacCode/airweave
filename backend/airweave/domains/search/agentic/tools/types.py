@@ -57,6 +57,8 @@ class SearchToolResult:
     new_count: int
     requested_limit: int = 0  # for pagination warning
     requested_offset: int = 0  # for pagination warning
+    retrieval_incomplete: bool = False
+    excluded_candidates: int = 0
 
 
 @dataclass(frozen=True)

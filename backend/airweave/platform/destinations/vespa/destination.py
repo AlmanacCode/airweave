@@ -26,6 +26,7 @@ from airweave.platform.destinations._base import VectorDBDestination
 from airweave.platform.destinations.vespa.client import VespaClient
 from airweave.platform.destinations.vespa.query_builder import QueryBuilder
 from airweave.platform.destinations.vespa.transformer import EntityTransformer
+from airweave.platform.destinations.vespa.types import VespaDocument
 from airweave.platform.entities._base import BaseEntity
 from airweave.schemas.search import AirweaveTemporalConfig
 from airweave.schemas.search_result import AirweaveSearchResult
@@ -140,11 +141,30 @@ class VespaDestination(VectorDBDestination):
         """
         self.logger.debug("Vespa schema is managed via vespa-deploy, skipping setup_collection")
 
-    async def bulk_insert(self, entities: List[BaseEntity]) -> None:
+    def prepare_documents(self, entities: List[BaseEntity]) -> Dict[str, List[VespaDocument]]:
+        """Strictly transform once so the durable manifest matches the actual feed."""
+        documents = self._transformer.transform_batch(entities)
+        if sum(len(group) for group in documents.values()) != len(entities):
+            raise RuntimeError("Vespa transformation dropped required projection chunks")
+        return documents
+
+    async def feed_prepared(self, documents: Dict[str, List[VespaDocument]]) -> None:
+        """Feed precisely the already-manifested documents, failing partial results."""
+        if self._client is None:
+            raise RuntimeError("Vespa client not initialized")
+        expected = sum(len(group) for group in documents.values())
+        result = await self._client.feed_documents(documents)
+        if result.failed_docs:
+            self._handle_feed_failures(result.failed_docs, expected)
+        if result.success_count != expected:
+            raise RuntimeError("Vespa feed did not acknowledge every prepared document")
+
+    async def bulk_insert(self, entities: List[BaseEntity], *, strict: bool = False) -> None:
         """Transform entities and batch feed to Vespa.
 
         Args:
             entities: List of entities to insert
+            strict: Reject any dropped transformation before feeding.
         """
         if not entities:
             return
@@ -162,6 +182,8 @@ class VespaDestination(VectorDBDestination):
         # Convert to dict format for client
         docs_dict = dict(docs_by_schema.items())
         total_docs = sum(len(docs) for docs in docs_dict.values())
+        if strict and total_docs != len(entities):
+            raise RuntimeError("Vespa transformation dropped required projection chunks")
         transform_ms = (time.perf_counter() - transform_start) * 1000
 
         self.logger.info(

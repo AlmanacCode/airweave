@@ -12,14 +12,18 @@ from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
+from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import (
     ActivityError,
     ApplicationError,
+    WorkflowAlreadyStartedError,
     is_cancelled_exception,
 )
 
 with workflow.unsafe.imports_passed_through():
+    from airweave.domains.entities.canonical.projection_models import (
+        canonical_projection_workflow_id,
+    )
     from airweave.domains.temporal.activities import (
         create_sync_job_activity,
         run_sync_activity,
@@ -30,6 +34,9 @@ with workflow.unsafe.imports_passed_through():
     from airweave.domains.temporal.exceptions import (
         CLASSIFIED_USER_ERROR_TYPE,
         ORPHANED_SYNC_ERROR_TYPE,
+    )
+    from airweave.domains.temporal.workflows.project_canonical_records import (
+        ProjectCanonicalRecordsWorkflow,
     )
 
 # ---------------------------------------------------------------------------
@@ -189,22 +196,50 @@ class RunSourceConnectionWorkflow:
         local_development = ctx_dict.get("local_development", False)
         heartbeat_timeout = _HEARTBEAT_TIMEOUT_LOCAL if local_development else _HEARTBEAT_TIMEOUT
 
-        await workflow.execute_activity(
-            run_sync_activity,
-            args=[
-                sync_dict,
-                sync_job_dict,
-                collection_dict,
-                connection_dict,
-                ctx_dict,
-                access_token,
-                force_full_sync,
-            ],
-            start_to_close_timeout=_SYNC_TIMEOUT,
-            heartbeat_timeout=heartbeat_timeout,
-            cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
-            retry_policy=_NO_RETRY,
-        )
+        try:
+            await workflow.execute_activity(
+                run_sync_activity,
+                args=[
+                    sync_dict,
+                    sync_job_dict,
+                    collection_dict,
+                    connection_dict,
+                    ctx_dict,
+                    access_token,
+                    force_full_sync,
+                ],
+                start_to_close_timeout=_SYNC_TIMEOUT,
+                heartbeat_timeout=heartbeat_timeout,
+                cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+                retry_policy=_NO_RETRY,
+            )
+        finally:
+            # Starting the child is durable workflow history. Capture may be partial;
+            # projection consumes only committed rows and owns its own retries/status.
+            organization_id = str(ctx_dict["organization"]["id"])
+            sync_id = str(sync_dict["id"])
+            if workflow.patched("canonical-projection-identity-v1"):
+                try:
+                    await asyncio.shield(
+                        workflow.start_child_workflow(
+                            ProjectCanonicalRecordsWorkflow.run,
+                            args=[organization_id, sync_id, None, 0, 0, True],
+                            id=canonical_projection_workflow_id(organization_id, sync_id),
+                            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+                            parent_close_policy=workflow.ParentClosePolicy.ABANDON,
+                        )
+                    )
+                except WorkflowAlreadyStartedError:
+                    pass  # Maintenance or an explicit operator run already owns projection.
+            else:
+                await asyncio.shield(
+                    workflow.start_child_workflow(
+                        ProjectCanonicalRecordsWorkflow.run,
+                        args=[organization_id, sync_id],
+                        id=f"projection:{sync_dict['id']}:{workflow.info().run_id}",
+                        parent_close_policy=workflow.ParentClosePolicy.ABANDON,
+                    )
+                )
 
     # ------------------------------------------------------------------
     # Phase 3: State transitions

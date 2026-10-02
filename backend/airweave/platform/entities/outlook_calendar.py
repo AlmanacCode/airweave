@@ -454,3 +454,69 @@ class OutlookCalendarAttachmentEntity(FileEntity):
         if self.event_web_url:
             return self.event_web_url
         return f"https://outlook.office.com/calendar/item/{self.event_id}"
+
+
+class OutlookCalendarMetadataEntity(BaseEntity):
+    """Owned calendar metadata without invented permission defaults."""
+
+    native_id: str = AirweaveField(..., description="Native calendar ID.", is_entity_id=True)
+    title: str = AirweaveField(..., description="Calendar name.", is_name=True, embeddable=True)
+    owner: Optional[str] = AirweaveField(None, description="Calendar owner.", embeddable=True)
+    can_edit: Optional[bool] = AirweaveField(None, description="Native edit permission.")
+    can_view_private_items: Optional[bool] = AirweaveField(
+        None, description="Native private-item permission."
+    )
+    is_default_calendar: Optional[bool] = AirweaveField(None, description="Native default status.")
+
+
+class OutlookCalendarSearchEventEntity(BaseEntity):
+    """Searchable native facts; wall times never gain an inferred UTC offset."""
+
+    native_id: str = AirweaveField(..., description="Native event ID.", is_entity_id=True)
+    title: str = AirweaveField(..., description="Event subject.", is_name=True, embeddable=True)
+    calendar_id: str = AirweaveField(..., description="Native owning calendar ID.")
+    event_type: str = AirweaveField(..., description="Native event kind.", embeddable=True)
+    start: str = AirweaveField(..., description="Native start wall time and zone.", embeddable=True)
+    end: str = AirweaveField(..., description="Native end wall time and zone.", embeddable=True)
+    is_all_day: bool = AirweaveField(..., description="Native all-day status.", embeddable=True)
+    is_cancelled: bool = AirweaveField(
+        ..., description="Native cancellation status.", embeddable=True
+    )
+    organizer: Optional[str] = AirweaveField(None, description="Organizer.", embeddable=True)
+    attendees: List[str] = AirweaveField(
+        default_factory=list,
+        description="Participants with native response status.",
+        embeddable=True,
+    )
+    recurrence: Optional[str] = AirweaveField(
+        None, description="Native recurrence pattern and range.", embeddable=True
+    )
+    series_master_id: Optional[str] = AirweaveField(None, description="Native recurring-series ID.")
+    original_start: Optional[str] = AirweaveField(
+        None, description="Native original occurrence start.", embeddable=True
+    )
+    original_start_timezone: Optional[str] = AirweaveField(
+        None, description="Original native start zone.", embeddable=True
+    )
+    original_end_timezone: Optional[str] = AirweaveField(
+        None, description="Original native end zone.", embeddable=True
+    )
+    locations: List[str] = AirweaveField(
+        default_factory=list, description="Native location names.", embeddable=True
+    )
+    categories: List[str] = AirweaveField(
+        default_factory=list, description="Native categories.", embeddable=True
+    )
+    show_as: Optional[str] = AirweaveField(
+        None, description="Native availability.", embeddable=True
+    )
+    web_link: Optional[str] = AirweaveField(None, description="Native Outlook event URL.")
+
+    @computed_field(return_type=Optional[str])
+    def web_url(self) -> Optional[str]:
+        """Expose only the retained native link to shared search result serialization."""
+        return self.web_link
+
+
+class OutlookCalendarHtmlEventEntity(OutlookCalendarSearchEventEntity, FileEntity):
+    """Same event facts plus a disposable HTML input for the shared converter."""

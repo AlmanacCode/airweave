@@ -1,27 +1,48 @@
-"""Gmail source implementation for syncing email threads, messages, and attachments.
+"""Gmail originals through the canonical page engine and native history checkpoints.
 
-Uses concurrent/batching processing for optimal performance:
-  * Thread detail fetch + per-thread processing
-  * Per-thread message processing
-  * Per-message attachment fetch & processing
-  * Incremental history message-detail fetch
+The upstream entity extractor remains available for legacy consumers; owned capture
+uses one fenced message/blob authority and independent derived projection.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import json
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
 import httpx
-from tenacity import retry, stop_after_attempt
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from tenacity import retry, retry_if_exception, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
+from airweave.domains.auth_provider.exceptions import (
+    AuthProviderRateLimitError,
+    AuthProviderServerError,
+)
 from airweave.domains.browse_tree.types import NodeSelectionData
-from airweave.domains.sources.exceptions import SourceAuthError
-from airweave.domains.sources.token_providers.protocol import TokenProviderProtocol
+from airweave.domains.entities.canonical.cycle_models import CaptureCycle, CycleConfiguration
+from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.page_source import (
+    CapturePage,
+    CapturePlan,
+    InvalidScanContinuation,
+)
+from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope
+from airweave.domains.entities.canonical.scan_models import ScanContinuation
+from airweave.domains.sources.exceptions import (
+    SourceAuthError,
+    SourceError,
+    SourceRateLimitError,
+    SourceServerError,
+)
+from airweave.domains.sources.token_providers.protocol import (
+    SourceAuthProvider,
+    authorization_headers,
+)
 from airweave.domains.storage import FileSkippedException
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.syncs.cursors.cursor import SyncCursor
@@ -36,26 +57,60 @@ from airweave.platform.entities.gmail import (
     GmailThreadEntity,
 )
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
-from airweave.platform.sources._base import BaseSource
-from airweave.platform.sources.http_helpers import raise_for_status
-from airweave.platform.sources.retry_helpers import (
+from airweave.platform.http_client.bounded_response import bounded_response_bytes
+from airweave.platform.http_client.retry_helpers import (
     wait_rate_limit_with_backoff,
 )
+from airweave.platform.sources._base import BaseSource
+from airweave.platform.sources.gmail_capture import GmailCapture
+from airweave.platform.sources.gmail_errors import GmailThrottleError, raise_gmail_throttle
+from airweave.platform.sources.gmail_pages import GmailPages, invalid_page_token
+from airweave.platform.sources.http_helpers import raise_for_status
 from airweave.platform.utils.filename_utils import safe_filename
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 
 
 def _should_retry_gmail_request(exception: Exception) -> bool:
     """Custom retry condition that excludes 404 errors but includes 429 and timeouts."""
+    if isinstance(exception, GmailThrottleError):
+        return exception.retry_after is None or exception.retry_after <= 120
+    if isinstance(exception, (SourceRateLimitError, AuthProviderRateLimitError)):
+        # The shared wait caps at 120s. Defer a longer provider minimum instead
+        # of retrying before it or extending this request's bounded wait.
+        return exception.retry_after <= 120
     if isinstance(exception, httpx.HTTPStatusError):
-        if exception.response.status_code == 404:
-            return False
         if exception.response.status_code == 429:
-            return True
-        return True
-    if isinstance(exception, (httpx.ConnectTimeout, httpx.ReadTimeout)):
+            try:
+                return float(exception.response.headers.get("Retry-After", "0")) <= 120
+            except ValueError:
+                return True  # Preserve the shared helper's fallback for invalid headers.
+        return exception.response.status_code >= 500
+    if isinstance(
+        exception,
+        (
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            SourceServerError,
+            AuthProviderServerError,
+        ),
+    ):
         return True
     return False
+
+
+def _wait_gmail_request(retry_state) -> float:
+    """Honor native quota timing; otherwise reuse the existing bounded backoff."""
+    error = retry_state.outcome.exception()
+    if isinstance(error, GmailThrottleError) and error.retry_after is not None:
+        return max(1.0, error.retry_after)
+    return wait_rate_limit_with_backoff(retry_state)
+
+
+class GmailProfile(BaseModel):
+    """Native mailbox identity; unrelated profile fields remain provider-owned."""
+
+    model_config = ConfigDict(extra="ignore")
+    emailAddress: str = Field(pattern=r"^[^\s@]+@[^\s@]+$")
 
 
 @source(
@@ -83,6 +138,90 @@ class GmailSource(BaseSource):
     It supports syncing email threads, individual messages, and file attachments.
     """
 
+    canonical_record_types = ("message",)
+
+    canonical_container_parents = {}
+    capture_config: GmailConfig
+    _verified_mailbox: str | None = None
+
+    def _require_mailbox(self) -> None:
+        """Direct capture calls cannot bypass native identity verification."""
+        expected = self.capture_config.expected_mailbox
+        if expected is None or self._verified_mailbox != expected.casefold():
+            raise ValueError("Owned Gmail capture requires an attested mailbox identity")
+
+    @property
+    def capture_cycle_configuration(self) -> CycleConfiguration:
+        """Bind the actual query and typed filters; preserve every existing filtered scope."""
+        self._require_mailbox()
+        query = self._build_gmail_query()
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "capture_version": 2,
+                    "query": query,
+                    "filters": self.capture_config.model_dump(mode="json"),
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        return CycleConfiguration(
+            fingerprint=fingerprint,
+            parents={"message": (None,)},
+            known_object_validation=() if query else ("message",),
+        )
+
+    def _canonical_capture(self, files: FileService | None = None) -> GmailCapture:
+        self._require_mailbox()
+        return GmailCapture(
+            self._get_capture_json,
+            self._build_gmail_query(),
+            files=files,
+            attachment_get=self._get_mime_json,
+        )
+
+    async def prepare_cycle(self, previous: CaptureCycle | None) -> CapturePlan:
+        """Plan full mailbox capture or changes from verified canonical progress."""
+        return await GmailPages(self._canonical_capture()).prepare(
+            previous, self.capture_cycle_configuration
+        )
+
+    def initial_continuation(self, cycle: CaptureCycle) -> ScanContinuation:
+        """Resume the cycle's original mailbox boundary, never a fresh profile value."""
+        self._require_mailbox()
+        return GmailPages.initial(cycle)
+
+    async def capture_page(
+        self,
+        scope: CompletedScope,
+        continuation: ScanContinuation,
+        *,
+        files: FileService,
+        parent: SourceRecord | None = None,
+    ) -> CapturePage:
+        """Native messages enter the same page transaction as their continuation."""
+        if scope != CompletedScope(record_type="message") or parent is not None:
+            raise ValueError("Gmail requires its independent message scope")
+        return await GmailPages(self._canonical_capture(files)).page(continuation)
+
+    async def refresh_known(self, record: SourceRecord, *, files: FileService) -> CaptureRecord:
+        """Exact current GET proves unfiltered mailbox membership, including known omissions."""
+        if (
+            self._build_gmail_query()
+            or record.identity.record_type != "message"
+            or record.parent is not None
+        ):
+            raise ValueError("Exact Gmail omission refresh requires unfiltered mailbox messages")
+        return await self._canonical_capture(files).message(record.identity.native_id)
+
+    def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
+        """Mail messages have no canonical child scopes."""
+        raise ValueError("Gmail has no child capture scopes")
+
+    async def confirm_absent(self, record: SourceRecord) -> None:
+        """Unfiltered omissions require exact hydration; filtered absence describes only scope."""
+        raise ValueError("Gmail omission must use declared exact known-object validation")
+
     # -----------------------
     # Construction / Config
     # -----------------------
@@ -90,7 +229,7 @@ class GmailSource(BaseSource):
     async def create(
         cls,
         *,
-        auth: TokenProviderProtocol,
+        auth: SourceAuthProvider,
         logger: ContextualLogger,
         http_client: AirweaveHttpClient,
         config: GmailConfig,
@@ -98,6 +237,7 @@ class GmailSource(BaseSource):
         """Create a new Gmail source instance."""
         instance = cls(auth=auth, logger=logger, http_client=http_client)
 
+        instance.capture_config = config
         config_dict = config.model_dump() if config else {}
         instance.batch_size = int(config_dict.get("batch_size", 30))
         instance.max_queue_size = int(config_dict.get("max_queue_size", 200))
@@ -111,6 +251,8 @@ class GmailSource(BaseSource):
             "excluded_categories", ["promotions", "social"]
         )
         instance.gmail_query = config_dict.get("gmail_query")
+        if config.expected_mailbox is not None:
+            await instance.validate()
 
         return instance
 
@@ -230,18 +372,16 @@ class GmailSource(BaseSource):
 
     async def _authed_headers(self) -> Dict[str, str]:
         """Build Authorization headers with a fresh token."""
-        token = await self.auth.get_token()
-        return {"Authorization": f"Bearer {token}"}
+        return await authorization_headers(self.auth)
 
     async def _refresh_and_get_headers(self) -> Dict[str, str]:
         """Force-refresh the token and return updated headers."""
-        new_token = await self.auth.force_refresh()
-        return {"Authorization": f"Bearer {new_token}"}
+        return await authorization_headers(self.auth, refresh=True)
 
     @retry(
         stop=stop_after_attempt(5),
-        retry=_should_retry_gmail_request,
-        wait=wait_rate_limit_with_backoff,
+        retry=retry_if_exception(_should_retry_gmail_request),
+        wait=_wait_gmail_request,
         reraise=True,
     )
     async def _get(self, url: str, params: Optional[dict] = None) -> dict:
@@ -259,11 +399,9 @@ class GmailSource(BaseSource):
             response = await self.http_client.get(url, headers=headers, params=params)
 
         if response.status_code == 429:
-            self.logger.warning(
-                f"Got 429 Rate Limited from Gmail API. Headers: {response.headers}. "
-                f"Body: {response.text}."
-            )
+            self.logger.warning("Gmail rate limit reached")
 
+        raise_gmail_throttle(response)
         raise_for_status(
             response,
             source_short_name=self.short_name,
@@ -273,6 +411,68 @@ class GmailSource(BaseSource):
         self.logger.debug(f"Received response from {url} - Status: {response.status_code}")
         self.logger.debug(f"Response data keys: {list(data.keys())}")
         return data
+
+    @retry(
+        stop=stop_after_attempt(5),
+        retry=retry_if_exception(_should_retry_gmail_request),
+        wait=_wait_gmail_request,
+        reraise=True,
+    )
+    async def _get_capture_json(self, url: str, params: Optional[dict] = None) -> dict:
+        """Bound canonical JSON responses while streaming; native failures remain visible."""
+        return await self._get_mime_json(url, max_bytes=32 * 1024 * 1024, params=params)
+
+    async def _get_mime_json(
+        self, url: str, *, max_bytes: int, params: Optional[dict] = None
+    ) -> dict:
+        """Read bounded attachment JSON through the managed source HTTP transport."""
+        headers = {**await self._authed_headers(), "Accept-Encoding": "identity"}
+        for attempt in range(2):
+            async with self.http_client.stream(
+                "GET", url, headers=headers, params=params
+            ) as response:
+                if response.status_code == 401 and attempt == 0 and self.auth.supports_refresh:
+                    headers = {
+                        **await self._refresh_and_get_headers(),
+                        "Accept-Encoding": "identity",
+                    }
+                    continue
+                if response.headers.get("content-encoding", "identity").lower() != "identity":
+                    raise SourceError(
+                        "Gmail did not honor uncompressed bounded response request",
+                        source_short_name="gmail",
+                    )
+                maximum = max_bytes if response.is_success else min(max_bytes, 65536)
+                body = await self._bounded_response_bytes(response, maximum)
+                buffered = httpx.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    request=response.request,
+                    content=bytes(body),
+                )
+                if response.status_code == 400 and params and params.get("pageToken"):
+                    try:
+                        native_error = json.loads(body)
+                    except (ValueError, UnicodeError):
+                        native_error = None
+                    if isinstance(native_error, dict) and invalid_page_token(native_error):
+                        raise InvalidScanContinuation("Gmail rejected its saved page token")
+                raise_gmail_throttle(buffered)
+                raise_for_status(
+                    buffered,
+                    source_short_name=self.short_name,
+                    token_provider_kind=self.auth.provider_kind,
+                )
+                value = json.loads(body)
+                if not isinstance(value, dict):
+                    raise ValueError("Gmail response must be an object")
+                return value
+        raise AssertionError("Unreachable Gmail refresh state")
+
+    @staticmethod
+    async def _bounded_response_bytes(response: httpx.Response, maximum: int) -> bytes:
+        """Own the raw iterator; identity encoding makes this a decoded-content bound too."""
+        return await bounded_response_bytes(response, maximum, label="Gmail response")
 
     # -----------------------
     # Cursor helper
@@ -894,5 +1094,18 @@ class GmailSource(BaseSource):
             raise
 
     async def validate(self) -> None:
-        """Validate credentials by pinging the Gmail user profile."""
-        await self._get("https://gmail.googleapis.com/gmail/v1/users/me/profile")
+        """Re-attest the native mailbox before permitting owned capture."""
+        self._verified_mailbox = None
+        raw = await self._get_capture_json(
+            "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+            params={"fields": "emailAddress"},
+        )
+        try:
+            profile = GmailProfile.model_validate(raw)
+        except ValidationError:
+            raise ValueError("Gmail returned an invalid mailbox identity") from None
+        expected = self.capture_config.expected_mailbox
+        if expected is not None:
+            if profile.emailAddress.casefold() != expected.casefold():
+                raise ValueError("Gmail mailbox identity does not match the trusted binding")
+            self._verified_mailbox = expected.casefold()

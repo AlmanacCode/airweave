@@ -78,11 +78,11 @@ class WorkerControlServer:
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
-        site = web.TCPSite(self._runner, "0.0.0.0", self._config.metrics_port)
+        site = web.TCPSite(self._runner, self._config.bind_host, self._config.metrics_port)
         await site.start()
 
         logger.info(
-            f"Control server started on 0.0.0.0:{self._config.metrics_port} "
+            f"Control server started on {self._config.bind_host}:{self._config.metrics_port} "
             f"(endpoints: /health, /metrics, /status, /drain)"
         )
 

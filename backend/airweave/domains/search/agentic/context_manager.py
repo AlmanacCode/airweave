@@ -288,10 +288,17 @@ class ContextManager:
 
     def _fit_search_result(self, result: SearchToolResult, available_tokens: int) -> str:
         """Fit search summaries into budget, dropping from bottom."""
+        notice = ""
+        if result.retrieval_incomplete or result.excluded_candidates:
+            notice = (
+                f"Retrieval incomplete: {result.excluded_candidates} stale or inaccessible "
+                "candidates were excluded. An empty or short page does not prove "
+                "that no other matches exist.\n\n"
+            )
         if not result.summaries:
-            return "No results found."
+            return notice + ("No currently visible results." if notice else "No results found.")
 
-        header = f"**{len(result.summaries)} results** ({result.new_count} new):\n\n"
+        header = notice + f"**{len(result.summaries)} results** ({result.new_count} new):\n\n"
         header_tokens = self._tokenizer.count_tokens(header)
         remaining = available_tokens - header_tokens
 

@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
 from temporalio.service import RPCError, RPCStatusCode
 
 from airweave.domains.temporal.exceptions import InvalidCronExpressionError
@@ -628,7 +627,7 @@ async def test_delete_all_schedules_for_sync(case: DeleteAllCase):
     svc = _build_svc()
     call_log = []
 
-    async def mock_delete(schedule_id, sync_id, db, ctx):
+    async def mock_delete(schedule_id, sync_id, db, ctx, *, uow=None):
         call_log.append(schedule_id)
         for prefix in case.delete_raises:
             if schedule_id.startswith(prefix):
@@ -856,10 +855,7 @@ async def test_pause_schedules_pauses_all_prefixes():
         f"minute-sync-{sync_id}",
         f"daily-cleanup-{sync_id}",
     }
-    actual_ids = {
-        call.args[0]
-        for call in mock_client.get_schedule_handle.call_args_list
-    }
+    actual_ids = {call.args[0] for call in mock_client.get_schedule_handle.call_args_list}
     assert actual_ids == expected_ids
 
 
@@ -870,9 +866,7 @@ async def test_pause_schedules_swallows_not_found():
     svc = _build_svc()
 
     handle = AsyncMock()
-    handle.pause.side_effect = _rpc_error(
-        "not found", RPCStatusCode.NOT_FOUND
-    )
+    handle.pause.side_effect = _rpc_error("not found", RPCStatusCode.NOT_FOUND)
     mock_client = MagicMock()
     mock_client.get_schedule_handle.return_value = handle
     svc._get_client = AsyncMock(return_value=mock_client)
@@ -903,9 +897,7 @@ async def test_unpause_schedules_swallows_not_found():
     svc = _build_svc()
 
     handle = AsyncMock()
-    handle.unpause.side_effect = _rpc_error(
-        "not found", RPCStatusCode.NOT_FOUND
-    )
+    handle.unpause.side_effect = _rpc_error("not found", RPCStatusCode.NOT_FOUND)
     mock_client = MagicMock()
     mock_client.get_schedule_handle.return_value = handle
     svc._get_client = AsyncMock(return_value=mock_client)
@@ -953,14 +945,18 @@ async def test_get_schedules_for_sync_returns_metadata():
 
     entries = [
         _mock_list_entry(
-            f"minute-sync-{sync_id}", paused=True,
+            f"minute-sync-{sync_id}",
+            paused=True,
             note="Credential error: api_key_invalid",
-            next_times=[next_time], recent_count=3,
+            next_times=[next_time],
+            recent_count=3,
         ),
         _mock_list_entry(
-            f"daily-cleanup-{sync_id}", paused=True,
+            f"daily-cleanup-{sync_id}",
+            paused=True,
             note="Credential error: api_key_invalid",
-            next_times=[], recent_count=1,
+            next_times=[],
+            recent_count=1,
         ),
     ]
 
@@ -997,3 +993,74 @@ async def test_get_schedules_for_sync_empty():
     result = await svc.get_schedules_for_sync(uuid4())
 
     assert result == []
+
+
+async def test_owned_cleanup_propagates_failure_and_keeps_caller_transaction():
+    """A failed Temporal delete cannot acknowledge disconnect or release its DB lock."""
+    svc = _build_svc()
+    failure = RuntimeError("Temporal unavailable")
+    svc._delete_schedule_by_id = AsyncMock(side_effect=failure)
+    db, uow, ctx = AsyncMock(), AsyncMock(), _mock_ctx()
+    with pytest.raises(RuntimeError, match="Temporal unavailable"):
+        await svc.delete_all_schedules_for_sync(SYNC_ID, db, ctx, uow=uow, strict=True)
+    assert svc._delete_schedule_by_id.call_args.kwargs["uow"] is uow
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_owned_reconcile_replaces_orphan_schedule_and_relinks_current_generation():
+    """A lost create reply leaves remote state but no committed DB schedule link."""
+    from types import SimpleNamespace
+
+    from airweave.domains.temporal import schedule_ids
+
+    sid = schedule_ids.sync_schedule_id(SYNC_ID)
+    remote = {sid: SimpleNamespace(action=SimpleNamespace(args=[{"provisioning_generation": 1}]))}
+    sync = _mock_sync_model(temporal_schedule_id=None)
+    repo = AsyncMock()
+    repo.get_without_connections.return_value = sync
+
+    async def save(db, obj, values, ctx, **kwargs):
+        for key, value in values.items():
+            setattr(obj, key, value)
+
+    repo.update.side_effect = save
+    client = MagicMock()
+
+    def handle(key):
+        async def delete():
+            if remote.pop(key, None) is None:
+                raise _rpc_error("missing", RPCStatusCode.NOT_FOUND)
+
+        async def describe():
+            if key not in remote:
+                raise _rpc_error("missing", RPCStatusCode.NOT_FOUND)
+            return SimpleNamespace(schedule=remote[key])
+
+        return SimpleNamespace(delete=delete, describe=describe)
+
+    async def create(key, schedule, **kwargs):
+        assert key not in remote
+        remote[key] = schedule
+
+    client.get_schedule_handle.side_effect = handle
+    client.create_schedule = AsyncMock(side_effect=create)
+    svc = _build_svc(sync_repo=repo)
+    db, ctx, uow = AsyncMock(), _mock_ctx(), MagicMock()
+    with (
+        patch.object(svc, "_get_client", new=AsyncMock(return_value=client)),
+        patch.object(
+            svc,
+            "_gather_schedule_data",
+            new=AsyncMock(return_value=({"provisioning_generation": 2}, {}, {})),
+        ),
+    ):
+        # These are the two real schedule-service calls made by owned reconciliation.
+        await svc.delete_all_schedules_for_sync(SYNC_ID, db, ctx, uow=uow, strict=True)
+        await svc.create_or_update_schedule(SYNC_ID, "0 0 * * *", db, ctx, uow)
+    assert list(remote) == [sid]
+    assert remote[sid].action.args[0]["provisioning_generation"] == 2
+    assert sync.temporal_schedule_id == sid
+    assert sync.cron_schedule == "0 0 * * *"
+    assert all(call.kwargs["uow"] is uow for call in repo.update.call_args_list)
+    db.commit.assert_not_awaited()

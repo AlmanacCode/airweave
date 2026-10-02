@@ -15,17 +15,23 @@ class TemporalHealthProbe(HealthProbe):
     """Probes Temporal via the gRPC health check on its service client."""
 
     def __init__(self, get_client: Callable[[], TemporalClientType | None]) -> None:
+        """Use the application's current connection without creating a probe-owned client."""
         self._get_client = get_client
 
     @property
     def name(self) -> str:
+        """Identify this dependency in readiness configuration and responses."""
         return "temporal"
 
     async def check(self) -> DependencyCheck:
+        """Report the actual service health, or skipped until a client is available."""
         client = self._get_client()
         if client is None:
             return DependencyCheck(status=CheckStatus.skipped)
         start = time.perf_counter()
-        await client.service_client.check_health()
+        serving = await client.service_client.check_health()
         latency = (time.perf_counter() - start) * 1000
-        return DependencyCheck(status=CheckStatus.up, latency_ms=round(latency, 2))
+        return DependencyCheck(
+            status=CheckStatus.up if serving else CheckStatus.down,
+            latency_ms=round(latency, 2),
+        )

@@ -165,16 +165,17 @@ class TestFilterTranslator:
         assert " AND " in result
 
     def test_range_datetime_conversion(self, filter_translator):
-        """Test range condition with datetime string converts to epoch ms."""
+        """Test range condition with datetime string converts to epoch seconds."""
         filter_dict = {
             "must": [
                 {"key": "created_at", "range": {"gte": "2024-01-01T00:00:00Z"}}
             ]
         }
         result = filter_translator.translate(filter_dict)
-        # Should convert to epoch milliseconds
+        # Match the transformer and schema: stored timestamps are epoch seconds.
         assert "created_at >=" in result
-        assert "1704067200000" in result  # 2024-01-01T00:00:00Z in epoch ms
+        assert "1704067200" in result
+        assert "1704067200000" not in result
 
     # =========================================================================
     # HasId Conditions
@@ -565,3 +566,32 @@ class TestFieldNameMapping:
         assert FIELD_NAME_MAP["source_name"] == "airweave_system_metadata_source_name"
         assert FIELD_NAME_MAP["access.is_public"] == "access_is_public"
 
+
+
+@pytest.mark.parametrize("field", ["created_at", "updated_at"])
+@pytest.mark.parametrize("boundary", ["2024-01-01T00:00:00Z", "2023-12-31T16:00:00-08:00"])
+def test_date_filter_matches_actual_feed_timestamp(filter_translator, field, boundary):
+    """A document on the inclusive boundary must not disappear due to unit mismatch."""
+    from airweave.platform.entities.slack import SlackChannelEntity
+    from airweave.platform.destinations.vespa.transformer import EntityTransformer
+
+    instant = datetime.fromisoformat("2024-01-01T00:00:00+00:00")
+    entity = SlackChannelEntity(channel_id="boundary", title="Boundary", purpose="", topic="", breadcrumbs=[])
+    entity.created_at = entity.updated_at = instant
+    stored = EntityTransformer()._build_base_fields(entity)[field]
+    assert stored == 1704067200
+    clause = filter_translator._translate_range_condition(
+        {"key": field, "range": {"gte": boundary, "lt": "2024-01-01T00:00:01Z"}}
+    )
+    assert clause == f"{field} >= {stored} AND {field} < {stored + 1}"
+
+
+def test_subsecond_boundary_is_not_rounded_into_another_second(filter_translator):
+    clause = filter_translator._translate_range_condition(
+        {"key": "created_at", "range": {"gte": "2024-01-01T00:00:00.5Z"}}
+    )
+    assert clause == "created_at >= 1704067200.5"
+
+
+def test_naive_legacy_timestamp_is_explicitly_utc(filter_translator):
+    assert filter_translator._parse_datetime_to_epoch_seconds("2024-01-01T00:00:00") == 1704067200

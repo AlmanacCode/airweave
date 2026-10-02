@@ -825,7 +825,9 @@ async def test_cancel_job_not_found():
 
     svc = _build_svc(sync_job_repo=job_repo)
     with pytest.raises(HTTPException) as exc_info:
-        await svc.cancel_job(AsyncMock(), job_id=uuid4(), ctx=_mock_ctx())
+        await svc.cancel_job(
+            AsyncMock(scalar=AsyncMock(return_value=None)), job_id=uuid4(), ctx=_mock_ctx()
+        )
     assert exc_info.value.status_code == 404
 
 
@@ -838,7 +840,9 @@ async def test_cancel_job_wrong_status():
 
     svc = _build_svc(sync_job_repo=job_repo)
     with pytest.raises(HTTPException) as exc_info:
-        await svc.cancel_job(AsyncMock(), job_id=uuid4(), ctx=_mock_ctx())
+        await svc.cancel_job(
+            AsyncMock(scalar=AsyncMock(return_value=None)), job_id=uuid4(), ctx=_mock_ctx()
+        )
     assert exc_info.value.status_code == 400
 
 
@@ -856,7 +860,7 @@ async def test_cancel_job_success():
     }
 
     job_sm = AsyncMock()
-    db = AsyncMock()
+    db = AsyncMock(scalar=AsyncMock(return_value=None))
 
     svc = _build_svc(
         sync_job_repo=job_repo,
@@ -880,7 +884,7 @@ async def test_cancel_pending_job_transitions_directly_to_cancelled():
 
     temporal = AsyncMock()
     job_sm = AsyncMock()
-    db = AsyncMock()
+    db = AsyncMock(scalar=AsyncMock(return_value=None))
 
     svc = _build_svc(
         sync_job_repo=job_repo,
@@ -909,7 +913,7 @@ async def test_cancel_job_workflow_not_found_marks_cancelled():
     }
 
     job_sm = AsyncMock()
-    db = AsyncMock()
+    db = AsyncMock(scalar=AsyncMock(return_value=None))
 
     svc = _build_svc(
         sync_job_repo=job_repo,
@@ -942,7 +946,9 @@ async def test_cancel_job_temporal_failure():
 
     svc = _build_svc(sync_job_repo=job_repo, temporal_workflow_service=temporal)
     with pytest.raises(HTTPException) as exc_info:
-        await svc.cancel_job(AsyncMock(), job_id=job_id, ctx=_mock_ctx())
+        await svc.cancel_job(
+            AsyncMock(scalar=AsyncMock(return_value=None)), job_id=job_id, ctx=_mock_ctx()
+        )
     assert exc_info.value.status_code == 502
 
 
@@ -953,6 +959,7 @@ async def test_cancel_job_temporal_failure():
 
 def _mock_source_entry(*, short_name="github", continuous=False, federated=False):
     entry = MagicMock()
+    entry.source_class_ref = object
     entry.short_name = short_name
     entry.supports_continuous = continuous
     entry.federated_search = federated
@@ -1065,7 +1072,31 @@ async def test_create_no_cron_no_run_immediately():
 
 
 @pytest.mark.asyncio
-async def test_create_with_cron_calls_temporal_schedule():
+@pytest.mark.parametrize(
+    "source_kind, source_config, expected_version",
+    [
+        ("legacy", None, 1),
+        ("gmail", None, 2),
+        ("slack", None, 2),
+        ("outlook_mail", None, 1),
+        ("stripe", None, 1),
+        (
+            "stripe",
+            {
+                "original_capture": {
+                    "expected_account_id": "acct_selected",
+                    "livemode": False,
+                    "api_version": "2025-06-30.basil",
+                }
+            },
+            2,
+        ),
+        ("outlook_mail", {"capture_originals": True, "expected_principal_id": "native-owner"}, 2),
+    ],
+)
+async def test_create_with_cron_calls_temporal_schedule(
+    source_kind, source_config, expected_version
+):
     from airweave.schemas.source_connection import ScheduleConfig
 
     sync_repo = AsyncMock()
@@ -1086,6 +1117,19 @@ async def test_create_with_cron_calls_temporal_schedule():
         temporal_schedule_service=temporal_sched,
     )
 
+    from airweave.platform.sources.gmail import GmailSource
+    from airweave.platform.sources.outlook_mail import OutlookMailSource
+    from airweave.platform.sources.slack import SlackSource
+    from airweave.platform.sources.stripe import StripeSource
+
+    source_entry = _mock_source_entry(short_name=source_kind)
+    source_entry.source_class_ref = {
+        "legacy": object,
+        "gmail": GmailSource,
+        "slack": SlackSource,
+        "outlook_mail": OutlookMailSource,
+        "stripe": StripeSource,
+    }[source_kind]
     result = await svc.create(
         AsyncMock(),
         name="test",
@@ -1093,7 +1137,8 @@ async def test_create_with_cron_calls_temporal_schedule():
         destination_connection_ids=[uuid4()],
         collection_id=uuid4(),
         collection_readable_id="col-x",
-        source_entry=_mock_source_entry(),
+        source_entry=source_entry,
+        source_config=source_config,
         schedule_config=ScheduleConfig(cron="0 6 * * *"),
         run_immediately=False,
         ctx=_mock_ctx(),
@@ -1102,6 +1147,8 @@ async def test_create_with_cron_calls_temporal_schedule():
     assert result is not None
     assert result.sync_id == mock_sync.id
     temporal_sched.create_or_update_schedule.assert_awaited_once()
+    assert sync_repo.create.call_args.kwargs["initial_pipeline_version"] == expected_version
+    assert "index_pipeline_version" not in sync_repo.create.call_args.kwargs["obj_in"].model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -1202,3 +1249,19 @@ async def test_schedule_cleanup_handles_error():
     ctx = _mock_ctx()
     await svc._schedule_cleanup(uuid4(), uuid4(), uuid4(), ctx)
     ctx.logger.error.assert_called_once()
+
+
+async def test_provider_cancellation_rejects_native_job_before_external_actions():
+    job_repo, temporal, state = AsyncMock(), AsyncMock(), AsyncMock()
+    job = _orm_sync_job(job_id=uuid4(), status=SyncJobStatus.RUNNING)
+    job_repo.get.return_value = job
+    svc = _build_svc(
+        sync_job_repo=job_repo, temporal_workflow_service=temporal, job_state_machine=state
+    )
+    with pytest.raises(HTTPException) as error:
+        await svc.cancel_job(
+            AsyncMock(scalar=AsyncMock(return_value=uuid4())), job_id=job.id, ctx=_mock_ctx()
+        )
+    assert error.value.status_code == 409
+    state.transition.assert_not_awaited()
+    temporal.cancel_sync_job_workflow.assert_not_awaited()

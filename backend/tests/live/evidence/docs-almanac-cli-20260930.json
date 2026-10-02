@@ -1,0 +1,36 @@
+{
+  "date": "2026-09-30",
+  "airweave_commit": "69d0296",
+  "almanac_commit": "8ec369087",
+  "provider_requests": 5,
+  "records": 1,
+  "journal_changes": 1,
+  "blobs": 3,
+  "blob_bytes": 1053474,
+  "partial_records": 0,
+  "blob_sha_verified": true,
+  "replay_new_changes": 0,
+  "fresh_connections_readback": true,
+  "native_document_digest_verified": true,
+  "top_level_tabs": 4,
+  "identity_verified": true,
+  "stale_revision_denied": true,
+  "wrong_account_denied": true,
+  "revoked_binding_denied": true,
+  "scope": "actual_cli_and_almanac_fixture_route_to_real_store_http",
+  "full_scope_completed": false,
+  "checkpoint_saved": false,
+  "harness_exit_code": 0,
+  "cleanup": {
+    "private_schemas": 0,
+    "private_blob_directories": 0,
+    "immutable_archives_removed": true
+  },
+  "limitations": [
+    "One selected document, not full source traversal or checkpoint",
+    "Almanac route/auth/binding use fixtures; source-store uses real loopback HTTP",
+    "No hosted ownership proof",
+    "No induced provider edits/deletes",
+    "No Sheets capture proof"
+  ]
+}

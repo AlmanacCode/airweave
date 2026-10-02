@@ -183,9 +183,12 @@ SOURCE_CONNECTION_CREATE_EXAMPLES = {
         "short_name": "github",
         "collection": "engineering-docs-ab123",
         "config_fields": {
-            "repo_name": "company/main-repo",
-            "include_issues": True,
-            "include_pull_requests": True,
+            "expected_user_id": 42,
+            "repositories": [
+                {"repository_id": 100, "owner_id": 200, "full_name": "company/main-repo"}
+            ],
+            "include_code": True,
+            "include_conversations": True,
         },
         "auth_fields": {
             "personal_access_token": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -237,12 +240,6 @@ SOURCE_EXAMPLES = {
                     "description": "GitHub Personal Access Token with repository read permissions",
                     "type": "string",
                     "secret": True,
-                },
-                {
-                    "name": "repo_name",
-                    "title": "Repository Name",
-                    "description": "Full repository name in format 'owner/repo'",
-                    "type": "string",
                 },
             ]
         },

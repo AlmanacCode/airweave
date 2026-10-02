@@ -4,10 +4,12 @@ from .access_control_membership import AccessControlMembership
 from .api_key import APIKey
 from .auth_provider import AuthProvider
 from .billing_period import BillingPeriod
+from .capture_scan import CaptureScan
 from .collection import Collection
 from .connection import Connection
 from .connection_init_session import ConnectionInitSession
 from .entity import Entity
+from .entity_change import EntityChange
 from .entity_count import EntityCount
 from .entity_definition import EntityDefinition
 from .entity_relation import EntityRelation
@@ -16,6 +18,7 @@ from .integration_credential import IntegrationCredential
 from .node_selection import NodeSelection
 from .organization import Organization
 from .organization_billing import OrganizationBilling
+from .owned_provisioning import OwnedProvisioning
 from .processed_webhook_event import ProcessedWebhookEvent
 from .redirect_session import RedirectSession
 from .search_query import SearchQuery
@@ -31,12 +34,16 @@ from .user_organization import UserOrganization
 from .vector_db_deployment_metadata import VectorDbDeploymentMetadata
 
 __all__ = [
+    "OwnedProvisioning",
     "AccessControlMembership",
     "APIKey",
     "AuthProvider",
     "BillingPeriod",
     "Collection",
     "Entity",
+    "EntityChange",
+    "CaptureScan",
+    "ProjectionGeneration",
     "EntityCount",
     "Connection",
     "ConnectionInitSession",
@@ -61,3 +68,5 @@ __all__ = [
     "UserOrganization",
     "VectorDbDeploymentMetadata",
 ]
+
+from .projection_generation import ProjectionGeneration

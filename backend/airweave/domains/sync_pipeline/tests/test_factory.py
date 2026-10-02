@@ -6,6 +6,8 @@ from uuid import uuid4
 
 import pytest
 
+from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
+from airweave.domains.sync_pipeline.capture_attempt import CaptureAttempt
 from airweave.domains.sync_pipeline.factory import SourceBuildResult, SyncFactory
 
 
@@ -115,7 +117,14 @@ async def test_create_orchestrator_raises_when_source_connection_missing():
     ctx.organization.id = uuid4()
     db = AsyncMock()
 
-    with pytest.raises(NotFoundException, match="Source connection record not found"):
+    with (
+        patch(
+            "airweave.domains.sync_pipeline.factory.CanonicalRecordStore.admit_job",
+            new_callable=AsyncMock,
+            return_value=0,
+        ),
+        pytest.raises(NotFoundException, match="Source connection record not found"),
+    ):
         await factory.create_orchestrator(
             db=db,
             sync=sync,
@@ -132,7 +141,8 @@ async def test_create_orchestrator_raises_when_source_connection_missing():
 
 
 @pytest.mark.asyncio
-async def test_create_orchestrator_passes_entity_repo_to_pipeline():
+@pytest.mark.parametrize("canonical", [False, True, "page", "composed"])
+async def test_create_orchestrator_passes_entity_repo_to_pipeline(canonical):
     """entity_repo is forwarded to EntityActionResolver and EntityPipeline."""
     entity_repo = MagicMock()
     sc_repo = MagicMock()
@@ -158,6 +168,11 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline():
     db = AsyncMock()
 
     with (
+        patch(
+            "airweave.domains.sync_pipeline.factory.CanonicalRecordStore.admit_job",
+            new_callable=AsyncMock,
+            return_value=0,
+        ) as admit,
         patch("airweave.domains.sync_pipeline.factory.SyncContextBuilder") as mock_sc_builder,
         patch(
             "airweave.domains.sync_pipeline.factory.EntityDispatcherBuilder"
@@ -176,7 +191,35 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline():
         ) as mock_build_tracker,
     ):
         mock_source = MagicMock()
+        mock_source.capture_page_source = None
         mock_source.generate_entities = MagicMock(return_value=AsyncMock())
+        if canonical in {"page", "composed"}:
+            from airweave.domains.sources.token_providers.static import StaticTokenProvider
+            from airweave.platform.configs.config import SlackConfig
+            from airweave.platform.sources.slack import SlackSource
+
+            mock_source = SlackSource(
+                auth=StaticTokenProvider("synthetic"), logger=MagicMock(), http_client=MagicMock()
+            )
+            mock_source.slack_config = SlackConfig(expected_team_id="T1", expected_user_id="U1")
+            mock_source._get = AsyncMock(
+                return_value={"ok": True, "team_id": "T1", "user_id": "U1"}
+            )
+            await mock_source.validate()
+            page_source = mock_source
+            if canonical == "composed":
+                from airweave.platform.sources.outlook_mail import OutlookMailSource
+
+                mock_source = OutlookMailSource(
+                    auth=StaticTokenProvider("synthetic"),
+                    logger=MagicMock(),
+                    http_client=MagicMock(),
+                )
+                mock_source._capture_page_source = page_source
+                mock_source.generate_entities = MagicMock()
+        elif canonical:
+            mock_source.canonical_record_types = ("event",)
+            mock_source.generate_observations = MagicMock(return_value=AsyncMock())
         mock_build_source.return_value = SourceBuildResult(
             source=mock_source, cursor=MagicMock(), files=MagicMock(), node_selections=[]
         )
@@ -194,11 +237,28 @@ async def test_create_orchestrator_passes_entity_repo_to_pipeline():
             collection=collection,
             connection=connection,
             ctx=ctx,
+            capture_attempt=CaptureAttempt(id=uuid4(), number=1),
         )
 
         assert orchestrator is not None
-        assert orchestrator.entity_pipeline._entity_repo is entity_repo
-        assert orchestrator.entity_pipeline._resolver._entity_repo is entity_repo
+        assert admit.await_count == 2
+        db.refresh.assert_awaited_once_with(sc)
+        if canonical:
+            assert isinstance(orchestrator.entity_pipeline, CanonicalCapturePipeline)
+            mock_build_destinations.assert_not_called()
+            mock_disp_builder.assert_not_called()
+            if canonical in {"page", "composed"}:
+                assert orchestrator.stream is None
+                assert orchestrator.entity_pipeline.page_source is page_source
+                assert orchestrator.runtime.source is mock_source
+                if canonical == "composed":
+                    mock_source.generate_entities.assert_not_called()
+            else:
+                mock_source.generate_entities.assert_not_called()
+                mock_source.generate_observations.assert_called_once()
+        else:
+            assert orchestrator.entity_pipeline._entity_repo is entity_repo
+            assert orchestrator.entity_pipeline._resolver._entity_repo is entity_repo
 
 
 # ---------------------------------------------------------------------------
@@ -358,8 +418,11 @@ class TestBuildArfReplaySource:
 
     @pytest.mark.asyncio
     async def test_success_returns_source_build_result(self):
-        mock_source = AsyncMock()
+        from airweave.domains.arf.replay_source import ArfReplaySource
+
+        mock_source = ArfReplaySource(sync_id=uuid4(), storage=MagicMock())
         mock_source.validate = AsyncMock(return_value=True)
+        assert mock_source.capture_page_source is None
 
         factory = _build_factory()
         db = AsyncMock()
@@ -397,10 +460,12 @@ class TestValidateNotCompletedSnapshot:
     def test_passes_for_normal_source_with_invalid_snapshot_config(self):
         """Normal source with config that fails SnapshotConfig parsing → no exception."""
         sc = SimpleNamespace(short_name="github", config_fields={"not": "snapshot"}, name="gh")
-        SyncFactory._validate_not_completed_snapshot(sc)  # should not raise (ValidationError caught)
+        SyncFactory._validate_not_completed_snapshot(
+            sc
+        )  # should not raise (ValidationError caught)
 
     def test_raises_for_restored_snapshot_source(self):
-        """Source with non-snapshot short_name but valid SnapshotConfig fields → SyncFailureError."""
+        """Restored snapshot config on a normal source raises SyncFailureError."""
         from airweave.domains.sync_pipeline.exceptions import SyncFailureError
 
         sc = SimpleNamespace(short_name="github", config_fields={}, name="restored-snap")
@@ -527,9 +592,7 @@ class TestBuildEntityTracker:
         entity_count_repo.get_counts_per_sync_and_type = AsyncMock(return_value=[count_row])
         factory = _build_factory(entity_count_repo=entity_count_repo)
 
-        tracker = await factory._build_entity_tracker(
-            db=db, sync=sync, sync_job=sync_job, ctx=ctx
-        )
+        tracker = await factory._build_entity_tracker(db=db, sync=sync, sync_job=sync_job, ctx=ctx)
 
         assert tracker is not None
         assert tracker.job_id == sync_job.id
@@ -545,9 +608,7 @@ class TestBuildEntityTracker:
         entity_count_repo.get_counts_per_sync_and_type = AsyncMock(return_value={})
         factory = _build_factory(entity_count_repo=entity_count_repo)
 
-        tracker = await factory._build_entity_tracker(
-            db=db, sync=sync, sync_job=sync_job, ctx=ctx
-        )
+        tracker = await factory._build_entity_tracker(db=db, sync=sync, sync_job=sync_job, ctx=ctx)
 
         assert tracker is not None
 
@@ -584,3 +645,49 @@ class TestLoadNodeSelections:
         assert len(result) == 1
         assert result[0].source_node_id == "node-1"
         assert result[0].node_type == "file"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("during_build", [False, True])
+async def test_generation_admission_stops_stale_factory(during_build):
+    """Stale workflow schema zero never bypasses authoritative admission."""
+    from airweave.domains.entities.canonical.store import StaleWriter
+
+    sc = MagicMock()
+    sc_repo = MagicMock(get_by_sync_id=AsyncMock(return_value=sc))
+    factory = _build_factory(sc_repo=sc_repo)
+    sync = SimpleNamespace(id=uuid4(), sync_config=None, provisioning_generation=0)
+    job = SimpleNamespace(id=uuid4(), sync_config=None, provisioning_generation=0)
+    db = AsyncMock()
+    order = []
+    db.refresh.side_effect = lambda _: order.append("refresh")
+
+    async def build(**kwargs):
+        order.append("build")
+        return MagicMock()
+
+    with (
+        patch(
+            "airweave.domains.sync_pipeline.factory.CanonicalRecordStore.admit_job",
+            new_callable=AsyncMock,
+        ) as admit,
+        patch.object(factory, "_build_source", side_effect=build) as source,
+        patch.object(factory, "_build_destinations", new_callable=AsyncMock) as destinations,
+        patch.object(factory, "_build_entity_tracker", new_callable=AsyncMock) as tracker,
+    ):
+        # Even if both DB generations are individually eligible, switching between
+        # checks must reject the source constructed under the first generation.
+        admit.side_effect = [4, 5] if during_build else StaleWriter("Stale job")
+        with pytest.raises(StaleWriter):
+            await factory.create_orchestrator(
+                db=db,
+                sync=sync,
+                sync_job=job,
+                collection=SimpleNamespace(sync_config=None),
+                connection=MagicMock(),
+                ctx=_make_ctx(),
+            )
+        assert source.await_count == int(during_build)
+        assert order == (["refresh", "build"] if during_build else [])
+        destinations.assert_not_awaited()
+        tracker.assert_not_awaited()

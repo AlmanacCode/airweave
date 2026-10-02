@@ -12,6 +12,7 @@ from airweave.core.logging import logger
 from airweave.domains.storage.exceptions import (
     StorageException,
     StorageNotFoundError,
+    StorageReadLimitExceeded,
 )
 from airweave.domains.storage.protocols import StorageBackend
 
@@ -142,8 +143,13 @@ class GCSBackend(StorageBackend):
         except Exception as e:
             raise StorageException(f"Failed to write file to {path}: {e}")
 
-    async def read_file(self, path: str) -> bytes:
+    async def read_file(self, path: str, *, max_bytes: int | None = None) -> bytes:
         """Read binary content from GCS."""
+        from google.api_core.exceptions import GoogleAPIError
+        from requests.exceptions import RequestException
+
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("max_bytes must be nonnegative")
         import asyncio
 
         blob_name = self._resolve(path)
@@ -154,7 +160,16 @@ class GCSBackend(StorageBackend):
             bucket = self._get_bucket()
             blob = bucket.blob(blob_name)
             try:
-                return blob.download_as_bytes()
+                content = blob.download_as_bytes(
+                    **(
+                        {"start": 0, "end": max_bytes, "raw_download": True}
+                        if max_bytes is not None
+                        else {}
+                    )
+                )
+                if max_bytes is not None and len(content) > max_bytes:
+                    raise StorageReadLimitExceeded("Stored object exceeds read limit")
+                return content
             except NotFound:
                 raise StorageNotFoundError(f"Path not found: {path}")
 
@@ -162,7 +177,9 @@ class GCSBackend(StorageBackend):
             return await asyncio.to_thread(_read)
         except StorageNotFoundError:
             raise
-        except Exception as e:
+        except StorageReadLimitExceeded:
+            raise
+        except (OSError, GoogleAPIError, RequestException) as e:
             raise StorageException(f"Failed to read file from {path}: {e}")
 
     async def exists(self, path: str) -> bool:
@@ -180,6 +197,22 @@ class GCSBackend(StorageBackend):
             return await asyncio.to_thread(_exists)
         except Exception:
             return False
+
+    async def delete_file(self, path: str) -> None:
+        """Delete one exact object off-loop; never enumerate a prefix."""
+        import asyncio
+
+        from google.cloud.exceptions import NotFound
+
+        def remove():
+            self._get_bucket().blob(self._resolve(path)).delete()
+
+        try:
+            await asyncio.to_thread(remove)
+        except NotFound:
+            return
+        except Exception:
+            raise StorageException("Exact GCS object deletion failed") from None
 
     async def delete(self, path: str) -> bool:
         """Delete blob or all blobs under prefix."""

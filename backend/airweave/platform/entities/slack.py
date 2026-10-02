@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import computed_field
 
 from airweave.platform.entities._airweave_field import AirweaveField
-from airweave.platform.entities._base import BaseEntity, Breadcrumb
+from airweave.platform.entities._base import BaseEntity, Breadcrumb, FileEntity
 
 
 def _parse_slack_ts(ts_str: Any) -> Optional[datetime]:
@@ -132,3 +132,21 @@ class SlackMessageEntity(BaseEntity):
     def web_url(self) -> str:
         """Permalink for the Slack message."""
         return self.web_url_value or self.url or ""
+
+
+class SlackChannelEntity(BaseEntity):
+    """Captured conversation metadata, without inferring visibility from its name."""
+
+    channel_id: str = AirweaveField(..., description="Native conversation ID", is_entity_id=True)
+    title: str = AirweaveField(..., description="Conversation name", is_name=True, embeddable=True)
+    purpose: str = AirweaveField(..., description="Conversation purpose", embeddable=True)
+    topic: str = AirweaveField(..., description="Conversation topic", embeddable=True)
+
+
+class SlackAttachmentEntity(FileEntity):
+    """Retained original file belonging to one captured Slack message."""
+
+    attachment_key: str = AirweaveField(
+        ..., description="Message-scoped native file identity", is_entity_id=True
+    )
+    filename: str = AirweaveField(..., description="Native filename or file ID", is_name=True)

@@ -1,0 +1,55 @@
+# Application services only. Provision isolated dependencies and the environment
+# group described in deploy/README.md before applying. Never attach almanac/dev
+# wholesale: its database belongs to the existing product.
+version: v2
+name: almanac-source-store
+build:
+  method: docker
+  context: ./backend
+  dockerfile: ./backend/Dockerfile
+envGroups:
+  - almanac-source-store-staging
+env:
+  ENVIRONMENT: dev
+  LOCAL_DEVELOPMENT: "false"
+  AUTH_MODE: api_key
+  HEALTH_CRITICAL_PROBES: postgres,redis,temporal
+  ANALYTICS_ENABLED: "false"
+  STRIPE_ENABLED: "false"
+  STORAGE_BACKEND: aws
+  STORAGE_AWS_REGION: us-east-1
+  DENSE_EMBEDDER: local_minilm
+  EMBEDDING_DIMENSIONS: "384"
+  SPARSE_EMBEDDER: fastembed_bm25
+  SYNC_MAX_WORKERS: "2"
+  SYNC_THREAD_POOL_SIZE: "8"
+  TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT: "90"
+services:
+  - name: api
+    type: web
+    run: ./entrypoint.sh
+    port: 8001
+    private: true
+    instances: 1
+    cpuCores: 0.5
+    ramMegabytes: 1024
+    terminationGracePeriodSeconds: 60
+    readinessCheck:
+      enabled: true
+      httpPath: /health/ready
+      timeoutSeconds: 10
+      initialDelaySeconds: 15
+    livenessCheck:
+      enabled: true
+      httpPath: /health/live
+      timeoutSeconds: 5
+      initialDelaySeconds: 30
+  - name: worker
+    type: worker
+    run: python -m airweave.domains.temporal.worker
+    instances: 1
+    cpuCores: 1
+    ramMegabytes: 2048
+    terminationGracePeriodSeconds: 120
+autoRollback:
+  enabled: true

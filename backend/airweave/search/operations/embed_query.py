@@ -110,7 +110,7 @@ class EmbedQuery(SearchOperation):
             f"[EmbedQuery] Generating {self.dense_embedder.dimensions}-dim embeddings "
             f"for {len(queries)} queries"
         )
-        results = await self.dense_embedder.embed_many(queries)
+        results = await self.dense_embedder.embed_many(queries, purpose="query")
 
         # Validate we got embeddings for all queries
         if len(results) != len(queries):

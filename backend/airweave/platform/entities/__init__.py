@@ -29,12 +29,7 @@ from .asana import (
     AsanaTaskEntity,
     AsanaWorkspaceEntity,
 )
-from .attio import (
-    AttioListEntity,
-    AttioNoteEntity,
-    AttioObjectEntity,
-    AttioRecordEntity,
-)
+from .attio import AttioOriginalEntity
 from .bitbucket import (
     BitbucketCodeFileEntity,
     BitbucketDirectoryEntity,
@@ -121,6 +116,7 @@ from .github import (
     GitHubPullRequestEntity,
     GithubRepoEntity,
     GitHubRepositoryEntity,
+    GitHubTextEntity,
 )
 from .gitlab import (
     GitLabCodeFileEntity,
@@ -147,6 +143,7 @@ from .google_drive import (
     GoogleDriveDriveEntity,
     GoogleDriveFileDeletionEntity,
     GoogleDriveFileEntity,
+    GoogleDriveFolderEntity,
 )
 from .google_slides import (
     GoogleSlidesPresentationEntity,
@@ -180,6 +177,7 @@ from .linear import (
     LinearAttachmentEntity,
     LinearCommentEntity,
     LinearIssueEntity,
+    LinearLinkedAttachmentEntity,
     LinearProjectEntity,
     LinearTeamEntity,
     LinearUserEntity,
@@ -195,6 +193,7 @@ from .monday import (
 from .notion import (
     NotionDatabaseEntity,
     NotionFileEntity,
+    NotionOriginalEntity,
     NotionPageEntity,
     NotionPropertyEntity,
 )
@@ -287,7 +286,7 @@ from .slab import (
     SlabPostEntity,
     SlabTopicEntity,
 )
-from .slack import SlackMessageEntity
+from .slack import SlackAttachmentEntity, SlackChannelEntity, SlackMessageEntity
 from .slite import SliteNoteEntity
 from .stripe import (
     StripeBalanceEntity,
@@ -335,6 +334,7 @@ from .trello import (
     TrelloMemberEntity,
 )
 from .web import WebFileEntity
+from .wispr import WisprMeetingEntity, WisprNoteEntity
 from .word import WordDocumentEntity
 from .zendesk import (
     ZendeskAttachmentEntity,
@@ -383,12 +383,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
         AsanaTaskEntity,
         AsanaWorkspaceEntity,
     ],
-    "attio": [
-        AttioListEntity,
-        AttioNoteEntity,
-        AttioObjectEntity,
-        AttioRecordEntity,
-    ],
+    "attio": [AttioOriginalEntity],
     "bitbucket": [
         BitbucketCodeFileEntity,
         BitbucketDirectoryEntity,
@@ -466,6 +461,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
     ],
     "github": [
         GitHubCodeFileEntity,
+        GitHubTextEntity,
         GithubContentEntity,
         GitHubDirectoryEntity,
         GitHubFileDeletionEntity,
@@ -518,6 +514,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
         GoogleDocsDocumentEntity,
     ],
     "google_drive": [
+        GoogleDriveFolderEntity,
         GoogleDriveDriveEntity,
         GoogleDriveFileDeletionEntity,
         GoogleDriveFileEntity,
@@ -548,6 +545,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
         LinearAttachmentEntity,
         LinearCommentEntity,
         LinearIssueEntity,
+        LinearLinkedAttachmentEntity,
         LinearProjectEntity,
         LinearTeamEntity,
         LinearUserEntity,
@@ -563,6 +561,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
     "notion": [
         NotionDatabaseEntity,
         NotionFileEntity,
+        NotionOriginalEntity,
         NotionPageEntity,
         NotionPropertyEntity,
     ],
@@ -651,6 +650,8 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
         SlabTopicEntity,
     ],
     "slack": [
+        SlackAttachmentEntity,
+        SlackChannelEntity,
         SlackMessageEntity,
     ],
     "stripe": [
@@ -704,6 +705,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
     "web": [
         WebFileEntity,
     ],
+    "wispr": [WisprMeetingEntity, WisprNoteEntity],
     "word": [
         WordDocumentEntity,
     ],

@@ -5,10 +5,9 @@ from enum import Enum
 from typing import AsyncGenerator, Generic, Optional, TypeVar
 
 from airweave.core.logging import ContextualLogger
-from airweave.platform.entities._base import BaseEntity
 from airweave.platform.utils.error_utils import get_error_message
 
-T = TypeVar("T", bound=BaseEntity)
+T = TypeVar("T")
 
 
 class StreamState(Enum):

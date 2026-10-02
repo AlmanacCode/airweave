@@ -19,6 +19,7 @@ from airweave.domains.access_control.protocols import AccessBrokerProtocol
 from airweave.domains.embedders.protocols import DenseEmbedderProtocol, SparseEmbedderProtocol
 from airweave.domains.search.adapters.vector_db.protocol import VectorDBProtocol
 from airweave.domains.search.builders.search_plan import SearchPlanBuilder
+from airweave.domains.search.canonical_visibility import visible_results
 from airweave.domains.search.exceptions import FederatedSearchError
 from airweave.domains.search.protocols import SearchPlanExecutorProtocol
 from airweave.domains.search.types import (
@@ -28,6 +29,7 @@ from airweave.domains.search.types import (
     SearchPlan,
     SearchResults,
 )
+from airweave.domains.search.types.embeddings import PreparedQueryEmbeddings
 from airweave.domains.search.types.filters import FilterableField, FilterCondition, FilterOperator
 from airweave.domains.search.types.results import (
     SearchAccessControl,
@@ -88,6 +90,8 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         ctx: ApiContext,
         collection_readable_id: str,
         user_principal: Optional[str] = None,
+        indexed_only: bool = False,
+        prepared_query: PreparedQueryEmbeddings | None = None,
     ) -> SearchResults:
         """Execute the full search pipeline including federated sources."""
         # 0. Resolve access control principals
@@ -99,7 +103,11 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         complete_plan = SearchPlanBuilder.build(plan, user_filter)
 
         # 2. Discover federated sources for this collection
-        federated_sources = await self._discover_federated_sources(db, ctx, collection_readable_id)
+        federated_sources = (
+            []
+            if indexed_only
+            else await self._discover_federated_sources(db, ctx, collection_readable_id)
+        )
 
         # 3. Adjust limit/offset for RRF pagination (if federated sources exist)
         original_limit = complete_plan.limit
@@ -116,7 +124,9 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         fetch_limit = original_offset + original_limit
 
         vector_task = asyncio.create_task(
-            self._execute_vector_search(complete_plan, collection_id, acl_principals)
+            self._execute_vector_search(
+                complete_plan, collection_id, acl_principals, prepared_query
+            )
         )
 
         fed_task = None
@@ -130,12 +140,30 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
                 )
             )
 
-        vector_results = await vector_task
+        engine_results = await vector_task
+        retrieved = engine_results.results
+        coverage = {
+            "engine_partial": engine_results.engine_partial,
+            "engine_coverage_percent": engine_results.engine_coverage_percent,
+        }
+        vector_results = await visible_results(
+            db,
+            ctx.organization.id,
+            collection_readable_id,
+            retrieved,
+            self._source_registry,
+        )
+        excluded = len(retrieved) - len(vector_results)
         fed_results = await fed_task if fed_task else []
 
         # 5. If no federated sources, vector DB already has correct limit/offset
         if not federated_sources:
-            return SearchResults(results=vector_results)
+            return SearchResults(
+                results=vector_results,
+                retrieval_incomplete=excluded > 0 or engine_results.engine_partial,
+                **coverage,
+                excluded_candidates=excluded,
+            )
 
         # 6. We over-fetched from vector DB (limit=offset+limit, offset=0) for RRF.
         #    Filter federated results in-memory and merge, or slice vector-only.
@@ -147,24 +175,23 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
 
         if fed_filtered:
             merged = self._merge_with_rrf(vector_results, fed_filtered)
-            return SearchResults(results=merged[original_offset : original_offset + original_limit])
+            return SearchResults(
+                results=merged[original_offset : original_offset + original_limit],
+                retrieval_incomplete=excluded > 0 or engine_results.engine_partial,
+                **coverage,
+                excluded_candidates=excluded,
+            )
 
         # All federated results filtered out — slice vector results to original window
         return SearchResults(
-            results=vector_results[original_offset : original_offset + original_limit]
+            results=vector_results[original_offset : original_offset + original_limit],
+            retrieval_incomplete=excluded > 0 or engine_results.engine_partial,
+            **coverage,
+            excluded_candidates=excluded,
         )
 
-    async def _execute_vector_search(
-        self,
-        plan: SearchPlan,
-        collection_id: str,
-        acl_principals: Optional[list[str]] = None,
-    ) -> list[SearchResult]:
-        """Embed, compile, and execute vector DB search.
-
-        Adapter exceptions (EmbedderError, VectorDBError) propagate directly
-        to the caller — no wrapping needed since adapters own their error types.
-        """
+    async def prepare_query(self, plan: SearchPlan) -> PreparedQueryEmbeddings:
+        """Prepare embeddings for this executor only; no source data or authorization cached."""
         dense_embeddings = None
         sparse_embedding = None
 
@@ -173,7 +200,7 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
             RetrievalStrategy.HYBRID,
         ):
             texts = [plan.query.primary] + list(plan.query.variations)
-            dense_embeddings = await self._dense_embedder.embed_many(texts)
+            dense_embeddings = await self._dense_embedder.embed_many(texts, purpose="query")
 
         if plan.retrieval_strategy in (
             RetrievalStrategy.KEYWORD,
@@ -186,13 +213,37 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
             sparse_embedding=sparse_embedding,
         )
 
+        prepared = PreparedQueryEmbeddings(
+            primary=plan.query.primary,
+            variations=tuple(plan.query.variations),
+            strategy=plan.retrieval_strategy,
+            embeddings=embeddings,
+        )
+        prepared._owner = self
+        return prepared
+
+    async def _execute_vector_search(
+        self,
+        plan: SearchPlan,
+        collection_id: str,
+        acl_principals: Optional[list[str]] = None,
+        prepared_query: PreparedQueryEmbeddings | None = None,
+    ) -> SearchResults:
+        """Embed, compile, and execute vector DB search.
+
+        Adapter exceptions (EmbedderError, VectorDBError) propagate directly
+        to the caller — no wrapping needed since adapters own their error types.
+        """
+        prepared = prepared_query if prepared_query is not None else await self.prepare_query(plan)
+        embeddings = prepared.require_match(plan, self)
+
         compiled_query = await self._vector_db.compile_query(
             plan=plan,
             embeddings=embeddings,
             collection_id=collection_id,
             acl_principals=acl_principals,
         )
-        return (await self._vector_db.execute_query(compiled_query)).results
+        return await self._vector_db.execute_query(compiled_query)
 
     # ------------------------------------------------------------------
     # Access control resolution
@@ -279,7 +330,9 @@ class SearchPlanExecutor(SearchPlanExecutorProtocol):
         federated_sources: list[BaseSource] = []
         for sc in source_connections:
             entry = self._source_registry.get(sc.short_name)
-            if not entry.federated_search:
+            if not entry.federated_search or getattr(
+                entry.source_class_ref, "canonical_record_types", ()
+            ):
                 continue
 
             try:

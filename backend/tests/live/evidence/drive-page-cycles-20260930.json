@@ -1,0 +1,39 @@
+{
+  "commit": "46172672bcc721fd8bd8b0761d3d28dd4c7d97e1",
+  "provider": "google_drive",
+  "verification": "real provider read-only; actual production capture pipeline; disposable local PostgreSQL; two fresh processes",
+  "first": {
+    "job_status": "completed",
+    "provider_requests": 140,
+    "records_observed": 55,
+    "stored_records": 55,
+    "partial_records": 3,
+    "blob_bytes_written": 207618914,
+    "observed_change_sequence": 55,
+    "loaded_durable_checkpoint": false
+  },
+  "second": {
+    "job_status": "completed",
+    "provider_requests": 2,
+    "records_observed": 0,
+    "stored_records": 55,
+    "partial_records": 3,
+    "blob_bytes_written": 0,
+    "observed_change_sequence": 55,
+    "loaded_durable_checkpoint": true,
+    "resumed_changes_requests": 1,
+    "identical_payload_revision_digest": true
+  },
+  "harness_exit_code": 0,
+  "independently_verified_cleanup": {
+    "remaining_private_schemas": 0,
+    "remaining_private_directories": 0,
+    "archive_removed": true
+  },
+  "limitations": [
+    "Three records remain content-incomplete",
+    "No live induced edit/deletion/revocation",
+    "No hosted Almanac authorization or consumer proof",
+    "No staging deployment"
+  ]
+}

@@ -42,7 +42,7 @@ class InstantSearchRequest(BaseModel):
     filter: Optional[list[FilterGroup]] = Field(
         default=None, description="Filter groups (combined with OR)."
     )
-    limit: int = Field(default=100, ge=1, le=1000, description="Max results to return.")
+    limit: int = Field(default=100, ge=1, le=200, description="Max results to return.")
     offset: int = Field(default=0, ge=0, description="Number of results to skip.")
 
     @field_validator("query")
@@ -70,7 +70,7 @@ class ClassicSearchRequest(BaseModel):
     filter: Optional[list[FilterGroup]] = Field(
         default=None, description="Filter groups (combined with OR)."
     )
-    limit: int = Field(default=100, ge=1, le=1000, description="Max results to return.")
+    limit: int = Field(default=100, ge=1, le=200, description="Max results to return.")
     offset: int = Field(default=0, ge=0, description="Number of results to skip.")
 
     @field_validator("query")
@@ -185,7 +185,10 @@ class BrowseResponse(BaseModel):
     results: list[SearchResult] = Field(
         default_factory=list, description="Rows on this page (one per source entity)."
     )
-    total: int = Field(..., description="Total entity count matching the filter.")
+    total: int | None = Field(
+        ..., description="Exact visible count, or null when the index cannot prove it."
+    )
+    retrieval_incomplete: bool = False
     limit: int = Field(..., description="Limit echoed back from the request.")
     offset: int = Field(..., description="Offset echoed back from the request.")
 
@@ -286,3 +289,11 @@ class SearchV2Response(BaseModel):
     results: list[SearchResult] = Field(
         default_factory=list, description="Search results ordered by relevance."
     )
+
+    engine_partial: bool = False
+    engine_coverage_percent: float | None = None
+
+    retrieval_incomplete: bool = Field(
+        default=False, description="Unavailable index candidates may leave this page incomplete."
+    )
+    excluded_candidates: int = Field(default=0, ge=0)

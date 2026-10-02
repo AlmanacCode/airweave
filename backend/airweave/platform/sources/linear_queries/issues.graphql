@@ -1,0 +1,15 @@
+query OwnedLinearIssues($teamIds: [ID!]!, $first: Int!, $after: String) {
+  issues(filter: {team: {id: {in: $teamIds}}}, first: $first, after: $after,
+         includeArchived: true, orderBy: createdAt) {
+    nodes {
+      id identifier title description url createdAt updatedAt archivedAt trashed
+      priority dueDate
+      team { id name key visibility archivedAt updatedAt }
+      project { id name updatedAt archivedAt }
+      assignee { id name updatedAt }
+      creator { id name updatedAt }
+      state { id name type updatedAt }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}

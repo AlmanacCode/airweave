@@ -114,6 +114,7 @@ def _make_orchestrator(state_machine=None) -> tuple[SyncOrchestrator, FakeStateM
     stream.get_entities = empty_stream
 
     runtime = MagicMock()
+    runtime.canonical_capture = None
     runtime.source.source_name = "test_source"
     runtime.source.short_name = "test_source"
     runtime.source.supports_access_control = False

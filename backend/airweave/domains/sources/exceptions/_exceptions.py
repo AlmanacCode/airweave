@@ -83,6 +83,10 @@ class SourceError(AirweaveException):
 # ---------------------------------------------------------------------------
 
 
+class SourceGoneError(SourceError):
+    """HTTP 410; the source decides whether a resource or continuation expired."""
+
+
 class SourceCreationError(SourceError):
     """source_class.create() failed (bad credentials, missing fields, etc.)."""
 

@@ -1,9 +1,18 @@
 """Configuration classes for platform components."""
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
+from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 
 from airweave.platform.configs._base import BaseConfig, RequiredTemplateConfig
 from airweave.platform.utils.ssrf import validate_host, validate_url
@@ -34,9 +43,9 @@ class ApolloConfig(SourceConfig):
 
 
 class AttioConfig(SourceConfig):
-    """Attio configuration schema."""
+    """Attested workspace boundary for native CRM capture."""
 
-    pass
+    workspace_id: UUID = Field(description="Native Attio workspace UUID; verified using /v2/self")
 
 
 class BitbucketConfig(SourceConfig):
@@ -175,52 +184,51 @@ class ElasticsearchConfig(SourceConfig):
     pass
 
 
+class GitHubRepositorySelection(BaseModel):
+    """Stable authorized repository/owner identities plus a refreshable native route."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    repository_id: int = Field(gt=0, strict=True)
+    owner_id: int = Field(gt=0, strict=True)
+    full_name: str = Field(pattern=r"^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$", max_length=300)
+    ref: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=1024,
+        description="Selected branch name; defaults to the repository default branch",
+    )
+
+
 class GitHubConfig(SourceConfig):
-    """Github configuration schema."""
+    """Selected repositories captured through one owned account and durable page engine."""
 
-    repo_name: str = Field(
-        title="Repository Name",
-        description="Repository to sync in owner/repo format (e.g., 'airweave-ai/airweave')",
-        min_length=3,
-        pattern=r"^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$",
+    model_config = ConfigDict(extra="forbid")
+    expected_user_id: int = Field(
+        gt=0,
+        strict=True,
+        description="Expected native GitHub user ID; verified using authenticated /user",
     )
-    branch: str = Field(
-        default="",
-        title="Branch name",
-        description=(
-            "Specific branch to sync (e.g., 'main', 'development'). "
-            "If empty, uses the default branch."
-        ),
-    )
-    sync_pull_requests: bool = Field(
-        default=False,
-        title="Sync Pull Requests",
-        description=(
-            "Sync merged pull requests and their review comments. "
-            "Enables searching over PR descriptions, discussions, and code review feedback."
-        ),
-    )
+    repositories: tuple[GitHubRepositorySelection, ...] = Field(min_length=1, max_length=500)
+    include_code: bool = True
+    include_conversations: bool = True
 
-    @field_validator("repo_name")
+    @model_validator(mode="before")
     @classmethod
-    def validate_repo_name(cls, v: str) -> str:
-        """Validate repository name is in owner/repo format."""
-        if not v or not v.strip():
-            raise ValueError("Repository name is required")
-        v = v.strip()
-        if "/" not in v:
-            raise ValueError(
-                "Repository must be in 'owner/repo' format (e.g., 'airweave-ai/airweave')"
-            )
-        parts = v.split("/")
-        if len(parts) != 2:
-            raise ValueError(
-                "Repository must be in 'owner/repo' format (e.g., 'airweave-ai/airweave')"
-            )
-        owner, repo = parts
-        if not owner or not repo:
-            raise ValueError("Both owner and repository name must be non-empty")
-        return v
+    def require_stable_selection(cls, value):
+        """Old name-only configurations cannot silently authorize a replacement repository."""
+        if isinstance(value, dict) and "repo_name" in value:
+            raise ValueError("Refresh GitHub repository selections with repository and owner IDs")
+        return value
+
+    @model_validator(mode="after")
+    def unique_selection(self) -> "GitHubConfig":
+        """One selected ref per repository; no ambiguous duplicate scope owners."""
+        ids = [selection.repository_id for selection in self.repositories]
+        if len(ids) != len(set(ids)):
+            raise ValueError("GitHub repository selections must be unique")
+        if not self.include_code and not self.include_conversations:
+            raise ValueError("Select GitHub code or conversations to capture")
+        return self
 
 
 class GitLabConfig(SourceConfig):
@@ -244,6 +252,15 @@ class GitLabConfig(SourceConfig):
 
 class GmailConfig(SourceConfig):
     """Gmail configuration schema."""
+
+    expected_mailbox: str | None = Field(
+        default=None,
+        pattern=r"^[^\s@]+@[^\s@]+$",
+        description=(
+            "Native mailbox identity attested by the trusted account binding. "
+            "Required for owned capture."
+        ),
+    )
 
     after_date: Optional[str] = Field(
         None,
@@ -307,10 +324,56 @@ class GmailConfig(SourceConfig):
         return value.replace("-", "/")
 
 
-class GoogleCalendarConfig(SourceConfig):
-    """Google Calendar configuration schema."""
+class CalendarOccurrenceWindow(BaseConfig):
+    """Explicit operator-requested capture window; dates must carry timezones."""
 
-    pass
+    start: AwareDatetime
+    end: AwareDatetime
+
+    @model_validator(mode="after")
+    def bounded(self):
+        """Keep one explicit capture request bounded and nonempty."""
+        if self.start.microsecond or self.end.microsecond:
+            raise ValueError("Calendar capture bounds require whole-second precision")
+        if not timedelta(0) < self.end - self.start <= timedelta(days=366):
+            raise ValueError("Calendar capture window must be positive and at most366days")
+        return self
+
+
+class GoogleCalendarConfig(SourceConfig):
+    """Rolling expanded capture, or an explicit window through source configuration."""
+
+    expected_primary_calendar_id: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"^\S+$",
+        description="Trusted primary calendar ID; required for owned capture.",
+    )
+
+    calendar_ids: tuple[str, ...] | None = Field(default=None, max_length=250)
+
+    @field_validator("calendar_ids")
+    @classmethod
+    def unique_calendars(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """None selects all, empty selects none; only exact native IDs are accepted."""
+        if value is not None and (
+            len(set(value)) != len(value)
+            or any(not item.strip() or item != item.strip() or item == "primary" for item in value)
+        ):
+            raise ValueError("Use unique exact calendar IDs, not blank values or primary alias")
+        return value
+
+    occurrence_past_days: int = Field(default=30, ge=0, le=180)
+    occurrence_future_days: int = Field(default=90, ge=1, le=186)
+    occurrence_window: CalendarOccurrenceWindow | None = None
+
+    def resolved_window(self) -> CalendarOccurrenceWindow:
+        """Freeze relative bounds once for the whole paginated source run."""
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        return self.occurrence_window or CalendarOccurrenceWindow(
+            start=now - timedelta(days=self.occurrence_past_days),
+            end=now + timedelta(days=self.occurrence_future_days),
+        )
 
 
 class GoogleDocsConfig(SourceConfig):
@@ -331,6 +394,18 @@ class GoogleDocsConfig(SourceConfig):
 
 class GoogleDriveConfig(SourceConfig):
     """Google Drive configuration schema."""
+
+    expected_permission_id: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"^\S+$",
+        description="Trusted native Drive permission ID; required for owned canonical capture.",
+    )
+
+    capture_native_sheets: bool = Field(
+        default=False,
+        description="Enable bounded native Sheets capture after verifying account API access.",
+    )
 
     include_patterns: list[str] = Field(
         default=[],
@@ -428,9 +503,22 @@ class JiraConfig(SourceConfig):
 
 
 class LinearConfig(SourceConfig):
-    """Linear configuration schema."""
+    """Explicit workspace and team scope for owned Linear originals."""
 
-    pass
+    workspace_id: UUID = Field(description="Expected native Linear organization UUID")
+    team_ids: tuple[UUID, ...] = Field(
+        min_length=1,
+        max_length=100,
+        description="Exact selected native team UUIDs; no implicit workspace-wide default",
+    )
+
+    @field_validator("team_ids")
+    @classmethod
+    def unique_teams(cls, value: tuple[UUID, ...]) -> tuple[UUID, ...]:
+        """Reject ambiguous duplicate configuration rather than silently rewriting it."""
+        if len(value) != len(set(value)):
+            raise ValueError("Linear team IDs must be unique")
+        return value
 
 
 class MondayConfig(SourceConfig):
@@ -446,9 +534,11 @@ class MySQLConfig(SourceConfig):
 
 
 class NotionConfig(SourceConfig):
-    """Notion configuration schema."""
+    """Verified workspace and connection bot identity for owned Notion capture."""
 
-    pass
+    model_config = ConfigDict(extra="forbid")
+    expected_workspace_id: UUID
+    expected_bot_id: UUID
 
 
 class OneDriveConfig(SourceConfig):
@@ -490,13 +580,64 @@ class OracleConfig(SourceConfig):
 
 
 class OutlookCalendarConfig(SourceConfig):
-    """Outlook Calendar configuration schema."""
+    """Owned calendar originals with bounded occurrence expansion on a fresh source."""
 
-    pass
+    capture_originals: bool = Field(
+        default=False,
+        strict=True,
+        description="Use owned immutable-event capture; legacy source IDs are not migrated.",
+    )
+    occurrence_past_days: int = Field(default=30, ge=0, le=180)
+    occurrence_future_days: int = Field(default=90, ge=1, le=186)
+    occurrence_window: CalendarOccurrenceWindow | None = None
+
+    @model_validator(mode="after")
+    def require_capture_principal(self):
+        """Owned capture cannot inherit an unattested legacy mailbox identity."""
+        if self.capture_originals and self.expected_principal_id is None:
+            raise ValueError("Original Outlook Calendar capture requires expected_principal_id")
+        return self
+
+    def resolved_window(self) -> CalendarOccurrenceWindow:
+        """Freeze relative expansion bounds once before the durable cycle starts."""
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        return self.occurrence_window or CalendarOccurrenceWindow(
+            start=now - timedelta(days=self.occurrence_past_days),
+            end=now + timedelta(days=self.occurrence_future_days),
+        )
+
+    expected_principal_id: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"^\S+$",
+        description="Trusted Microsoft Graph /me ID; required for managed connections.",
+    )
 
 
 class OutlookMailConfig(SourceConfig):
     """Outlook Mail configuration schema."""
+
+    capture_originals: bool = Field(
+        default=False,
+        strict=True,
+        description=(
+            "Use owned immutable-message capture on a fresh source; legacy IDs are not migrated."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def require_capture_principal(self):
+        """Original capture must not rely on an unattested legacy mailbox."""
+        if self.capture_originals and self.expected_principal_id is None:
+            raise ValueError("Original Outlook capture requires expected_principal_id")
+        return self
+
+    expected_principal_id: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"^\S+$",
+        description="Trusted Microsoft Graph /me ID; required for managed connections.",
+    )
 
     after_date: Optional[str] = Field(
         None,
@@ -726,9 +867,23 @@ class SlabConfig(SourceConfig):
 
 
 class SlackConfig(SourceConfig):
-    """Slack configuration schema."""
+    """Trusted native workspace/user pair for owned Slack capture."""
 
-    pass
+    capture_files: bool = Field(
+        default=False,
+        description="Opt in to message-owned file children, each committed independently; "
+        "leave disabled until reader and migration qualification complete.",
+    )
+
+    expected_team_id: str | None = Field(default=None, min_length=1, pattern=r"^\S+$")
+    expected_user_id: str | None = Field(default=None, min_length=1, pattern=r"^\S+$")
+
+    @model_validator(mode="after")
+    def complete_principal(self):
+        """A workspace alone cannot attest a user's private-channel visibility."""
+        if (self.expected_team_id is None) != (self.expected_user_id is None):
+            raise ValueError("Slack identity requires both team and user IDs")
+        return self
 
 
 class SQLServerConfig(SourceConfig):
@@ -743,10 +898,29 @@ class SQliteConfig(SourceConfig):
     pass
 
 
-class StripeConfig(SourceConfig):
-    """Stripe configuration schema."""
+class StripeCaptureConfig(BaseModel):
+    """Trusted immutable source identity; different accounts/modes need fresh sources."""
 
-    pass
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    expected_account_id: str = Field(pattern=r"^acct_[A-Za-z0-9]+$")
+    livemode: StrictBool
+    api_version: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}(?:\.[a-z]+)?$")
+    connected_account_id: str | None = Field(default=None, pattern=r"^acct_[A-Za-z0-9]+$")
+
+    @model_validator(mode="after")
+    def consistent_connect_context(self):
+        """The selected Connect account is the effective native account, not its platform."""
+        if self.connected_account_id is not None and (
+            self.connected_account_id != self.expected_account_id
+        ):
+            raise ValueError("Stripe Connect context must match expected_account_id")
+        return self
+
+
+class StripeConfig(SourceConfig):
+    """Legacy entity ingestion, or explicitly bound original capture on a fresh source."""
+
+    original_capture: StripeCaptureConfig | None = None
 
 
 class PipedriveConfig(SourceConfig):
@@ -1181,6 +1355,12 @@ class ComposioConfig(AuthProviderConfig):
     account_id: str = Field(
         title="Account ID",
         description="Account ID for the Composio connection",
+    )
+
+    user_id: str | None = Field(
+        default=None,
+        title="User ID",
+        description="Explicit Composio user binding required for managed tool sessions",
     )
 
 

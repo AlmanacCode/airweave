@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 from uuid import UUID
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,6 +24,7 @@ class SyncJob(OrganizationBase, UserMixin):
     sync_id: Mapped[UUID] = mapped_column(
         ForeignKey("sync.id", ondelete="CASCADE", name="fk_sync_job_sync_id"), nullable=False
     )
+    provisioning_generation: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     status: Mapped[str] = mapped_column(String(50), default=SyncJobStatus.PENDING.value)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -50,7 +51,6 @@ class SyncJob(OrganizationBase, UserMixin):
         "Entity",
         back_populates="sync_job",
         lazy="noload",
-        cascade="all, delete-orphan",
         passive_deletes=True,
     )
 

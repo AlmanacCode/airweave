@@ -82,6 +82,9 @@ class TemporalScheduleServiceProtocol(Protocol):
         sync_id: UUID,
         db: AsyncSession,
         ctx: ApiContext,
+        *,
+        uow: Optional[UnitOfWork] = None,
+        strict: bool = False,
     ) -> None:
         """Delete all schedules associated with a sync."""
         ...

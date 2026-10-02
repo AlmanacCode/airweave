@@ -17,7 +17,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from airweave.core.config import settings
+from airweave.core.config import AuthMode, settings
 from airweave.core.logging import logger
 from airweave.core.protocols.identity import (
     IdentityProvider,
@@ -416,7 +416,7 @@ class Auth0ManagementClient:
 # ---------------------------------------------------------------------------
 
 auth0_management_client: Optional[Auth0ManagementClient] = None
-if settings.AUTH_ENABLED:
+if settings.AUTH_MODE == AuthMode.AUTH0:
     auth0_management_client = Auth0ManagementClient()
 
 

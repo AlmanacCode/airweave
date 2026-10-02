@@ -5,10 +5,10 @@ Wraps environment variables and provides defaults.
 
 from typing import Optional
 
-from pydantic import PostgresDsn, ValidationInfo, field_validator
+from pydantic import PostgresDsn, TypeAdapter, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
-from airweave.core.config.enums import Environment, StorageBackendType
+from airweave.core.config.enums import AuthMode, Environment, StorageBackendType
 
 _BANNED_PASSWORDS: frozenset[str] = frozenset(
     {
@@ -63,9 +63,6 @@ class Settings(BaseSettings):
         POSTGRES_PASSWORD (str): The PostgreSQL password.
         SQLALCHEMY_ASYNC_DATABASE_URI (Optional[PostgresDsn]): The SQLAlchemy async database URI.
         LOCAL_NGROK_SERVER (Optional[str]): The local ngrok server URL.
-        RUN_ALEMBIC_MIGRATIONS (bool): Whether to run the alembic migrations.
-        RUN_DB_SYNC (bool): Whether to run the system sync to process sources,
-            destinations, and entity types.
         REDIS_HOST (str): The Redis server hostname (single-host mode).
         REDIS_PORT (int): The Redis server port (single-host mode).
         REDIS_PASSWORD (Optional[str]): The Redis password (if authentication is enabled).
@@ -108,11 +105,12 @@ class Settings(BaseSettings):
 
     # Rate limiting
     DISABLE_RATE_LIMIT: bool = False  # For testing purposes - disables rate limiting completely
-    FIRST_SUPERUSER: str
-    FIRST_SUPERUSER_PASSWORD: str
+    FIRST_SUPERUSER: Optional[str] = None
+    FIRST_SUPERUSER_PASSWORD: Optional[str] = None
     FIRST_SUPERUSER_NAME: str = "Admin"
 
-    AUTH_ENABLED: Optional[bool] = False
+    AUTH_MODE: AuthMode = AuthMode.API_KEY
+    AUTH_ENABLED: Optional[bool] = None  # Deprecated migration input; use AUTH_MODE.
     AUTH0_DOMAIN: Optional[str] = None
     AUTH0_AUDIENCE: Optional[str] = None
     AUTH0_RULE_NAMESPACE: Optional[str] = None
@@ -144,8 +142,6 @@ class Settings(BaseSettings):
 
     LOCAL_NGROK_SERVER: Optional[str] = None
 
-    RUN_ALEMBIC_MIGRATIONS: bool = True
-    RUN_DB_SYNC: bool = True
     ENABLE_INTERNAL_SOURCES: bool = False  # Enable internal/testing sources (stub, snapshot)
 
     # Redis configuration.
@@ -220,6 +216,10 @@ class Settings(BaseSettings):
     # in-code default in domains/search/config.py.
     LLM_FALLBACK_CHAIN: Optional[str] = None
 
+    # Optional local OCR; models are provisioned at build/setup time, never during inference.
+    LOCAL_OCR_TESSDATA_PATH: Optional[str] = None
+    LOCAL_OCR_LANGUAGES: tuple[str, ...] = ("eng",)
+
     # Docling OCR fallback service (None = disabled)
     DOCLING_BASE_URL: Optional[str] = None
 
@@ -237,6 +237,7 @@ class Settings(BaseSettings):
 
     # Temporal worker graceful shutdown configuration
     TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT: int = 7200  # 2 hours in seconds
+    WORKER_BIND_HOST: str = "0.0.0.0"  # Control server and Temporal SDK metrics
     WORKER_METRICS_PORT: int = 8888  # Port for /drain and /health endpoints
     METRICS_PORT: int = 9090  # Port for Prometheus metrics endpoint
     METRICS_HOST: str = "0.0.0.0"  # Bind address for metrics server
@@ -358,6 +359,32 @@ class Settings(BaseSettings):
 
         return [origin.strip() for origin in v.split(",") if origin.strip()]
 
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_auth_mode(cls, values):
+        """Preserve explicit legacy configuration without retaining two authorities."""
+        values = dict(values)
+        legacy = values.get("AUTH_ENABLED")
+        if legacy is not None:
+            enabled = TypeAdapter(bool).validate_python(legacy)
+            inferred = AuthMode.AUTH0 if enabled else AuthMode.LOCAL
+            if "AUTH_MODE" in values and values["AUTH_MODE"] != inferred:
+                raise ValueError("AUTH_ENABLED conflicts with AUTH_MODE; remove AUTH_ENABLED")
+            values["AUTH_MODE"] = inferred
+        return values
+
+    @model_validator(mode="after")
+    def validate_auth_mode(self):
+        """Insecure authentication is never available in a deployed environment."""
+        if self.AUTH_MODE == AuthMode.LOCAL and self.ENVIRONMENT not in {
+            Environment.LOCAL,
+            Environment.TEST,
+        }:
+            raise ValueError("AUTH_MODE=local is only allowed in local/test environments")
+        if self.AUTH_MODE == AuthMode.LOCAL and not self.FIRST_SUPERUSER:
+            raise ValueError("FIRST_SUPERUSER is required for AUTH_MODE=local")
+        return self
+
     @field_validator(
         "AUTH0_DOMAIN",
         "AUTH0_AUDIENCE",
@@ -368,7 +395,7 @@ class Settings(BaseSettings):
         mode="before",
     )
     def validate_auth0_settings(cls, v: str, info: ValidationInfo) -> str:
-        """Validate Auth0 settings when AUTH_ENABLED is True.
+        """Validate Auth0 settings only for AUTH_MODE=auth0.
 
         Args:
 
@@ -382,12 +409,12 @@ class Settings(BaseSettings):
 
         Raises:
         ------
-            ValueError: If AUTH_ENABLED is True and the Auth0 setting is empty.
+            ValueError: If AUTH_MODE=auth0 and the Auth0 setting is empty.
         """
-        auth_enabled = info.data.get("AUTH_ENABLED", False)
+        auth_enabled = info.data.get("AUTH_MODE") == AuthMode.AUTH0
         if auth_enabled and not v:
             field_name = info.field_name
-            raise ValueError(f"{field_name} must be set when AUTH_ENABLED is True")
+            raise ValueError(f"{field_name} must be set when AUTH_MODE=auth0")
         return v
 
     @field_validator(
@@ -458,8 +485,12 @@ class Settings(BaseSettings):
         return v
 
     @field_validator("FIRST_SUPERUSER_PASSWORD", mode="before")
-    def validate_first_superuser_password(cls, v: str, info: ValidationInfo) -> str:
-        """Reject weak superuser passwords in non-local environments."""
+    def validate_first_superuser_password(
+        cls, v: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
+        """Validate bootstrap passwords when supplied; service mode needs none."""
+        if v is None:
+            return None
         environment = info.data.get("ENVIRONMENT", "local")
         env_str = environment.value if isinstance(environment, Environment) else environment
         if env_str in ("local", "test"):
@@ -476,7 +507,9 @@ class Settings(BaseSettings):
         return v
 
     @field_validator("FIRST_SUPERUSER", mode="before")
-    def validate_first_superuser_email(cls, v: str, info: ValidationInfo) -> str:
+    def validate_first_superuser_email(
+        cls, v: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
         """Reject well-known placeholder emails in non-local environments."""
         environment = info.data.get("ENVIRONMENT", "local")
         env_str = environment.value if isinstance(environment, Environment) else environment

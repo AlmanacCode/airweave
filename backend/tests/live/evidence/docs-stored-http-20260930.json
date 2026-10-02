@@ -1,0 +1,40 @@
+{
+  "date": "2026-09-30",
+  "commit": "85603b0",
+  "provider": "google_drive",
+  "provider_requests": 5,
+  "identity_verification": "provider_email",
+  "records": 1,
+  "journal_changes": 1,
+  "partial_records": 0,
+  "blobs": 3,
+  "blob_bytes": 1053473,
+  "blob_sha_verified": true,
+  "replay_new_changes": 0,
+  "fresh_connections_readback": true,
+  "document_reader": {
+    "verified": true,
+    "native_document_digest_verified": true,
+    "identity_verified": true,
+    "stale_revision_denied": true,
+    "wrong_source_denied": true,
+    "top_level_tabs": 4,
+    "scope": "stored_document_http_route_with_fixture_auth"
+  },
+  "full_scope_completed": false,
+  "checkpoint_saved": false,
+  "almanac_reader": null,
+  "harness_exit_code": 0,
+  "cleanup": {
+    "remaining_private_schemas": 0,
+    "remaining_private_blob_directories": 0,
+    "immutable_archive_removed": true
+  },
+  "limitations": [
+    "One selected document, not full Drive enumeration or incremental-cycle proof",
+    "Local HTTP route with fixture authentication, not hosted ownership verification",
+    "No Almanac document CLI consumer tested",
+    "No induced provider mutation or deletion",
+    "Sheets not tested"
+  ]
+}

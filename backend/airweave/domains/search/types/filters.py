@@ -38,6 +38,11 @@ class FilterableField(str, Enum):
     SYSTEM_METADATA_CHUNK_INDEX = "airweave_system_metadata.chunk_index"
     SYSTEM_METADATA_SYNC_ID = "airweave_system_metadata.sync_id"
     SYSTEM_METADATA_SYNC_JOB_ID = "airweave_system_metadata.sync_job_id"
+    CANONICAL_RECORD_TYPE = "airweave_system_metadata.canonical_record_type"
+    CANONICAL_SOURCE_CREATED_US = "airweave_system_metadata.source_created_us"
+    CANONICAL_SOURCE_UPDATED_US = "airweave_system_metadata.source_updated_us"
+    CANONICAL_SOURCE_CREATED_KNOWN = "airweave_system_metadata.source_created_known"
+    CANONICAL_SOURCE_UPDATED_KNOWN = "airweave_system_metadata.source_updated_known"
 
 
 class FilterOperator(str, Enum):
@@ -66,6 +71,7 @@ _TEXT_FIELDS: frozenset[FilterableField] = frozenset(
         FilterableField.BREADCRUMBS_ENTITY_TYPE,
         FilterableField.SYSTEM_METADATA_ENTITY_TYPE,
         FilterableField.SYSTEM_METADATA_SOURCE_NAME,
+        FilterableField.CANONICAL_RECORD_TYPE,
         FilterableField.SYSTEM_METADATA_ORIGINAL_ENTITY_ID,
         FilterableField.SYSTEM_METADATA_SYNC_ID,
         FilterableField.SYSTEM_METADATA_SYNC_JOB_ID,
@@ -82,6 +88,10 @@ _DATE_FIELDS: frozenset[FilterableField] = frozenset(
 _NUMERIC_FIELDS: frozenset[FilterableField] = frozenset(
     {
         FilterableField.SYSTEM_METADATA_CHUNK_INDEX,
+        FilterableField.CANONICAL_SOURCE_CREATED_US,
+        FilterableField.CANONICAL_SOURCE_UPDATED_US,
+        FilterableField.CANONICAL_SOURCE_CREATED_KNOWN,
+        FilterableField.CANONICAL_SOURCE_UPDATED_KNOWN,
     }
 )
 

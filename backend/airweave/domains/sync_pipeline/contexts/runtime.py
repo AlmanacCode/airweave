@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
+    from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
     from airweave.domains.sync_pipeline.pipeline.entity_tracker import EntityTracker
     from airweave.domains.syncs.cursors.cursor import SyncCursor
     from airweave.platform.destinations._base import BaseDestination
@@ -28,5 +29,6 @@ class SyncRuntime:
 
     source: "BaseSource"
     entity_tracker: "EntityTracker"
+    canonical_capture: Optional["CanonicalCapturePipeline"] = None
     cursor: Optional["SyncCursor"] = None
     destinations: List["BaseDestination"] = field(default_factory=list)

@@ -23,7 +23,7 @@ from airweave.platform.entities._airweave_field import AirweaveField
 from airweave.platform.entities._base import BaseEntity, Breadcrumb, DeletionEntity, FileEntity
 from airweave.platform.entities.utils import _determine_file_type_from_mime
 
-_GOOGLE_EXPORT_MAP: Dict[str, tuple[str, str]] = {
+GOOGLE_EXPORT_FORMATS: Dict[str, tuple[str, str]] = {
     "application/vnd.google-apps.document": (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".docx",
@@ -190,7 +190,7 @@ class GoogleDriveFileEntity(FileEntity):
         file_id = data["id"]
 
         if mime_type.startswith("application/vnd.google-apps."):
-            export_mime_type, file_extension = _GOOGLE_EXPORT_MAP.get(
+            export_mime_type, file_extension = GOOGLE_EXPORT_FORMATS.get(
                 mime_type, ("application/pdf", ".pdf")
             )
             download_url = (
@@ -303,3 +303,16 @@ class GoogleDriveFileDeletionEntity(DeletionEntity):
         if self.drive_id:
             return f"https://drive.google.com/drive/folders/{self.drive_id}"
         return "https://drive.google.com/drive/my-drive"
+
+
+class GoogleDriveFolderEntity(BaseEntity):
+    """Searchable folder metadata; folders never require a fabricated file body."""
+
+    folder_id: str = AirweaveField(..., description="Native folder ID", is_entity_id=True)
+    title: str = AirweaveField(..., description="Folder name", is_name=True, embeddable=True)
+    description: str = AirweaveField(..., description="Folder description", embeddable=True)
+
+    @computed_field(return_type=str)
+    def web_url(self) -> str:
+        """Direct folder locator."""
+        return f"https://drive.google.com/drive/folders/{self.folder_id}"

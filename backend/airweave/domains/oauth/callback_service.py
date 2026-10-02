@@ -531,6 +531,7 @@ class OAuthCallbackService:
                     collection_id=collection.id,
                     collection_readable_id=collection.readable_id,
                     source_entry=source_entry,
+                    source_config=validated_config,
                     schedule_config=schedule_config,
                     run_immediately=True,
                     ctx=ctx,

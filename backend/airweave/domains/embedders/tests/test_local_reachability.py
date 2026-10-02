@@ -16,19 +16,19 @@ from airweave.domains.embedders.types import DenseEmbedderEntry
 
 def _make_entry(embedder_class: type, **overrides) -> DenseEmbedderEntry:
     """Build a minimal DenseEmbedderEntry for testing."""
-    defaults = dict(
-        short_name="test",
-        name="Test",
-        description="test entry",
-        class_name=embedder_class.__name__,
-        provider="local",
-        api_model_name="test-model",
-        max_dimensions=384,
-        max_tokens=512,
-        supports_matryoshka=False,
-        embedder_class_ref=embedder_class,
-        required_setting="TEXT2VEC_INFERENCE_URL",
-    )
+    defaults = {
+        "short_name": "test",
+        "name": "Test",
+        "description": "test entry",
+        "class_name": embedder_class.__name__,
+        "provider": "local",
+        "api_model_name": "test-model",
+        "max_dimensions": 384,
+        "max_tokens": 512,
+        "supports_matryoshka": False,
+        "embedder_class_ref": embedder_class,
+        "required_setting": "TEXT2VEC_INFERENCE_URL",
+    }
     defaults.update(overrides)
     return DenseEmbedderEntry(**defaults)
 
@@ -62,7 +62,7 @@ class TestValidateLocalReachability:
     @patch("airweave.domains.embedders.config.settings")
     @patch("airweave.domains.embedders.config.httpx")
     def test_passes_when_service_reachable(self, mock_httpx, mock_settings):
-        """Passes when the health endpoint returns 200."""
+        """Passes when the readiness endpoint responds successfully."""
         mock_settings.TEXT2VEC_INFERENCE_URL = "http://localhost:9878"
         mock_httpx.Timeout = httpx.Timeout
         client = _mock_client()
@@ -71,7 +71,7 @@ class TestValidateLocalReachability:
         entry = _make_entry(LocalDenseEmbedder)
         _validate_local_reachability(entry)
 
-        client.get.assert_called_once_with("http://localhost:9878/health")
+        client.get.assert_called_once_with("http://localhost:9878/.well-known/ready")
 
     @patch("airweave.domains.embedders.config.settings")
     @patch("airweave.domains.embedders.config.httpx")

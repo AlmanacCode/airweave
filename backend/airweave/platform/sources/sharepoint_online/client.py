@@ -16,7 +16,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple
 import httpx
 from tenacity import retry, stop_after_attempt
 
-from airweave.platform.sources.retry_helpers import (
+from airweave.platform.http_client.retry_helpers import (
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
 )

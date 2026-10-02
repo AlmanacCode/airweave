@@ -1,0 +1,30 @@
+"""Canonical-owned search attributes, independent of provider entity date fallbacks."""
+
+from datetime import datetime, timezone
+
+from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.platform.entities._base import AirweaveSystemMetadata
+
+SEARCH_METADATA_PIPELINE_VERSION = 2
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def epoch_microseconds(value: datetime) -> int:
+    """Preserve source precision without float timestamp rounding."""
+    if value.tzinfo is None:
+        raise ValueError("Canonical search timestamp must be timezone-aware")
+    delta = value - _EPOCH
+    return (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
+
+
+def stamp_search_metadata(meta: AirweaveSystemMetadata, record: SourceRecord) -> None:
+    """Use only the committed source record, never mapper or observation timestamps."""
+    meta.canonical_record_type = record.identity.record_type
+    meta.source_created_known = int(record.source_created_at is not None)
+    meta.source_updated_known = int(record.source_updated_at is not None)
+    meta.source_created_us = (
+        epoch_microseconds(record.source_created_at) if record.source_created_at else None
+    )
+    meta.source_updated_us = (
+        epoch_microseconds(record.source_updated_at) if record.source_updated_at else None
+    )

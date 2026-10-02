@@ -24,6 +24,7 @@ from airweave.domains.search.protocols import (
     SearchPlanExecutorProtocol,
 )
 from airweave.domains.search.types import SearchResults
+from airweave.domains.sources.protocols import SourceRegistryProtocol
 
 if TYPE_CHECKING:
     from airweave.schemas.search_v2 import AgenticSearchRequest
@@ -42,6 +43,7 @@ class AgenticSearchService(AgenticSearchServiceProtocol):
         metadata_builder: CollectionMetadataBuilderProtocol,
         collection_repo: CollectionRepositoryProtocol,
         event_bus: EventBus,
+        source_registry: SourceRegistryProtocol,
     ) -> None:
         """Initialize with all dependencies needed to construct agents."""
         self._llm = llm
@@ -49,6 +51,7 @@ class AgenticSearchService(AgenticSearchServiceProtocol):
         self._reranker = reranker
         self._executor = executor
         self._vector_db = vector_db
+        self._source_registry = source_registry
         self._metadata_builder = metadata_builder
         self._collection_repo = collection_repo
         self._event_bus = event_bus
@@ -61,6 +64,7 @@ class AgenticSearchService(AgenticSearchServiceProtocol):
             reranker=self._reranker,
             executor=self._executor,
             vector_db=self._vector_db,
+            source_registry=self._source_registry,
             metadata_builder=self._metadata_builder,
             collection_repo=self._collection_repo,
             event_bus=self._event_bus,
@@ -81,6 +85,7 @@ class AgenticSearchService(AgenticSearchServiceProtocol):
             reranker=self._reranker,
             executor=self._executor,
             vector_db=self._vector_db,
+            source_registry=self._source_registry,
             metadata_builder=self._metadata_builder,
             collection_repo=self._collection_repo,
             event_bus=self._event_bus,

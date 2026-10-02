@@ -1,0 +1,61 @@
+"""One recoverable whole-scope scan, independent of worker attempts."""
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from airweave.models._base import OrganizationBase
+
+
+class CaptureScan(OrganizationBase):
+    """Only the canonical capture transaction boundary mutates this state."""
+
+    __tablename__ = "capture_scan"
+    sync_id: Mapped[UUID] = mapped_column(ForeignKey("sync.id", ondelete="CASCADE"))
+    scope_key: Mapped[str] = mapped_column(String)
+    record_type: Mapped[str] = mapped_column(String)
+    container_id: Mapped[str | None] = mapped_column(String)
+    parent_record_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("entity.id", ondelete="CASCADE")
+    )
+    parent_visibility_epoch: Mapped[int | None] = mapped_column(BigInteger)
+    parent_verified_attempt_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    parent_verified_revision: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    membership_attempt_id: Mapped[UUID | None]
+    cycle_id: Mapped[UUID]
+    sweep_id: Mapped[UUID]
+    revision: Mapped[int] = mapped_column(BigInteger)
+    phase: Mapped[str] = mapped_column(String)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    continuation: Mapped[dict] = mapped_column(JSONB)
+    execution_state: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index(
+            "idx_capture_scan_parent",
+            "sync_id",
+            "parent_record_id",
+            "record_type",
+            unique=True,
+            postgresql_where=text("parent_record_id IS NOT NULL"),
+        ),
+        UniqueConstraint("sync_id", "scope_key", name="uq_capture_scan_scope"),
+        CheckConstraint(
+            "phase IN ('collecting','reconciling','complete')", name="ck_capture_scan_phase"
+        ),
+        CheckConstraint("revision >= 1", name="ck_capture_scan_revision"),
+    )

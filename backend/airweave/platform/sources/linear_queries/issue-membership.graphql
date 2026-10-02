@@ -1,0 +1,6 @@
+query OwnedLinearIssueMembership($issueId: ID!) {
+  issues(filter: {id: {eq: $issueId}}, includeArchived: true, first: 2) {
+    nodes { id team { id } archivedAt trashed }
+    pageInfo { hasNextPage endCursor }
+  }
+}

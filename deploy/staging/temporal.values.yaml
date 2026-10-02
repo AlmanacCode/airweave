@@ -1,0 +1,57 @@
+# REVIEW TEMPLATE: resolve REQUIRED values before deployment.
+server:
+  replicaCount: 1
+  image:
+    repository: docker.io/temporalio/server
+    tag: 1.32.0@sha256:ca47d4de249b9cc28137628dba77ae5e75e8b313ebb5c801c64615c1c99cbb09
+  nodeSelector:
+    kubernetes.io/arch: amd64
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  config:
+    numHistoryShards: 128
+    namespaces:
+      create: false
+    persistence:
+      defaultStore: default
+      visibilityStore: visibility
+      datastores:
+        default:
+          sql:
+            pluginName: postgres12
+            databaseName: temporal
+            connectAddr: REQUIRED_POSTGRES_HOST:5432
+            user: temporal_runtime
+            existingSecret: temporal-runtime
+            secretKey: password
+            createDatabase: false
+            manageSchema: false
+            maxConns: 10
+            maxIdleConns: 5
+        visibility:
+          sql:
+            pluginName: postgres12
+            databaseName: temporal_visibility
+            connectAddr: REQUIRED_POSTGRES_HOST:5432
+            user: temporal_visibility_runtime
+            existingSecret: temporal-visibility-runtime
+            secretKey: password
+            createDatabase: false
+            manageSchema: false
+            maxConns: 10
+            maxIdleConns: 5
+admintools:
+  enabled: false
+  image:
+    repository: docker.io/temporalio/admin-tools
+    tag: 1.32.0@sha256:8bb84e24db4336de48031a66dbda25a7477d300736fe825893e467042135da1f
+web:
+  enabled: false
+schema:
+  useHelmHooks: false
+  backoffLimit: 2
+  activeDeadlineSeconds: 600

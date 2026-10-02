@@ -4,18 +4,56 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.core.context import BaseContext
 from airweave.crud._base_organization import CRUDBaseOrganization
+from airweave.db.unit_of_work import UnitOfWork
+from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
 from airweave.models.sync_job import SyncJob
 from airweave.schemas.sync_job import SyncJobCreate, SyncJobUpdate
 
 
+async def lock_sync_for_job(db: AsyncSession, organization: UUID, sync_id: UUID) -> Sync:
+    """Serialize admission with provisioning changes, including privileged admin runs."""
+    sync = await db.scalar(
+        select(Sync)
+        .where(Sync.id == sync_id, Sync.organization_id == organization)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if sync is None:
+        raise HTTPException(status_code=404, detail="Sync not found")
+    if sync.provisioning_generation and (
+        sync.provisioning_generation != sync.provisioning_ready_generation
+        or sync.status != "active"
+    ):
+        raise HTTPException(status_code=409, detail="Owned source is not ready for capture")
+    return sync
+
+
 class CRUDSyncJob(CRUDBaseOrganization[SyncJob, SyncJobCreate, SyncJobUpdate]):
     """CRUD operations for sync jobs."""
+
+    async def create(
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: SyncJobCreate,
+        ctx: BaseContext,
+        uow: Optional[UnitOfWork] = None,
+        skip_validation: bool = False,
+    ) -> SyncJob:
+        """Stamp job admission under the same lock used by account generation changes."""
+        sync = await lock_sync_for_job(db, ctx.organization.id, obj_in.sync_id)
+        values = obj_in.model_dump(exclude_unset=True)
+        values["provisioning_generation"] = sync.provisioning_generation
+        return await super().create(
+            db, obj_in=values, ctx=ctx, uow=uow, skip_validation=skip_validation
+        )
 
     async def get(self, db: AsyncSession, id: UUID, ctx: BaseContext) -> SyncJob | None:
         """Get a sync job by ID."""
@@ -128,7 +166,18 @@ class CRUDSyncJob(CRUDBaseOrganization[SyncJob, SyncJobCreate, SyncJobUpdate]):
         Returns:
             List of stuck sync jobs
         """
-        stmt = select(SyncJob).where(SyncJob.status.in_(status))
+        # Native imports share durable jobs, but own their explicit resume/cancel
+        # lifecycle. Provider heartbeat timeouts must never terminate them.
+        native_source = (
+            select(SourceConnection.id)
+            .where(
+                SourceConnection.sync_id == SyncJob.sync_id,
+                SourceConnection.organization_id == SyncJob.organization_id,
+                SourceConnection.short_name == "almanac",
+            )
+            .exists()
+        )
+        stmt = select(SyncJob).where(SyncJob.status.in_(status), ~native_source)
 
         # Apply timestamp filters based on what's provided
         if modified_before is not None:

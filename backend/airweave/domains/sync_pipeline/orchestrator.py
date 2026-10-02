@@ -19,6 +19,7 @@ from airweave.core.shared_models import (
 from airweave.db.session import get_db_context
 from airweave.domains.access_control.pipeline import AccessControlPipeline
 from airweave.domains.sources.exceptions.classifier import classify_error
+from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
 from airweave.domains.sync_pipeline.contexts import SyncContext
 from airweave.domains.sync_pipeline.contexts.runtime import SyncRuntime
 from airweave.domains.sync_pipeline.entity.pipeline import EntityPipeline
@@ -53,9 +54,9 @@ class SyncOrchestrator:
 
     def __init__(
         self,
-        entity_pipeline: EntityPipeline,
+        entity_pipeline: EntityPipeline | CanonicalCapturePipeline,
         worker_pool: AsyncWorkerPool,
-        stream: AsyncSourceStream,
+        stream: AsyncSourceStream | None,
         sync_context: SyncContext,
         runtime: SyncRuntime,
         access_control_pipeline: AccessControlPipeline,
@@ -196,17 +197,29 @@ class SyncOrchestrator:
         """Initialize sync job and start all components."""
         self.sync_context.logger.info("Starting sync job")
 
-        await self.stream.start()
-
         await self._state_machine.transition(
             sync_job_id=self.sync_context.sync_job.id,
             target=SyncJobStatus.RUNNING,
             ctx=self.sync_context,
             lifecycle_data=self._lifecycle_data,
         )
+        if self.runtime.canonical_capture is not None:
+            await self.runtime.canonical_capture.start(self.sync_context)
+        if self.stream is not None:
+            await self.stream.start()
 
     async def _process_entities(self) -> None:  # noqa: C901
         """Process entities using micro-batching with bounded inner concurrency."""
+        if (
+            self.runtime.canonical_capture is not None
+            and self.runtime.canonical_capture.page_source is not None
+        ):
+            await self.runtime.canonical_capture.run_scans(
+                self.sync_context, self.runtime, self._check_capture_limits
+            )
+            return
+        if self.stream is None:
+            raise SyncFailureError("Observation source has no stream")
         source_name = self.runtime.source.source_name
         self.sync_context.logger.info(
             f"Starting pull-based processing from source {source_name} "
@@ -297,6 +310,14 @@ class SyncOrchestrator:
             if stream_error:
                 raise stream_error
 
+    async def _check_capture_limits(self) -> None:
+        """Keep the existing usage guard before each durable provider page."""
+        if not self.sync_context.execution_config.behavior.skip_guardrails:
+            async with get_db_context() as db:
+                await self._usage_checker.is_allowed(
+                    db, self.sync_context.organization.id, ActionType.ENTITIES
+                )
+
     async def _submit_batch_and_trim(
         self,
         batch: list,
@@ -304,6 +325,15 @@ class SyncOrchestrator:
     ) -> set[asyncio.Task]:
         """Submit a micro-batch to the worker pool and trim to max parallelism if needed."""
         if not batch:
+            return pending_tasks
+
+        if self.runtime.canonical_capture is not None:
+            # Preserve per-identity observation order. Source I/O remains concurrent.
+            await self.runtime.canonical_capture.process(
+                entities=list(batch),
+                sync_context=self.sync_context,
+                runtime=self.runtime,
+            )
             return pending_tasks
 
         task = await self.worker_pool.submit(
@@ -449,6 +479,12 @@ class SyncOrchestrator:
 
     async def _cleanup_orphaned_entities_if_needed(self) -> None:
         """Cleanup orphaned entities based on sync type."""
+        if self.runtime.canonical_capture is not None:
+            await self.runtime.canonical_capture.cleanup_orphaned_entities(
+                self.sync_context,
+                self.runtime,
+            )
+            return
         cursor = self.runtime.cursor
         is_incremental = cursor is not None and cursor.loaded_from_db
 
@@ -508,6 +544,8 @@ class SyncOrchestrator:
                 f"ACL sync error: {get_error_message(e)}",
                 exc_info=True,
             )
+            if self.runtime.canonical_capture is not None:
+                raise
 
         await self._publish_acl_heartbeat()
         # Don't fail the entire sync for ACL errors
@@ -630,6 +668,9 @@ class SyncOrchestrator:
 
     async def _save_cursor_data(self) -> None:
         """Save cursor data to database if it exists."""
+        if self.runtime.canonical_capture is not None:
+            await self.runtime.canonical_capture.save_checkpoint(self.sync_context, self.runtime)
+            return
         if self.runtime.cursor is None:
             return
 
@@ -664,6 +705,8 @@ class SyncOrchestrator:
                 f"Failed to save cursor data for sync {self.sync_context.sync.id}: {e}",
                 exc_info=True,
             )
+            # A run without its durable continuation boundary is not complete.
+            raise
 
     async def _handle_sync_failure(
         self, error: Exception
@@ -755,7 +798,8 @@ class SyncOrchestrator:
             await self.worker_pool.cancel_all()
 
         # Cancel stream to stop producer
-        await self.stream.cancel()
+        if self.stream is not None:
+            await self.stream.cancel()
 
         # Transition through CANCELLING → CANCELLED.
         # RUNNING → CANCELLING is required by the state machine.

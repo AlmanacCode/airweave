@@ -94,8 +94,8 @@ class OutlookMessageEntity(EmailEntity):
         description="Message ID from Microsoft Graph.",
         is_entity_id=True,
     )
-    folder_name: str = AirweaveField(
-        ..., description="Name of the folder containing this message", embeddable=True
+    folder_name: Optional[str] = AirweaveField(
+        None, description="Name of the folder containing this message", embeddable=True
     )
     subject: str = AirweaveField(
         ...,
@@ -105,6 +105,17 @@ class OutlookMessageEntity(EmailEntity):
     )
     sender: Optional[str] = AirweaveField(
         None, description="Email address of the sender", embeddable=True
+    )
+    folder_id: Optional[str] = AirweaveField(None, description="Native current folder ID")
+    from_address: Optional[str] = AirweaveField(
+        None, description="Author address, distinct from the sending agent", embeddable=True
+    )
+    conversation_id: Optional[str] = AirweaveField(None, description="Native conversation ID")
+    bcc_recipients: List[str] = AirweaveField(
+        default_factory=list, description="BCC recipients", embeddable=True
+    )
+    reply_to: List[str] = AirweaveField(
+        default_factory=list, description="Reply-to recipients", embeddable=True
     )
     to_recipients: List[str] = AirweaveField(
         default_factory=list, description="Recipients of the message", embeddable=True
@@ -232,7 +243,9 @@ class OutlookAttachmentEntity(FileEntity):
         is_name=True,
     )
     message_id: str = AirweaveField(..., description="ID of the message this attachment belongs to")
-    attachment_id: str = AirweaveField(..., description="Outlook's attachment ID")
+    attachment_id: str = AirweaveField(
+        ..., description="Native attachment ID or MIME part path; metadata identifies the scheme"
+    )
     content_type: Optional[str] = AirweaveField(None, description="Content type of the attachment")
     is_inline: bool = AirweaveField(False, description="Whether this is an inline attachment")
     content_id: Optional[str] = AirweaveField(None, description="Content ID for inline attachments")

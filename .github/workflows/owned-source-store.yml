@@ -1,0 +1,126 @@
+name: Owned source store
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - backend/**
+      - evaluation/**
+      - vespa/app/**
+      - Makefile
+      - .github/workflows/owned-source-store.yml
+  push:
+    branches: [dev]
+    paths:
+      - backend/**
+      - evaluation/**
+      - vespa/app/**
+      - Makefile
+      - .github/workflows/owned-source-store.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owned-store-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.13'
+      - name: Verify offline retrieval metrics and file boundaries
+        run: |
+          python -m venv .venv-evaluation
+          .venv-evaluation/bin/python -m pip install ir-measures==0.4.3 pydantic==2.11.9 pytest==8.3.5
+          .venv-evaluation/bin/python -m pytest evaluation/tests -q --confcutdir=evaluation
+
+  correctness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      vespa:
+        image: vespaengine/vespa@sha256:5c30f5c41e7563498c4f925db6a837a3848f04726a3ed26aed4a7c8ab69f18fd
+        ports:
+          - 8081:8081
+          - 19071:19071
+        options: >-
+          --hostname vespa
+          --health-cmd "curl -f http://localhost:19071/state/v1/health"
+          --health-interval 10s --health-timeout 5s --health-retries 30
+      minilm:
+        image: semitechnologies/transformers-inference@sha256:c9c13f047ee31488e686c4a7b2ea7ccfcdec16ee825447450dc047cf97791590
+        env:
+          ENABLE_CUDA: '0'
+        ports:
+          - 8080:8080
+        options: --memory=2g --cpus=2
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_USER: sync_test
+          POSTGRES_PASSWORD: disposable-ci-only
+          POSTGRES_DB: sync_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sync_test -d sync_tests"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CANONICAL_TEST_DATABASE_URL: postgresql+asyncpg://sync_test:disposable-ci-only@localhost:5432/sync_tests
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.13'
+      - uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a
+        with:
+          version: 2.3.2
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      - name: Install locked dependencies
+        working-directory: backend
+        run: poetry install --with dev,lint --no-root --no-interaction
+      - name: Verify durable records and publication
+        run: make test-store
+      - name: Verify source capture and transport
+        run: make test-capture
+      - name: Verify connection provisioning and recovery
+        run: make test-provisioning
+      - name: Verify indexed retrieval and visibility
+        run: make test-search
+      - name: Verify service authentication
+        run: make test-auth
+      - name: Verify dependency readiness
+        run: make test-health
+      - name: Verify OCR execution boundaries and fallback
+        run: make test-ocr
+      - name: Verify projection recovery and maintenance workflows
+        run: make test-worker
+      - name: Record tested Vespa image
+        run: docker image inspect vespaengine/vespa@sha256:5c30f5c41e7563498c4f925db6a837a3848f04726a3ed26aed4a7c8ab69f18fd --format '{{json .RepoDigests}}'
+      - name: Verify real Vespa schema and retrieval
+        env:
+          OWNED_VESPA_TEST: '1'
+          OWNED_MINILM_TEST: '1'
+          EMBEDDING_DIMENSIONS: '384'
+        run: make test-index
+
+  image:
+    needs: correctness
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Build the deployable image without publishing
+        run: make build IMAGE=almanac-source-store:ci
+      - name: Verify packaged Python and entrypoint syntax
+        run: |
+          docker run --rm --entrypoint python almanac-source-store:ci -m compileall -q airweave
+          docker run --rm --entrypoint /bin/sh almanac-source-store:ci -n /app/entrypoint.sh
+          docker run --rm --entrypoint python almanac-source-store:ci -m scripts.smoke_local_ocr --tessdata /usr/share/tessdata

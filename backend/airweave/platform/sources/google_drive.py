@@ -16,17 +16,32 @@ References:
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 from tenacity import retry, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
 from airweave.domains.browse_tree.types import NodeSelectionData
+from airweave.domains.entities.canonical.cycle_models import CaptureCycle, CycleConfiguration
+from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.page_source import (
+    CapturePage,
+    CapturePlan,
+    InvalidScanContinuation,
+)
+from airweave.domains.entities.canonical.requests import CaptureRecord, CompletedScope
+from airweave.domains.entities.canonical.scan_models import ScanContinuation
 from airweave.domains.sources.exceptions import SourceAuthError, SourceError
-from airweave.domains.sources.token_providers.protocol import TokenProviderProtocol
+from airweave.domains.sources.token_providers.protocol import (
+    SourceAuthProvider,
+    authorization_headers,
+)
 from airweave.domains.storage import FileSkippedException
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.syncs.cursors.cursor import SyncCursor
@@ -41,13 +56,30 @@ from airweave.platform.entities.google_drive import (
     _parse_drive_dt,
 )
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
-from airweave.platform.sources._base import BaseSource
-from airweave.platform.sources.http_helpers import raise_for_status
-from airweave.platform.sources.retry_helpers import (
+from airweave.platform.http_client.retry_helpers import (
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
 )
+from airweave.platform.sources._base import BaseSource
+from airweave.platform.sources.http_helpers import raise_for_status
+from airweave.platform.sources.records.google_drive_content import capture_file_content
+from airweave.platform.sources.records.google_drive_pages import DrivePages, rejected_listing_token
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
+
+
+class DrivePrincipal(BaseModel):
+    """Native stable identity; display labels and email are not binding authority."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+    permissionId: str = Field(min_length=1, pattern=r"^\S+$")
+    me: StrictBool
+
+
+class DriveAbout(BaseModel):
+    """Only the requested native principal response is interpreted."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+    user: DrivePrincipal
 
 
 @source(
@@ -77,11 +109,108 @@ class GoogleDriveSource(BaseSource):
     while maintaining proper organization and access permissions.
     """
 
+    canonical_record_types = ("file",)
+
+    canonical_container_parents = {}
+    expected_permission_id: str | None = None
+    capture_native_sheets: bool = False
+    _verified_permission_id: str | None = None
+
+    def _require_principal(self) -> None:
+        """Direct capture and resume cannot bypass native account attestation."""
+        if (
+            self.expected_permission_id is None
+            or self._verified_permission_id != self.expected_permission_id
+        ):
+            raise ValueError("Owned Drive capture requires an attested permission identity")
+
+    @property
+    def capture_cycle_configuration(self) -> CycleConfiguration:
+        """One unfiltered accessible corpus; legacy path selections remain unsupported."""
+        self._require_principal()
+        if self.include_patterns:
+            raise ValueError("Drive path selection is not yet supported by canonical capture")
+        return CycleConfiguration(
+            fingerprint=hashlib.sha256(
+                json.dumps(
+                    {
+                        "capture_version": 3,
+                        "permission_id": self.expected_permission_id,
+                        "scope": (
+                            "drive-all-accessible-workspace-native-v2"
+                            if self.capture_native_sheets
+                            else "drive-all-accessible-docs-native"
+                        ),
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest(),
+            parents={"file": (None,)},
+            known_object_validation=("file",),
+        )
+
+    async def prepare_cycle(self, previous: CaptureCycle | None) -> CapturePlan:
+        """Only engine-attested full capture can authorize native changes."""
+        return await DrivePages(self._get).prepare(previous, self.capture_cycle_configuration)
+
+    def initial_continuation(self, cycle: CaptureCycle) -> ScanContinuation:
+        """Restore the persisted starting boundary."""
+        self._require_principal()
+        if cycle.configuration != self.capture_cycle_configuration:
+            raise ValueError("Drive cycle does not match the trusted capture configuration")
+        return DrivePages.initial(cycle)
+
+    async def _capture_body(self, record: CaptureRecord, files: FileService) -> CaptureRecord:
+        return await capture_file_content(
+            record,
+            files=files,
+            get=self._get,
+            client=self.http_client,
+            auth=self.auth,
+            logger=self.logger,
+            capture_native_sheets=self.capture_native_sheets,
+        )
+
+    async def capture_page(
+        self,
+        scope: CompletedScope,
+        continuation: ScanContinuation,
+        *,
+        files: FileService,
+        parent: SourceRecord | None = None,
+    ) -> CapturePage:
+        """Commit one version-checked file without retaining a native response queue."""
+        self._require_principal()
+        if scope != CompletedScope(record_type="file") or parent is not None:
+            raise ValueError("Drive requires its independent file scope")
+
+        async def hydrate(record: CaptureRecord) -> CaptureRecord:
+            return await self._capture_body(record, files)
+
+        return await DrivePages(self._get).page(continuation, hydrate)
+
+    async def refresh_known(self, record: SourceRecord, *, files: FileService) -> CaptureRecord:
+        """Known list omissions require an exact accessible-file read."""
+        self._require_principal()
+        if record.identity.record_type != "file" or record.parent is not None:
+            raise ValueError("Drive omission must identify an independent file")
+        return await self._capture_body(
+            await DrivePages(self._get).current(record.identity.native_id), files
+        )
+
+    def child_scope(self, parent: SourceRecord, record_type: str) -> CompletedScope:
+        """Folders are native metadata, not proof of inherited access."""
+        raise ValueError("Drive has no canonical child scopes")
+
+    async def confirm_absent(self, record: SourceRecord) -> None:
+        """Every omitted file uses exact known-object refresh."""
+        raise ValueError("Drive absence requires exact known-object refresh")
+
     @classmethod
     async def create(
         cls,
         *,
-        auth: TokenProviderProtocol,
+        auth: SourceAuthProvider,
         logger: ContextualLogger,
         http_client: AirweaveHttpClient,
         config: GoogleDriveConfig,
@@ -89,11 +218,15 @@ class GoogleDriveSource(BaseSource):
         """Create a new Google Drive source instance."""
         instance = cls(auth=auth, logger=logger, http_client=http_client)
         instance.include_patterns = config.include_patterns if config else []
+        instance.expected_permission_id = config.expected_permission_id if config else None
+        instance.capture_native_sheets = config.capture_native_sheets if config else False
         instance.batch_size = 30
         instance.batch_generation = True
         instance.max_queue_size = 200
         instance.preserve_order = False
         instance.stop_on_error = False
+        if instance.expected_permission_id is not None:
+            await instance.validate()
         return instance
 
     @staticmethod
@@ -102,11 +235,22 @@ class GoogleDriveSource(BaseSource):
         return _parse_drive_dt(value)
 
     async def validate(self) -> None:
-        """Validate credentials by pinging the shared drives list."""
-        await self._get(
-            "https://www.googleapis.com/drive/v3/drives",
-            params={"pageSize": "1"},
+        """Re-attest the native principal; failure clears any previous attestation."""
+        self._verified_permission_id = None
+        raw = await self._get(
+            "https://www.googleapis.com/drive/v3/about",
+            params={"fields": "user(permissionId,me)"},
         )
+        try:
+            principal = DriveAbout.model_validate(raw).user
+        except ValidationError:
+            raise ValueError("Drive returned an invalid principal identity") from None
+        if not principal.me:
+            raise ValueError("Drive returned a principal that is not the authenticated user")
+        if self.expected_permission_id is not None:
+            if principal.permissionId != self.expected_permission_id:
+                raise ValueError("Drive principal identity does not match the trusted binding")
+            self._verified_permission_id = principal.permissionId
 
     @retry(
         stop=stop_after_attempt(5),
@@ -123,14 +267,21 @@ class GoogleDriveSource(BaseSource):
 
         Max 5 attempts with intelligent wait strategy.
         """
-        token = await self.auth.get_token()
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = await authorization_headers(self.auth)
         response = await self.http_client.get(url, headers=headers, params=params, timeout=30.0)
 
         if response.status_code == 401 and self.auth.supports_refresh:
-            new_token = await self.auth.force_refresh()
-            headers = {"Authorization": f"Bearer {new_token}"}
+            headers = await authorization_headers(self.auth, refresh=True)
             response = await self.http_client.get(url, headers=headers, params=params, timeout=30.0)
+
+        if (
+            response.status_code == 400
+            and url == "https://www.googleapis.com/drive/v3/files"
+            and params
+            and params.get("pageToken")
+            and rejected_listing_token(response.json())
+        ):
+            raise InvalidScanContinuation("Drive rejected its saved inventory page token")
 
         raise_for_status(
             response,

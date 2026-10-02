@@ -311,8 +311,9 @@ class TestMaxOutputTokens:
         messages = [{"role": "user", "content": "query"}]
         for i in range(80):
             messages.append({"role": "assistant", "content": f"thinking {i}" * 30})
-            messages.append({"role": "tool", "tool_call_id": f"tc-{i}",
-                             "content": f"result {i}" * 30})
+            messages.append(
+                {"role": "tool", "tool_call_id": f"tc-{i}", "content": f"result {i}" * 30}
+            )
 
         # Messages should be large enough to trigger emergency compress
         assert cm.input_tokens(messages) > cm._context_window - cm._MIN_OUTPUT_TOKENS
@@ -350,11 +351,20 @@ class TestMaxOutputTokens:
         messages_without = [{"role": "user", "content": "query"}]
         messages_with = [
             {"role": "user", "content": "query"},
-            {"role": "assistant", "content": "", "tool_calls": [
-                {"id": "tc-1", "type": "function", "function": {
-                    "name": "search", "arguments": "x" * 4_000,
-                }}
-            ]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "tc-1",
+                        "type": "function",
+                        "function": {
+                            "name": "search",
+                            "arguments": "x" * 4_000,
+                        },
+                    }
+                ],
+            },
         ]
         result_without = cm.max_output_tokens(messages_without)
         result_with = cm.max_output_tokens(messages_with)
@@ -429,8 +439,9 @@ class TestEmergencyCompress:
         messages = [{"role": "user", "content": "query"}]
         for i in range(20):
             messages.append({"role": "assistant", "content": f"thinking {'x' * 500} {i}"})
-            messages.append({"role": "tool", "tool_call_id": f"tc-{i}",
-                             "content": f"result {'y' * 500} {i}"})
+            messages.append(
+                {"role": "tool", "tool_call_id": f"tc-{i}", "content": f"result {'y' * 500} {i}"}
+            )
 
         tokens_before = cm.input_tokens(messages)
         result = cm.emergency_compress(messages)
@@ -451,7 +462,6 @@ class TestAvailableBudget:
         messages = [{"role": "user", "content": "query"}]
 
         budget = cm.available_budget(messages)
-        max_out = cm.max_output_tokens(messages)
 
         # budget + output + input should not exceed context_window
         input_tokens = cm.input_tokens(messages)
@@ -498,16 +508,54 @@ class TestInputTokens:
         """_thinking field on assistant messages is counted."""
         cm = make_context_mgr()
         without = cm.input_tokens([{"role": "assistant", "content": "hi"}])
-        with_thinking = cm.input_tokens([
-            {"role": "assistant", "content": "hi", "_thinking": "x" * 1000}
-        ])
+        with_thinking = cm.input_tokens(
+            [{"role": "assistant", "content": "hi", "_thinking": "x" * 1000}]
+        )
         assert with_thinking > without
 
     def test_counts_tool_calls(self) -> None:
         """tool_calls on assistant messages are counted."""
         cm = make_context_mgr()
         without = cm.input_tokens([{"role": "assistant", "content": "hi"}])
-        with_tc = cm.input_tokens([{"role": "assistant", "content": "hi", "tool_calls": [
-            {"id": "tc-1", "type": "function", "function": {"name": "s", "arguments": "x" * 500}}
-        ]}])
+        with_tc = cm.input_tokens(
+            [
+                {
+                    "role": "assistant",
+                    "content": "hi",
+                    "tool_calls": [
+                        {
+                            "id": "tc-1",
+                            "type": "function",
+                            "function": {"name": "s", "arguments": "x" * 500},
+                        }
+                    ],
+                }
+            ]
+        )
         assert with_tc > without
+
+
+def test_empty_filtered_search_keeps_incomplete_notice():
+    cm = make_context_mgr()
+    result = SearchToolResult(
+        summaries=[], new_count=0, retrieval_incomplete=True, excluded_candidates=4
+    )
+    content = cm.fit_tool_result(result, 1000)
+    assert "Retrieval incomplete" in content
+    assert "4 stale or inaccessible" in content
+    assert "No results found" not in content
+
+
+def test_incomplete_notice_survives_context_budget_truncation():
+    cm = make_context_mgr()
+    result = SearchToolResult(
+        summaries=[
+            make_rendered_result(entity_id=str(i), text="long text " * 100) for i in range(3)
+        ],
+        new_count=3,
+        retrieval_incomplete=True,
+        excluded_candidates=2,
+    )
+    content = cm.fit_tool_result(result, 50)
+    assert "Retrieval incomplete" in content
+    assert "context budget" in content

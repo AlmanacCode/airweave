@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 
 from airweave.api.context import ApiContext
 from airweave.core.datetime_utils import utc_now
@@ -689,3 +690,16 @@ async def test_count_by_organization():
     svc = _build_run_service(sc_repo=sc_repo)
     count = await svc.count_by_organization(AsyncMock(), organization_id=ORG_ID)
     assert count == 0
+
+
+async def test_native_source_cannot_start_provider_pull_run():
+    sc = _make_source_conn()
+    sc.short_name = "almanac"
+    repo = FakeSourceConnectionRepository()
+    repo.seed(SC_ID, sc)
+    sync_service = _RecordingFakeSyncService()
+    svc = _build_run_service(sc_repo=repo, sync_service=sync_service)
+    with pytest.raises(HTTPException) as error:
+        await svc.run(AsyncMock(), id=SC_ID, ctx=_make_ctx(), force_full_sync=True)
+    assert error.value.status_code == 409
+    assert sync_service.last_trigger_run is None

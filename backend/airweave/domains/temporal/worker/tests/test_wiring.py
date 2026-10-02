@@ -32,7 +32,17 @@ def test_create_activities_returns_list():
         result = create_activities()
 
     assert isinstance(result, list)
-    assert len(result) == 7
+    assert len(result) == 10
+    activity_classes = {type(method.__self__).__name__ for method in result}
+    assert "ProjectCanonicalRecordsActivity" in activity_classes
+    assert "CleanupProjectionGenerationsActivity" in activity_classes
+    assert "DiscoverNativeProjectionActivity" in activity_classes
+    discovery = next(
+        method.__self__
+        for method in result
+        if type(method.__self__).__name__ == "DiscoverNativeProjectionActivity"
+    )
+    assert discovery.source_registry is mock_container.source_registry
 
 
 @pytest.mark.unit
@@ -51,8 +61,10 @@ def test_get_workflows_returns_classes():
     result = get_workflows()
 
     assert isinstance(result, list)
-    assert len(result) == 4
+    assert len(result) == 6
     class_names = [cls.__name__ for cls in result]
+    assert "ProjectCanonicalRecordsWorkflow" in class_names
+    assert "RecoverNativeProjectionWorkflow" in class_names
     assert "RunSourceConnectionWorkflow" in class_names
     assert "CleanupStuckSyncJobsWorkflow" in class_names
     assert "CleanupSyncDataWorkflow" in class_names

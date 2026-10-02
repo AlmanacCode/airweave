@@ -62,6 +62,13 @@ class AirweaveSystemMetadata(BaseModel):
         None, description="ID of the sync job this entity belongs to."
     )
 
+    # Canonical projector-owned metadata. Provider entity fallbacks do not set these.
+    canonical_record_type: Optional[str] = None
+    source_created_us: Optional[int] = None
+    source_updated_us: Optional[int] = None
+    source_created_known: Optional[int] = None
+    source_updated_known: Optional[int] = None
+
     # Set during hash computation
     hash: Optional[str] = Field(None, description="Hash of the content used for change detection.")
 

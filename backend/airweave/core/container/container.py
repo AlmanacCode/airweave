@@ -62,6 +62,8 @@ from airweave.domains.entities.protocols import (
     EntityDefinitionRegistryProtocol,
     EntityRepositoryProtocol,
 )
+from airweave.domains.native_ingestion.import_service import NativeImports
+from airweave.domains.native_ingestion.source_service import NativeSources
 from airweave.domains.oauth.protocols import (
     OAuth1ServiceProtocol,
     OAuth2ServiceProtocol,
@@ -74,6 +76,8 @@ from airweave.domains.organizations.protocols import (
     OrganizationServiceProtocol,
     UserOrganizationRepositoryProtocol,
 )
+from airweave.domains.owned_provisioning.service import OwnedProvisioningService
+from airweave.domains.search.owned import OwnedSearchService
 from airweave.domains.search.protocols import (
     AgenticSearchServiceProtocol,
     BrowseServiceProtocol,
@@ -251,6 +255,10 @@ class Container:
     connect_service: ConnectServiceProtocol
 
     # Search domain (v2 tiers)
+    owned_search: OwnedSearchService
+    owned_provisioning: OwnedProvisioningService
+    native_sources: NativeSources
+    native_imports: NativeImports
     instant_search: InstantSearchServiceProtocol
     classic_search: ClassicSearchServiceProtocol
     agentic_search: AgenticSearchServiceProtocol

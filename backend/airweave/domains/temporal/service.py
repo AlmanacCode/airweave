@@ -12,6 +12,7 @@ import uuid
 from typing import List, Optional
 
 from temporalio.client import WorkflowHandle
+from temporalio.common import WorkflowIDReusePolicy
 from temporalio.service import RPCError, RPCStatusCode
 
 from airweave import schemas
@@ -79,6 +80,7 @@ class TemporalWorkflowService(TemporalWorkflowServiceProtocol):
                 force_full_sync,
             ],
             id=workflow_id,
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
             task_queue=settings.TEMPORAL_TASK_QUEUE,
         )
 

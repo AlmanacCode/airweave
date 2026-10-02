@@ -16,6 +16,8 @@ class GoogleDriveCursor(BaseCursor):
     Reference: https://developers.google.com/drive/api/guides/manage-changes
     """
 
+    canonical_page_token: str = ""
+
     start_page_token: str = Field(
         default="",
         description="Drive Changes API page token for tracking incremental changes",

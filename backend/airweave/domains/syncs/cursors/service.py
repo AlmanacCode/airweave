@@ -32,7 +32,7 @@ class SyncCursorService:
             return {}
         except Exception as e:
             logger.warning(f"Failed to load cursor data for sync {sync_id}: {e}")
-            return {}
+            raise
 
     async def get_cursor_field(
         self, db: AsyncSession, sync_id: UUID, ctx: ApiContext
@@ -54,7 +54,7 @@ class SyncCursorService:
             return None
         except Exception as e:
             logger.warning(f"Failed to load cursor field for sync {sync_id}: {e}")
-            return None
+            raise
 
     async def create_or_update_cursor(
         self,
@@ -63,7 +63,7 @@ class SyncCursorService:
         cursor_data: dict,
         ctx: ApiContext,
         cursor_field: Optional[str] = None,
-    ) -> Optional[schemas.SyncCursor]:
+    ) -> schemas.SyncCursor:
         """Create or update cursor data for a sync.
 
         Args:
@@ -74,7 +74,7 @@ class SyncCursorService:
             cursor_field: Optional cursor field name
 
         Returns:
-            Created or updated sync cursor, None if operation failed
+            Created or updated sync cursor. Persistence failures propagate to the caller.
         """
         try:
             cursor_create = schemas.SyncCursorCreate(
@@ -93,7 +93,7 @@ class SyncCursorService:
 
         except Exception as e:
             logger.error(f"Failed to create/update cursor for sync {sync_id}: {e}")
-            return None
+            raise
 
     async def update_cursor_data(
         self,
@@ -111,7 +111,7 @@ class SyncCursorService:
             ctx: API context
 
         Returns:
-            Updated sync cursor, None if operation failed
+            Updated sync cursor, or None if no cursor exists. Persistence failures propagate.
         """
         try:
             cursor = await crud.sync_cursor.update_cursor_data(
@@ -127,7 +127,7 @@ class SyncCursorService:
 
         except Exception as e:
             logger.error(f"Failed to update cursor data for sync {sync_id}: {e}")
-            return None
+            raise
 
     async def delete_cursor(
         self,
@@ -157,4 +157,4 @@ class SyncCursorService:
 
         except Exception as e:
             logger.error(f"Failed to delete cursor for sync {sync_id}: {e}")
-            return False
+            raise

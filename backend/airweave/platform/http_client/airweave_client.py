@@ -154,19 +154,10 @@ class AirweaveHttpClient:
         if not self._logger:
             return
 
-        try:
-            # Try to read response body - may already be consumed
-            response_body = response.text
-        except Exception:
-            response_body = "<unable to read response body>"
-
+        # Error bodies and signed URL queries may carry account data or credentials.
         self._logger.debug(
-            f"[AirweaveHttpClient] HTTP {response.status_code} error\n"
-            f"  Source: {self._source_short_name}\n"
-            f"  Method: {method}\n"
-            f"  URL: {url}\n"
-            f"  Response Headers: {dict(response.headers)}\n"
-            f"  Response Body: {response_body}"
+            "[AirweaveHttpClient] HTTP %s source=%s method=%s host=%s",
+            response.status_code, self._source_short_name, method, httpx.URL(url).host,
         )
 
     # Mimic httpx.AsyncClient methods

@@ -12,6 +12,7 @@ class WorkerConfig:
 
     Attributes:
         task_queue: Temporal task queue name
+        bind_host: Bind address for control server and SDK metrics
         metrics_port: Port for control server (health, metrics, drain)
         graceful_shutdown_timeout_seconds: How long to wait for activities to complete
 
@@ -30,6 +31,8 @@ class WorkerConfig:
     task_queue: str
     metrics_port: int
     graceful_shutdown_timeout_seconds: int
+
+    bind_host: str = "0.0.0.0"
 
     # Polling concurrency
     max_concurrent_workflow_polls: int = 8
@@ -55,6 +58,7 @@ class WorkerConfig:
         return cls(
             task_queue=settings.TEMPORAL_TASK_QUEUE,
             metrics_port=settings.WORKER_METRICS_PORT,
+            bind_host=settings.WORKER_BIND_HOST,
             graceful_shutdown_timeout_seconds=settings.TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT,
             disable_sandbox=settings.TEMPORAL_DISABLE_SANDBOX,
             sdk_metrics_port=settings.TEMPORAL_SDK_METRICS_PORT,

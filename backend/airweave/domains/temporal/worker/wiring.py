@@ -33,6 +33,20 @@ def create_activities() -> list:
     if container is None:
         raise RuntimeError("Container not initialized — cannot wire activities")
 
+    from airweave.db.session import get_db_context
+    from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
+    from airweave.domains.entities.canonical.projector import CanonicalProjector
+    from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
+    from airweave.domains.temporal.activities.cleanup_projection_generations import (
+        CleanupProjectionGenerationsActivity,
+    )
+    from airweave.domains.temporal.activities.discover_native_projection import (
+        DiscoverNativeProjectionActivity,
+    )
+    from airweave.domains.temporal.activities.project_canonical_records import (
+        ProjectCanonicalRecordsActivity,
+    )
+
     email_service = container.email_service
     event_bus = container.event_bus
     sync_service = container.sync_service
@@ -50,6 +64,21 @@ def create_activities() -> list:
     logger.debug("Wiring activities with container dependencies")
 
     return [
+        DiscoverNativeProjectionActivity(container.source_registry).run,
+        CleanupProjectionGenerationsActivity(container.storage_backend).run,
+        ProjectCanonicalRecordsActivity(
+            projector=CanonicalProjector(
+                CanonicalProjectionStore(),
+                get_db_context,
+                ChunkEmbedProcessor(
+                    container.converter_registry,
+                    container.dense_embedder,
+                    container.sparse_embedder,
+                ),
+                container.storage_backend,
+            ),
+            source_registry=container.source_registry,
+        ).run,
         RunSyncActivity(
             sync_service=sync_service,
             sync_repo=sync_repo,
@@ -101,8 +130,16 @@ def get_workflows() -> list:
         CleanupSyncDataWorkflow,
         RunSourceConnectionWorkflow,
     )
+    from airweave.domains.temporal.workflows.project_canonical_records import (
+        ProjectCanonicalRecordsWorkflow,
+    )
+    from airweave.domains.temporal.workflows.recover_native_projection import (
+        RecoverNativeProjectionWorkflow,
+    )
 
     return [
+        RecoverNativeProjectionWorkflow,
+        ProjectCanonicalRecordsWorkflow,
         RunSourceConnectionWorkflow,
         CleanupStuckSyncJobsWorkflow,
         CleanupSyncDataWorkflow,

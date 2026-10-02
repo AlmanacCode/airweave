@@ -1,0 +1,4 @@
+query OwnedLinearIdentity {
+  viewer { id name }
+  organization { id name }
+}

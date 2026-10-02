@@ -15,9 +15,10 @@ from tenacity import retry, stop_after_attempt
 
 from airweave.core.logging import ContextualLogger
 from airweave.core.shared_models import RateLimitLevel
+from airweave.domains.auth_provider.exceptions import AuthProviderError
 from airweave.domains.browse_tree.types import NodeSelectionData
 from airweave.domains.sources.exceptions import SourceAuthError
-from airweave.domains.sources.token_providers.protocol import TokenProviderProtocol
+from airweave.domains.sources.token_providers.protocol import SourceAuthProvider
 from airweave.domains.storage import FileSkippedException
 from airweave.domains.storage.file_service import FileService
 from airweave.domains.syncs.cursors.cursor import SyncCursor
@@ -30,12 +31,13 @@ from airweave.platform.entities.outlook_calendar import (
     OutlookCalendarEventEntity,
 )
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
-from airweave.platform.sources._base import BaseSource
-from airweave.platform.sources.http_helpers import raise_for_status
-from airweave.platform.sources.retry_helpers import (
+from airweave.platform.http_client.composio_transport import ComposioProxyError
+from airweave.platform.http_client.retry_helpers import (
     retry_if_rate_limit_or_timeout,
     wait_rate_limit_with_backoff,
 )
+from airweave.platform.sources._base import BaseSource
+from airweave.platform.sources.outlook_graph import OutlookBoundaryError, OutlookGraphClient
 from airweave.schemas.source_connection import AuthenticationMethod, OAuthType
 
 
@@ -65,37 +67,37 @@ class OutlookCalendarSource(BaseSource):
 
     GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 
+    # Query/projection capability; only explicit fresh-source configuration opts
+    # an instance into the composed canonical page adapter below.
+    canonical_record_types = ("calendar", "event")
+
     @classmethod
     async def create(
         cls,
         *,
-        auth: TokenProviderProtocol,
+        auth: SourceAuthProvider,
         logger: ContextualLogger,
         http_client: AirweaveHttpClient,
         config: OutlookCalendarConfig,
     ) -> "OutlookCalendarSource":
         """Create a new Outlook Calendar source instance."""
-        return cls(auth=auth, logger=logger, http_client=http_client)
+        instance = cls(auth=auth, logger=logger, http_client=http_client)
+        instance.graph = OutlookGraphClient(
+            auth, http_client, cls.short_name, config.expected_principal_id
+        )
+        if config.capture_originals:
+            from airweave.platform.sources.outlook_calendar_capture import OutlookCalendarCapture
+
+            instance._capture_page_source = await OutlookCalendarCapture.create(
+                graph=instance.graph, config=config
+            )
+        else:
+            await instance.graph.verify_principal()
+        return instance
 
     # ------------------------------------------------------------------
     # HTTP helpers
     # ------------------------------------------------------------------
-
-    async def _authed_headers(self) -> Dict[str, str]:
-        """Build Authorization + Accept headers with a fresh token."""
-        token = await self.auth.get_token()
-        return {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-        }
-
-    async def _refresh_and_get_headers(self) -> Dict[str, str]:
-        """Force-refresh the token and return updated headers."""
-        new_token = await self.auth.force_refresh()
-        return {
-            "Authorization": f"Bearer {new_token}",
-            "Accept": "application/json",
-        }
 
     @retry(
         stop=stop_after_attempt(5),
@@ -104,25 +106,8 @@ class OutlookCalendarSource(BaseSource):
         reraise=True,
     )
     async def _get(self, url: str, params: Optional[dict] = None) -> Any:
-        """Make an authenticated GET request to Microsoft Graph API."""
-        self.logger.debug(f"Making authenticated GET request to: {url} with params: {params}")
-
-        headers = await self._authed_headers()
-        response = await self.http_client.get(url, headers=headers, params=params)
-
-        if response.status_code == 401 and self.auth.supports_refresh:
-            self.logger.warning(
-                f"Got 401 Unauthorized from Microsoft Graph API at {url}, refreshing token..."
-            )
-            headers = await self._refresh_and_get_headers()
-            response = await self.http_client.get(url, headers=headers, params=params)
-
-        raise_for_status(
-            response,
-            source_short_name=self.short_name,
-            token_provider_kind=self.auth.provider_kind,
-        )
-        return response.json()
+        """Read only within the attested Microsoft Graph mailbox."""
+        return await self.graph.get(url, params=params)
 
     # ------------------------------------------------------------------
     # Entity generators
@@ -141,7 +126,7 @@ class OutlookCalendarSource(BaseSource):
 
         try:
             while url:
-                self.logger.debug(f"Fetching calendars from: {url}")
+                self.logger.debug("Reading Microsoft Graph page")
                 data = await self._get(url)
                 calendars = data.get("value", [])
                 self.logger.info(f"Retrieved {len(calendars)} calendars")
@@ -184,7 +169,7 @@ class OutlookCalendarSource(BaseSource):
 
             self.logger.info(f"Completed calendar generation. Total calendars: {calendar_count}")
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(f"Error generating calendar entities: {str(e)}")
@@ -215,7 +200,7 @@ class OutlookCalendarSource(BaseSource):
 
         try:
             while url:
-                self.logger.debug(f"Fetching events from: {url}")
+                self.logger.debug("Reading Microsoft Graph page")
                 data = await self._get(url, params=params)
                 events = data.get("value", [])
                 self.logger.info(f"Retrieved {len(events)} events from calendar {calendar_name}")
@@ -236,7 +221,12 @@ class OutlookCalendarSource(BaseSource):
                             event_data, cal_breadcrumb, files=files
                         ):
                             yield entity
-                    except SourceAuthError:
+                    except (
+                        SourceAuthError,
+                        AuthProviderError,
+                        ComposioProxyError,
+                        OutlookBoundaryError,
+                    ):
                         raise
                     except Exception as e:
                         self.logger.warning(f"Error processing event {event_id}: {str(e)}")
@@ -251,7 +241,7 @@ class OutlookCalendarSource(BaseSource):
                 f"Total events: {event_count}"
             )
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(f"Error generating events for calendar {calendar_name}: {str(e)}")
@@ -299,7 +289,7 @@ class OutlookCalendarSource(BaseSource):
                 self.logger.debug(
                     f"Processed {attachment_count} attachments for event {event_subject}"
                 )
-            except SourceAuthError:
+            except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
                 raise
             except Exception as e:
                 self.logger.warning(f"Error processing attachments for event {event_id}: {str(e)}")
@@ -318,7 +308,7 @@ class OutlookCalendarSource(BaseSource):
 
         try:
             while url:
-                self.logger.debug(f"Making request to: {url}")
+                self.logger.debug("Reading Microsoft Graph page")
                 data = await self._get(url)
                 attachments = data.get("value", [])
                 self.logger.debug(f"Retrieved {len(attachments)} attachments for event {event_id}")
@@ -340,7 +330,7 @@ class OutlookCalendarSource(BaseSource):
                 if url:
                     self.logger.debug("Following pagination link")
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(f"Error processing attachments for event {event_id}: {str(e)}")
@@ -413,7 +403,12 @@ class OutlookCalendarSource(BaseSource):
                     self.logger.debug(f"Skipping attachment {attachment_name}: {e.reason}")
                     return None
 
-                except SourceAuthError:
+                except (
+                    SourceAuthError,
+                    AuthProviderError,
+                    ComposioProxyError,
+                    OutlookBoundaryError,
+                ):
                     raise
 
                 except Exception as e:
@@ -422,7 +417,7 @@ class OutlookCalendarSource(BaseSource):
             else:
                 return file_entity
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(f"Error processing attachment {attachment_id}: {str(e)}")
@@ -440,6 +435,7 @@ class OutlookCalendarSource(BaseSource):
         node_selections: list[NodeSelectionData] | None = None,
     ) -> AsyncGenerator[BaseEntity, None]:
         """Generate all Outlook Calendar entities: Calendars, Events and Attachments."""
+        await self.graph.verify_principal()
         self.logger.info("Starting Outlook Calendar entity generation")
         entity_count = 0
 
@@ -462,7 +458,7 @@ class OutlookCalendarSource(BaseSource):
                     )
                     yield event_entity
 
-        except SourceAuthError:
+        except (SourceAuthError, AuthProviderError, ComposioProxyError, OutlookBoundaryError):
             raise
         except Exception as e:
             self.logger.warning(f"Error in entity generation: {str(e)}", exc_info=True)
@@ -474,6 +470,7 @@ class OutlookCalendarSource(BaseSource):
 
     async def validate(self) -> None:
         """Validate credentials by pinging the calendars endpoint."""
+        await self.graph.verify_principal()
         await self._get(
             f"{self.GRAPH_BASE_URL}/me/calendars",
             params={"$top": "1"},
