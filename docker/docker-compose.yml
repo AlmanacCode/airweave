@@ -247,6 +247,8 @@ services:
       - DOCLING_BASE_URL=${DOCLING_BASE_URL:+http://docling:5001}
     volumes:
       - ../backend:/app
+      # Projection reads captured blobs and writes artifacts in the API's store.
+      - ../local_storage:/app/local_storage
     entrypoint: [ "python", "-m", "airweave.domains.temporal.worker" ]
     depends_on:
       postgres:
