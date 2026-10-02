@@ -407,6 +407,7 @@ async def test_final_gate_drops_early_hit_changed_during_later_collection(
     "provider,payload,expected",
     [
         ("gmail", {"threadId": "thread-1"}, "thread-1"),
+        ("gmail", {"threadId": "thread-1", "version": {"kind": "provider-value"}}, "thread-1"),
         ("slack", {"threadId": "thread-1"}, None),
         ("gmail", {}, None),
         ("gmail", {"threadId": None}, None),

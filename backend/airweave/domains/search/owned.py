@@ -26,6 +26,7 @@ from airweave.domains.entities.canonical.search_metadata import (
 )
 from airweave.domains.entities.canonical.source import indexed_record_types
 from airweave.domains.entities.canonical.store import content_is_available
+from airweave.domains.native_ingestion.models import NativeVersion
 from airweave.domains.search.owned_models import (
     OwnedRanking,
     OwnedSearchCoverage,
@@ -78,6 +79,7 @@ class _EnrichmentRecord(BaseModel):
     source_updated_at: AwareDatetime | None
     completeness: str
     email_thread_id: str | None
+    native_version: NativeVersion | None
 
 
 class OwnedSearchService:
@@ -500,6 +502,15 @@ class OwnedSearchService:
                 Entity.completeness,
                 case(
                     (
+                        Entity.sync_id.in_(
+                            [sync for sync in sync_ids if scopes[sync].short_name == "almanac"]
+                        ),
+                        Entity.source_payload["version"],
+                    ),
+                    else_=None,
+                ).label("native_version"),
+                case(
+                    (
                         func.jsonb_typeof(Entity.source_payload["threadId"]) == "string",
                         Entity.source_payload["threadId"].astext,
                     ),
@@ -567,6 +578,7 @@ class OwnedSearchService:
                     source_updated_at=row.source_updated_at,
                     completeness=row.completeness,
                     extraction=extraction.get(row.indexed_generation),
+                    native_version=row.native_version,
                     email_thread_id=(
                         thread_id
                         if scopes[row.sync_id].short_name == "gmail"

@@ -8,6 +8,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 from airweave.domains.entities.canonical.coverage_models import CaptureCoverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.requests import RecordIdentity
+from airweave.domains.native_ingestion.models import NativeVersion
 from airweave.domains.search.retrieval_strategy import RetrievalStrategy
 
 
@@ -50,6 +51,7 @@ class OwnedSearchMatch(BaseModel):
     source_connection_id: UUID
     provider: str
     identity: RecordIdentity
+    native_version: NativeVersion | None = None
     title: str
     excerpts: tuple[str, ...]
     email_thread_id: str | None = Field(default=None, max_length=512, pattern=r"^[A-Za-z0-9_-]+$")

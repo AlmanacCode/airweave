@@ -17,6 +17,7 @@ from airweave.domains.entities.canonical.tests.test_owned_search import (  # noq
     indexed,
 )
 from airweave.domains.entities.canonical.tests.test_search_visibility import hit
+from airweave.domains.native_ingestion.models import SessionVersion
 from airweave.domains.native_ingestion.tests.test_ingestion import ingest
 from airweave.domains.native_ingestion.tests.test_projection import (
     message as native_message,
@@ -29,7 +30,7 @@ from airweave.models.collection import Collection
 from airweave.models.source_connection import SourceConnection
 
 
-@pytest.mark.parametrize("withdraw", [False, True, "parent"])
+@pytest.mark.parametrize("withdraw", [False, True, "parent", "native_current"])
 async def test_group_after_final_gate_promotes_survivor_and_limits_cards(
     database,
     source,
@@ -47,13 +48,22 @@ async def test_group_after_final_gate_promotes_survivor_and_limits_cards(
         )
         for i in range(4)
     ]
-    if withdraw == "parent":
+    native = withdraw in ("parent", "native_current")
+    if native:
         session = native_session()
+        version = SessionVersion(revision=7, content_revision=11)
+        session = session.model_copy(
+            update={
+                "version": version,
+                "original": session.original | {"revision": 7, "content_revision": 11},
+            }
+        )
         parent = session.identity
         original = native_message("Original message")
         native_messages = [
             original.model_copy(
                 update={
+                    "version": version,
                     "identity": RecordIdentity(
                         record_type="message", native_id=f"m{i}", container_id=parent.native_id
                     ),
@@ -94,7 +104,7 @@ async def test_group_after_final_gate_promotes_survivor_and_limits_cards(
             part_index=0,
         )
         candidate = hit(fence, locator.encode())
-        if withdraw == "parent":
+        if native:
             candidate.airweave_system_metadata.source_name = "almanac"
         candidate.name = work.record.identity.native_id
         candidate.textual_representation = "exact " + candidate.name
@@ -104,7 +114,7 @@ async def test_group_after_final_gate_promotes_survivor_and_limits_cards(
     service._tokenizer = type("Tokenizer", (), {"count_tokens": lambda self, text: len(text)})()
 
     async def rerank(query, documents, top_n):
-        if withdraw:
+        if withdraw is True or withdraw == "parent":
             await capture(
                 database,
                 capture_service,
@@ -127,7 +137,21 @@ async def test_group_after_final_gate_promotes_survivor_and_limits_cards(
     if withdraw == "parent":
         assert items == []
         return
+    if native:
+        matches = [
+            match for item in items for match in (item, *item["group"]["additional_matches"])
+        ]
+        assert matches
+        for match in matches:
+            assert match["native_version"] == {
+                "kind": "session",
+                "revision": 7,
+                "content_revision": 11,
+            }
+            assert match["revision"] == 1
+        return
     assert len(items) == 2
+    assert all(item["native_version"] is None for item in items)
     first = items[0]
     assert first["identity"]["native_id"] == ("m1" if withdraw else "m0")
     assert first["title"] == first["identity"]["native_id"]
