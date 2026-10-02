@@ -10,13 +10,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, StrictBool, TypeAdapter, ValidationError
 
 from airweave.domains.entities.canonical.extraction_models import ExtractionPart
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_inputs import ProjectionInput, ProjectionInputs
 from airweave.domains.entities.canonical.projection_policy import excluded_from_search
 from airweave.domains.storage.protocols import StorageBackend
+from airweave.domains.sync_pipeline.pipeline.text_models import NativeTextBody
 from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
 from airweave.platform.entities._base import BaseEntity, FileEntity
 from airweave.platform.entities.google_calendar import (
@@ -367,7 +368,7 @@ def _wispr_text(  # noqa: C901 -- keep native framing, order and offset-unit gua
     return "".join(pieces)
 
 
-def _wispr(record: SourceRecord) -> tuple[BaseEntity, ...]:
+def _wispr(record: SourceRecord) -> tuple[WisprMeetingEntity | WisprNoteEntity, ...]:
     if record.identity.record_type not in {"meeting", "scratchpad_note"}:
         raise ProjectionMappingError("Unsupported Wispr record type")
     responses = record.payload.get("responses")
@@ -401,6 +402,61 @@ def _wispr(record: SourceRecord) -> tuple[BaseEntity, ...]:
             breadcrumbs=[],
         ),
     )
+
+
+class _TranscriptAvailability(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    has_transcript: StrictBool | None = None
+
+
+class _TranscriptPage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    response: _TranscriptAvailability
+
+
+def _wispr_inputs(record: SourceRecord) -> ProjectionInputs:
+    """Expose native notes/transcript separately through the existing text boundary."""
+    (entity,) = _wispr(record)
+    if isinstance(entity, WisprNoteEntity):
+        return ProjectionInputs(parts=(_projection_input(0, entity),))
+    try:
+        responses = TypeAdapter(tuple[_TranscriptPage, ...]).validate_python(
+            record.payload["responses"]
+        )
+    except ValidationError as error:
+        raise ProjectionMappingError("Wispr transcript availability is malformed") from error
+    flags = tuple(
+        part.response.has_transcript
+        for part in responses
+        if part.response.has_transcript is not None
+    )
+    if any(value != flags[0] for value in flags):
+        raise ProjectionMappingError("Wispr transcript availability changed between ranges")
+    parts = []
+    for key, text in (("notes", entity.notes), ("transcript", entity.transcript)):
+        if key == "transcript" and responses[0].response.has_transcript is False:
+            if text:
+                raise ProjectionMappingError("Wispr absent transcript has retained text")
+            continue
+        native = entity.model_copy(
+            deep=True, update={"transcript": ""} if key == "notes" else {"notes": "", "summary": ""}
+        )
+        populate_base_fields(native)
+        parts.append(
+            ProjectionInput(
+                part=ExtractionPart(part_index=len(parts), key=key, kind="record"),
+                entity=native,
+                native_body=NativeTextBody(
+                    text=text,
+                    metadata_fields=(
+                        "notes",
+                        "transcript",
+                        *(() if key == "notes" else ("summary",)),
+                    ),
+                ),
+            )
+        )
+    return ProjectionInputs(parts=tuple(parts))
 
 
 @asynccontextmanager
@@ -456,6 +512,9 @@ async def map_record(  # noqa: C901 -- explicit provider dispatch keeps mapper o
 
             yield await map_notion_property(record, storage)
             return
+        elif source_name == "wispr":
+            yield _wispr_inputs(record)
+            return
         elif source_name == "google_drive":
             yield await _drive(record, storage, directory)
             return
@@ -509,8 +568,6 @@ async def _map_entities(
         entities = _calendar(record)
     elif source_name == "slack":
         entities = _slack(record)
-    elif source_name == "wispr":
-        entities = _wispr(record)
     else:
         raise ProjectionMappingError("Source has no audited search projection mapper")
     return entities

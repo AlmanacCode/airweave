@@ -66,6 +66,7 @@ class Entity(OrganizationBase):
     capture_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     content_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     source_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    meeting_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     source_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

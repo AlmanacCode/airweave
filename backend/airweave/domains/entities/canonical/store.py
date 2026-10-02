@@ -29,12 +29,27 @@ from airweave.domains.entities.canonical.requests import (
     StartedScope,
     WriterFence,
 )
+from airweave.domains.entities.canonical.wispr_facts_v1 import meeting_started_at_v1
 from airweave.models.entity import Entity
 from airweave.models.entity_change import EntityChange
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
 from airweave.models.sync_cursor import SyncCursor
 from airweave.models.sync_job import SyncJob
+
+
+def _derive_query_facts(entity: Entity, observation: CaptureRecord, provider: str | None) -> None:
+    """Rebuild source-owned query facts alongside this exact canonical revision."""
+    if provider == "gmail" and observation.identity.record_type == "message":
+        facts = gmail_metadata_v1(
+            observation.payload, observation.identity.native_id, observation.source_created_at
+        )
+        entity.gmail_metadata = facts.model_dump(mode="json") if facts is not None else None
+        entity.gmail_metadata_revision = entity.record_revision
+    if provider == "wispr" and observation.identity.record_type == "meeting":
+        entity.meeting_started_at = meeting_started_at_v1(
+            observation.payload, observation.identity.native_id
+        )
 
 
 class CanonicalStoreError(Exception):
@@ -399,17 +414,13 @@ class CanonicalRecordStore:
     ) -> CaptureResult:
         changes = []
         unchanged = 0
-        gmail = (
-            await db.scalar(
-                select(SourceConnection.id)
-                .where(
-                    SourceConnection.sync_id == sync.id,
-                    SourceConnection.organization_id == sync.organization_id,
-                    SourceConnection.short_name == "gmail",
-                )
-                .limit(1)
+        provider = await db.scalar(
+            select(SourceConnection.short_name)
+            .where(
+                SourceConnection.sync_id == sync.id,
+                SourceConnection.organization_id == sync.organization_id,
             )
-            is not None
+            .limit(1)
         )
         for observation in batch.records:
             identity = observation.identity
@@ -516,12 +527,7 @@ class CanonicalRecordStore:
             entity.content_hash = observation.content_hash
             entity.hash = observation.content_hash or fingerprint
             entity.source_created_at = observation.source_created_at
-            if gmail and identity.record_type == "message":
-                facts = gmail_metadata_v1(
-                    observation.payload, identity.native_id, observation.source_created_at
-                )
-                entity.gmail_metadata = facts.model_dump(mode="json") if facts is not None else None
-                entity.gmail_metadata_revision = entity.record_revision
+            _derive_query_facts(entity, observation, provider)
             entity.source_updated_at = observation.source_updated_at
             entity.observed_at = observation.observed_at
             entity.deleted_at = observation.observed_at if observation.kind == "delete" else None

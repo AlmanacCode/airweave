@@ -210,7 +210,8 @@ Each participant value is casefolded during capture/backfill; missing participan
 remain metadata gaps. No transport headers or snippets participate. Literal body search selects the latest validated fact for the current canonical
 revision and explicit current pipeline, regardless of embedding/feed success.
 Failed attempts without a prepared body cannot hide earlier valid text. Existing GC
-keeps the designated eligible body and reclaims superseded attempts. Sync's derived
+keeps the designated eligible body and retires superseded attempts. Retired rows currently
+retain their SQL body bytes; clearing those bytes is a pending bounded GC follow-up. Sync's derived
 `mail_text_sequence` advances with designation/retirement under the existing Sync
 lock; no new worker, store or source authority exists.
 
@@ -231,3 +232,37 @@ restart. Source withdrawal is checked again before returning each page.
 Local verification exercises synthetic SQL/HTTP, not a connected provider or deployed
 service. The version-one decoder is intentionally frozen: incompatible rederivation
 requires a new version and explicit migration rather than changing old backfill code.
+
+
+## Retained Wispr meeting workflows
+
+`GET /sync/{sync_id}/wispr/meetings` lists authorized retained meeting bodies by
+native meeting start descending, then canonical ID descending. Default limit is five;
+limits up to 100 and signed cursors allow complete traversal. Aware `after`/`before`
+are half-open meeting-start bounds. The version-one preview validator derives
+`Entity.meeting_started_at` during capture; migration 0015 backfills bounded pages.
+It preserves canonical source-created/update semantics and original JSON. Missing,
+malformed, conflicting native identity/start or preview facts produce an explicit
+source-wide metadata gap, because their date membership is unknown.
+
+SQL selects lean title/start/native identity/transcript-availability metadata before
+LIMIT and never selects full notes, transcripts or the whole original payload.
+`has_transcript=null` preserves unknown; false preserves explicit native absence.
+Pages carry retained-only capture evidence and a capture-sequence fence, with source
+and ancestor visibility checks and a final source/sequence recheck.
+
+The existing Wispr range mapper now exposes stable `notes` and `transcript` native
+text parts through the existing projection/text reader. It preserves native range
+content and validates continuation framing. Explicit consistent transcript absence
+omits that part; missing text with unknown availability fails extraction instead of
+fabricating a complete empty transcript. Original exact JSON reads remain available.
+
+**Reprojection gate:** the two native parts change Wispr projection shape. Existing
+published generations remain immutable and generated-only until a deliberate new
+pipeline version and retained-original reprojection. No existing corpus has been
+reprojected by this implementation. Migration 0015 only rebuilds meeting-start facts.
+
+| Native capability/resource | Product name | Access operation | Stored representation | Sync/change guarantee | Proof | Gap |
+| --- | --- | --- | --- | --- | --- | --- |
+| Wispr meetings | Latest retained meetings | `/wispr/meetings` | Existing originals plus validated native start on Entity | Capture-sequence-fenced newest-first traversal; current source/ancestor gates | Synthetic real SQL/HTTP 260-meeting traversal, malformed/missing/start-conflict gaps, half-open dates and revocation | Retained list is not proof of provider-wide capture |
+| Wispr notes/transcript | Retained meeting text | Existing exact record/text endpoints with named `notes`/`transcript` parts | Full reassembled native ranges in existing text artifacts | Immutable revision/generation binding, explicit absent versus unknown transcript | Real mapper/projector/storage/content pagination preserves >40,000-character native fields | Existing generated-only generations require deliberate reprojection; raw editor JSON remains provider-omitted |

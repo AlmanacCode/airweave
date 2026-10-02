@@ -35,6 +35,12 @@ from airweave.domains.entities.canonical.query_models import (
 )
 from airweave.domains.entities.canonical.store import CanonicalStoreError
 from airweave.domains.entities.canonical.text_models import TextRead, TextRepresentationList
+from airweave.domains.entities.canonical.wispr_models import (
+    MeetingFilters,
+    MeetingListQuery,
+    MeetingPage,
+)
+from airweave.domains.entities.canonical.wispr_query import CanonicalWisprQuery
 from airweave.domains.search.owned_models import OwnedSearchRequest, OwnedSearchResponse
 from airweave.platform.sources.records.sheets_manifest import GridBounds
 
@@ -86,6 +92,7 @@ async def record_error_response(request: Request, error: CanonicalStoreError) ->
         "document_incomplete": 409,
         "calendar_changed_restart": 409,
         "mail_changed_restart": 409,
+        "meetings_changed_restart": 409,
         "calendar_read_incomplete": 409,
         "calendar_range_not_captured": 409,
     }.get(error.code, 400)
@@ -210,6 +217,33 @@ async def read_stored_document(
     )
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
+    return result
+
+
+@router.get("/{sync_id}/wispr/meetings", response_model=MeetingPage)
+async def wispr_meetings(
+    sync_id: UUID,
+    response: Response,
+    after: AwareDatetime | None = None,
+    before: AwareDatetime | None = None,
+    limit: int = Query(default=5, ge=1, le=100),
+    cursor: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> MeetingPage:
+    """List captured meetings by native start; bodies stay on exact retained reads."""
+    try:
+        filters = MeetingFilters(after=after, before=before)
+    except ValidationError:
+        raise HTTPException(422, "Invalid retained meeting interval") from None
+    result = await CanonicalWisprQuery(service.signing_key).meetings(
+        db,
+        ctx.organization.id,
+        sync_id,
+        MeetingListQuery(filters=filters, limit=limit, cursor=cursor),
+    )
+    response.headers["Cache-Control"] = "private, no-store"
     return result
 
 

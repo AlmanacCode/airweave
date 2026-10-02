@@ -108,11 +108,13 @@ async def test_wispr_ranges_do_not_duplicate_default_content():
             {"requested_ranges": {"view_transcript": {"start_char": 3}}, "response": second},
         ]
     }
-    async with map_record(record("meeting", payload), "wispr", AsyncMock()) as entities:
-        entities = entities.entities
-        assert entities[0].notes == "notes"
-        assert entities[0].transcript == "abcdef"
-        assert "guidance" not in entities[0].transcript
+    async with map_record(record("meeting", payload), "wispr", AsyncMock()) as mapped:
+        assert [part.part.key for part in mapped.parts] == ["notes", "transcript"]
+        assert mapped.parts[0].native_body.text == "notes"
+        assert mapped.parts[1].native_body.text == "abcdef"
+        assert mapped.entities[0].transcript == ""
+        assert mapped.entities[1].notes == ""
+        assert "guidance" not in mapped.parts[1].native_body.text
 
 
 @pytest.mark.asyncio
