@@ -382,6 +382,7 @@ async def authenticate_retained_source(sessions, binding, organization_id, sync_
     identity_fields = {
         "gmail": ("expected_mailbox", "LIVE_EXPECTED_EMAIL"),
         "google_calendar": ("expected_primary_calendar_id", "LIVE_CALENDAR_PRIMARY_ID"),
+        "google_drive": ("expected_permission_id", "LIVE_DRIVE_PERMISSION_ID"),
     }
     if name not in identity_fields:
         raise ValueError("Retained source identity qualification is not configured")
@@ -400,6 +401,12 @@ async def authenticate_retained_source(sessions, binding, organization_id, sync_
             raise ValueError("Retained capture source binding does not match")
         bound.is_authenticated = True
         await db.commit()
+
+
+def require_read_only_drive(name, request):
+    """Keep the live Drive qualification incapable of provider mutation."""
+    if name == "google_drive" and request.method != "GET":
+        raise ValueError("Drive qualification permits provider reads only")
 
 
 async def child(manifest):
@@ -452,6 +459,7 @@ async def child(manifest):
 
     async def request_hook(request):
         nonlocal last_operation
+        require_read_only_drive(name, request)
         last_operation = (
             "export"
             if request.url.path.endswith("/export")
