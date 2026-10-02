@@ -12,7 +12,7 @@ from sqlalchemy import event, select, update
 from airweave.api import deps
 from airweave.api.v1.endpoints.records import router
 from airweave.db.session import get_db
-from airweave.domains.embedders.fakes.embedder import FakeSparseEmbedder
+from airweave.domains.embedders.fakes.embedder import FakeDenseEmbedder, FakeSparseEmbedder
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.tests.helpers import capture, observation, publish_prepared
@@ -629,3 +629,42 @@ async def test_visibility_batches_exact_parts_generations_and_duplicate_chunks(d
         assert await visible_results(
             db, fence.organization_id, connection.readable_collection_id, inputs, registry
         ) == [valid, valid]
+
+
+@pytest.mark.parametrize(
+    "mode,snippet,use_fragment",
+    [
+        ("keyword", "… <hi>नमस्ते</hi> 原文 <script>alert(1)</script>", True),
+        ("hybrid", "… <hi>नमस्ते</hi> 原文", True),
+        ("semantic", "… <hi>नमस्ते</hi> 原文", False),
+        ("hybrid", "An unmatched lead without term markers", False),
+        ("keyword", None, False),
+    ],
+)
+async def test_owned_lexical_fragment_keeps_original_chunk(
+    database, indexed, http_search, mode, snippet, use_fragment
+):
+    fence, locator, _ = indexed
+    client, vector, _, _, _ = http_search
+    http_search[3]._dense_embedder = FakeDenseEmbedder(dimensions=3)
+    original = "Leading context. " * 200 + "नमस्ते 原文"
+    candidate = hit(fence, locator.encode()).model_copy(
+        update={
+            "textual_representation": original,
+            "query_snippet": snippet,
+        }
+    )
+    vector.seed_results(SearchResults(results=[candidate]))
+    response = await client.post(
+        "/sync/search",
+        json={
+            "query": "नमस्ते",
+            "sync_ids": [str(fence.sync_id)],
+            "mode": mode,
+        },
+    )
+    assert response.status_code == 200, response.text
+    expected = snippet.replace("<hi>", "").replace("</hi>", "") if use_fragment else original[:2000]
+    assert response.json()["items"][0]["excerpts"] == [expected]
+    assert response.json()["items"][0]["record_id"] == str(locator.record_id)
+    assert candidate.textual_representation == original

@@ -575,7 +575,23 @@ class OwnedSearchService:
                 hits[row.id].group = self._conversation(row, hits[row.id])
                 scores[row.id] = (1 / (60 + rank), locator)
                 matched_text[row.id] = result.textual_representation
-            excerpt = result.textual_representation[:2000]
+            # Dynamic summaries are keyword fragments, not semantic explanations.
+            # No-mark and older-schema responses keep the existing chunk fallback.
+            snippet = result.query_snippet
+            if (
+                request.mode.value != "semantic"
+                and snippet
+                and "<hi>" in snippet
+                and "</hi>" in snippet
+            ):
+                # Remove only Vespa's presentation delimiters. All other markup is
+                # ordinary untrusted text, never parsed/rendered as HTML here.
+                excerpt = (
+                    snippet.replace("<hi>", "").replace("</hi>", "").strip()
+                    or result.textual_representation
+                )[:2000]
+            else:
+                excerpt = result.textual_representation[:2000]
             current = hits[row.id]
             if excerpt and excerpt not in current.excerpts and len(current.excerpts) < 3:
                 hits[row.id] = current.model_copy(update={"excerpts": (*current.excerpts, excerpt)})

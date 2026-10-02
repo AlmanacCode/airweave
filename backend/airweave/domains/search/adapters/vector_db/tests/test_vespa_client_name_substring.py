@@ -128,3 +128,23 @@ class TestFilterSearchWithNameSubstring:
         await client.filter_search(filter_groups=[], collection_id="col-123")
         yql = app.query.call_args.kwargs["body"]["yql"]
         assert "name matches" not in yql
+
+
+@pytest.mark.parametrize("fragment", ["… <hi>原文</hi>", None, {"invalid": "shape"}])
+def test_optional_query_snippet_never_replaces_full_chunk(fragment):
+    client, _ = _make_client()
+    result = client._convert_hits_to_results(
+        [
+            {
+                "fields": {
+                    "entity_id": "chunk",
+                    "name": "Original",
+                    "textual_representation": "Full retained chunk",
+                    "query_snippet": fragment,
+                }
+            }
+        ]
+    ).results[0]
+    assert result.textual_representation == "Full retained chunk"
+    assert result.query_snippet == (fragment if isinstance(fragment, str) else None)
+    assert "query_snippet" not in result.model_dump()

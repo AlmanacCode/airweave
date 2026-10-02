@@ -463,6 +463,11 @@ class VespaVectorDB:
                 textual_representation=self._get_required_field(
                     fields, "textual_representation", entity_id
                 ),
+                query_snippet=(
+                    fields.get("query_snippet")
+                    if isinstance(fields.get("query_snippet"), str)
+                    else None
+                ),
                 airweave_system_metadata=self._extract_system_metadata(fields, entity_id),
                 access=self._extract_access_control(fields),
                 # Native snapshots can be opened by canonical record ID without

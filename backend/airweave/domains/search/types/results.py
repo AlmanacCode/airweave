@@ -100,6 +100,9 @@ class SearchResult(BaseModel):
     )
 
     textual_representation: str = Field(..., description="Semantically searchable text content")
+    query_snippet: str | None = Field(
+        default=None, exclude=True, description="Optional Vespa lexical fragment; display only."
+    )
     airweave_system_metadata: SearchSystemMetadata = Field(..., description="System metadata")
 
     access: SearchAccessControl = Field(..., description="Access control")

@@ -219,9 +219,15 @@ schema base_entity {
         fields: name, textual_representation, payload
     }
 
-    # Note: We use Vespa's default summary (no explicit document-summary)
-    # which automatically includes ALL fields with "summary" in their indexing,
-    # including fields from child schemas (e.g., url from file_entity)
+    # The default summary includes this alias as well as all stored summary fields,
+    # including child-schema fields. Keep full text unchanged for reranking/readers.
+    # Adding this non-attribute summary alias requires Vespa reindexing; see README.
+    document-summary owned_snippets {
+        summary query_snippet type string {
+            source: textual_representation
+            dynamic
+        }
+    }
 
     # =========================================================================
     # BASE RANK PROFILE - shared inputs and functions
