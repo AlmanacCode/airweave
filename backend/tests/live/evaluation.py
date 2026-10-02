@@ -329,21 +329,25 @@ async def project(root: Path, manifest: Manifest, sessions):
 
 
 async def serve(root: Path, manifest: Manifest, sessions):
+    """Serve the production HTTP app without running schedules or startup services."""
     import uvicorn
-    from fastapi import FastAPI
 
-    from airweave.api.v1.api import api_router
-    from airweave.api.v1.endpoints.records import record_error_response
     from airweave.db import session
-    from airweave.domains.entities.canonical.store import CanonicalStoreError
 
-    configure(root, manifest)
+    runtime = configure(root, manifest)
     session.AsyncSessionLocal = sessions
-    app = FastAPI()
-    app.include_router(api_router)
-    app.add_exception_handler(CanonicalStoreError, record_error_response)
+    from airweave.main import app
+
+    app.state.http_metrics = runtime.metrics.http
     await uvicorn.Server(
-        uvicorn.Config(app, host="127.0.0.1", port=18081, access_log=False, log_config=None)
+        uvicorn.Config(
+            app,
+            host="127.0.0.1",
+            port=18081,
+            access_log=False,
+            log_config=None,
+            lifespan="off",
+        )
     ).serve()
 
 
