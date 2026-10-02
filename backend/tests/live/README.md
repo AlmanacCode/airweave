@@ -669,3 +669,17 @@ file retention remain unqualified. The copy retains original index routing IDs;
 future projection must first isolate its collection namespace.
 
 See `evidence/slack-checkpoint-progress-20261002.json`.
+
+## Bounded full Gmail OCR repair
+
+[Sanitized repair evidence](evidence/gmail-full-ocr-repair-20261002.json) records
+real existing Temporal workflow/activity/projector execution on the exact sixteen
+pending messages from a preserved full capture. It stopped at the 600-second cap
+after fourteen new publications: 2,032 complete bodies, two explicit gaps, and
+4,202 current Vespa documents independently matched to SQL manifests. Earlier
+2,018 generation identities and the frozen baseline census remained unchanged;
+original SQL/blob integrity was verified. Provider and paid-model calls were zero.
+The private post-repair census is a separate immutable artifact, not an overwrite
+of the baseline. This gate does not qualify automatic capture-child dispatch or
+retrieval relevance. Remaining conversion failures and local OCR language/scope
+limits are described in [local OCR](../../docs/local_ocr.md).

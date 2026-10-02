@@ -1,0 +1,161 @@
+{
+  "status": "bounded_repair_stopped_with_two_explicit_gaps",
+  "runtime_commit": "2f254b8",
+  "scope": {
+    "existing_isolated_clone": true,
+    "pending_records_allowed": 16,
+    "pending_records_attempted": 16,
+    "previous_publications_not_reprocessed": 2018,
+    "new_collection_created": false,
+    "shared_schema_redeployed": false
+  },
+  "terminal": {
+    "status": "stopped",
+    "error_class": "RuntimeCap",
+    "cap_reason": "wall_clock",
+    "temporal_status": "CANCELED"
+  },
+  "cost": {
+    "workflow_seconds": 585.342,
+    "total_seconds": 600.532,
+    "derived_text_write_bytes_including_retries": 123635,
+    "prepared_feed_documents_including_retries": 61,
+    "document_payload_bytes": 1617617,
+    "network": {
+      "local_dense_requests": 61,
+      "vespa_requests": 61,
+      "forbidden_requests": 0
+    },
+    "minimum_free_bytes": 12807249920,
+    "provider_calls": 0,
+    "paid_model_calls": 0,
+    "cumulative_derived_bytes": 8818466,
+    "cumulative_documents": 4202
+  },
+  "result": {
+    "newly_published_records": 14,
+    "records": 2034,
+    "published_records": 2032,
+    "published_chunks": 4202,
+    "failed_records": 2,
+    "indexing": {
+      "metadata_missing": 0,
+      "text_ready": 2032,
+      "text_partial": 0,
+      "text_unavailable": 2
+    }
+  },
+  "integrity": {
+    "previous_2018_publications_unchanged": true,
+    "frozen_baseline_census_unchanged": true,
+    "source_capture_preserved": true,
+    "source_blobs_unchanged": true,
+    "originals_unchanged": true
+  },
+  "independent_read_only_census": {
+    "records": 2034,
+    "metadata_missing": 0,
+    "published_complete_body_records": 2032,
+    "retained_only_body_gaps": 2,
+    "projection_error_classes": {
+      "ValueError": 2
+    },
+    "body_utf8_bytes": 6087664,
+    "all_published_text_artifacts_hash_verified": 2120,
+    "published_manifest_documents": 4202,
+    "vespa_collection_document_counts": {
+      "email_entity": 4033,
+      "file_entity": 169
+    },
+    "vespa_exact_manifest_document_samples": 10,
+    "frozen_census_sha256": "3cfc0971b8e776ab840654f470eec10288f8521853bcd218ebdbf5dcf320eab9",
+    "frozen_census_bytes": 9013410,
+    "provider_calls": 0,
+    "paid_model_calls": 0,
+    "read_only_verification": true,
+    "source_capture_preserved": true
+  },
+  "remaining_failure_assurance": "Required conversion input unavailable; adapter discards worker errors, so timeout versus native failure is not independently established for image-bearing inputs. No additional OCR trial performed.",
+  "automatic_capture_child_dispatch_qualified": false,
+  "corpus_scope": "existing retained full-capture corpus only; not all-mailbox freshness or retrieval relevance",
+  "remaining_failures_read_only_classification": [
+    {
+      "failure_class": "ValueError",
+      "pdf_parts": [
+        {
+          "media_type": "application/pdf",
+          "bytes": 2302200,
+          "valid_pdf": true,
+          "encrypted": false,
+          "pages": 36,
+          "pages_needing_ocr": 6,
+          "render_bounds_valid": true,
+          "unique_image_references_per_page_total": 936,
+          "vector_only_pages": 0,
+          "pages_with_images": 36,
+          "image_count": 3348,
+          "native_characters": 24005,
+          "max_native_page_characters": 1747,
+          "pages_below_50_native_characters": 0,
+          "bytes_sha_verified": true
+        },
+        {
+          "media_type": "application/pdf",
+          "bytes": 77317,
+          "valid_pdf": true,
+          "encrypted": false,
+          "pages": 2,
+          "pages_needing_ocr": 0,
+          "render_bounds_valid": true,
+          "unique_image_references_per_page_total": 4,
+          "vector_only_pages": 0,
+          "pages_with_images": 1,
+          "image_count": 4,
+          "native_characters": 3058,
+          "max_native_page_characters": 1959,
+          "pages_below_50_native_characters": 0,
+          "bytes_sha_verified": true
+        },
+        {
+          "media_type": "application/pdf",
+          "bytes": 7627395,
+          "valid_pdf": true,
+          "encrypted": false,
+          "pages": 50,
+          "pages_needing_ocr": 12,
+          "render_bounds_valid": true,
+          "unique_image_references_per_page_total": 2000,
+          "vector_only_pages": 0,
+          "pages_with_images": 50,
+          "image_count": 6750,
+          "native_characters": 30070,
+          "max_native_page_characters": 2171,
+          "pages_below_50_native_characters": 0,
+          "bytes_sha_verified": true
+        }
+      ]
+    },
+    {
+      "failure_class": "ValueError",
+      "pdf_parts": [
+        {
+          "media_type": "application/pdf",
+          "bytes": 2230581,
+          "valid_pdf": true,
+          "encrypted": false,
+          "pages": 4,
+          "pages_needing_ocr": 4,
+          "render_bounds_valid": true,
+          "unique_image_references_per_page_total": 0,
+          "vector_only_pages": 4,
+          "pages_with_images": 0,
+          "image_count": 0,
+          "native_characters": 0,
+          "max_native_page_characters": 0,
+          "pages_below_50_native_characters": 4,
+          "bytes_sha_verified": true
+        }
+      ]
+    }
+  ]
+}

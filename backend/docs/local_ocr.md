@@ -34,3 +34,21 @@ reprojection require separate qualification. The current sixteen pending Gmail
 records contain only HTML, PDF and an unsupported GIF, so that bounded retry adds
 no newly selectable JPEG/PNG parts. This change alone does not fix parent-body
 coupling when another required part cannot be converted.
+
+The exact sixteen-record retained Gmail repair used the real Temporal workflow,
+activity and projector from commit `2f254b8`, existing local models and the existing
+Vespa schema. It stopped at the ten-minute wall cap with fourteen newly published
+records: 2,032 of 2,034 message bodies ready and two explicitly unavailable.
+The prior 2,018 publication identities, frozen baseline census and original capture
+SQL/blob digests remained unchanged. An independent read-only census verified
+2,120 text artifacts and all 4,202 current manifest documents against actual Vespa
+counts. This is partial repair, not a successfully completed workflow. See
+[the bounded repair evidence](../tests/live/evidence/gmail-full-ocr-repair-20261002.json).
+
+One remaining parent has two image-heavy PDFs needing OCR and another natively
+extractable PDF. The worker adapter does not retain bounded failure reasons, so
+timeout versus worker failure is unknown. The other parent has a four-page PDF
+with vector drawings but no images or native text; the locked images-only partial
+OCR cannot recover its text. All four PDFs are valid, unencrypted, within input/page/
+render bounds, and match captured hashes. Both parent bodies remain blocked by
+the existing strict conversion contract. No further OCR retry was performed.
