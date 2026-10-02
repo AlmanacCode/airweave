@@ -544,3 +544,22 @@ are separate payload measurements, not allocated database sizes. This fixed
 filtered scan has no Gmail history checkpoint: its cost is not the future
 unfiltered delta-sync cost model. All private corpus/schema data remains available
 for subsequent relevance checks and must be cleaned only by exact manifest scope.
+
+The [real retained Wispr latest-five proof](evidence/wispr-latest-five-real-cli-20261002.json)
+uses the preserved 260 meeting bodies in a fresh local schema/blob copy and fresh
+Vespa collection. Current additive migrations backfill native starts in the copy;
+original payload/revision/blob-reference digests stay unchanged. Only the actual
+five latest bodies were projected: five publications, 31 documents, 262,790 bytes
+of retained text artifacts including metadata, and 11.122 seconds including clone,
+backfill, and existing local MiniLM/BM25 inference. No shared schema was redeployed,
+provider was called, or paid model was used. This direct bounded projector proof
+does not qualify automatic Temporal activation or a native Wispr principal.
+
+The installed candidate CLI listed those same five in native-start order, then
+used each returned record reference and text continuation command to read both
+parts with matching revision, character count, and SHA. All five native notes
+fields are explicitly empty in the saved source ranges; their transcripts contain
+153,413 characters in total. Four transcripts required multiple CLI reads, with
+up to six ranges. The 27 CLI commands took 0.486–0.800 seconds each including
+startup. The owner/account binding is synthetic, coverage is the captured subset,
+and no account-wide recall or released-product claim follows from this proof.

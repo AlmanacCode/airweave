@@ -1,0 +1,533 @@
+{
+  "date": "2026-10-02",
+  "source": "preserved real Wispr capture; no recapture",
+  "capture_authority": {
+    "native_principal_attested": false,
+    "binding": "existing broker-attested capture; serving owner and connected account are synthetic fixture only",
+    "retained_inventory": {
+      "meeting_bodies": 260,
+      "meeting_listings": 260,
+      "scratchpad_bodies": 22,
+      "scratchpad_listings": 22
+    },
+    "complete_account_or_snapshot_claimed": false
+  },
+  "isolation": {
+    "original_capture_and_projection_preserved": true,
+    "fresh_schema_and_blob_copy": true,
+    "fresh_collection_and_generation_ids": true,
+    "shared_vespa_schema_redeployed": false,
+    "initial_clone_failure": "cross-schema PostgreSQL enum assignment rejected; clone transaction rolled back atomically; explicit enum cast corrected operator replay",
+    "capture_hash_revision_and_blob_reference_digest_equal_before_after": true
+  },
+  "bounded_actual_projection": {
+    "selected_meetings": 5,
+    "published": 5,
+    "failed": 0,
+    "provider_calls": 0,
+    "paid_model_calls": 0,
+    "local_inference_used": true,
+    "vespa_feed_calls": 5,
+    "documents": 31,
+    "derived_text_bytes_written": 262790,
+    "originals_unchanged": true,
+    "metadata_missing": 0,
+    "seconds": 11.122,
+    "native_principal_attested": false,
+    "owner_binding": "synthetic retained projection fixture only",
+    "coverage": "selected five from stored260meeting bodies; no whole-account claim",
+    "original_corpus_preserved": true,
+    "feed_invocation_semantics": "vespa_feed_calls counts feed_prepared calls; actual per-document HTTP request/local inference batch counts not separately instrumented",
+    "runtime_caps": {
+      "selected_body_records": 5,
+      "single_selected_payload_bytes": 8388608,
+      "feed_document_count": 250,
+      "derived_text_written_bytes": 16777216
+    },
+    "automatic_projection_workflow_qualified": false
+  },
+  "installed_cli_http": {
+    "real_retained_corpus": true,
+    "synthetic_owner_binding": true,
+    "native_principal_attested": false,
+    "latest_five_match_sql": true,
+    "metadata_missing": 0,
+    "consistency": "sequence_fenced",
+    "order": "meeting_started_at_desc_id_desc",
+    "date_basis": "wispr_native_start",
+    "coverage": "stored_meetings_only",
+    "captured_subset_only": true,
+    "meeting_reads": [
+      {
+        "selected_position": 1,
+        "revision_matches": true,
+        "parts": [
+          {
+            "part": "notes",
+            "characters": 0,
+            "pages": 1,
+            "offsets": [
+              0
+            ],
+            "sha256_matches_native_mapper": true
+          },
+          {
+            "part": "transcript",
+            "characters": 23976,
+            "pages": 2,
+            "offsets": [
+              0,
+              12000
+            ],
+            "sha256_matches_native_mapper": true
+          }
+        ]
+      },
+      {
+        "selected_position": 2,
+        "revision_matches": true,
+        "parts": [
+          {
+            "part": "notes",
+            "characters": 0,
+            "pages": 1,
+            "offsets": [
+              0
+            ],
+            "sha256_matches_native_mapper": true
+          },
+          {
+            "part": "transcript",
+            "characters": 61981,
+            "pages": 6,
+            "offsets": [
+              0,
+              12000,
+              24000,
+              36000,
+              48000,
+              60000
+            ],
+            "sha256_matches_native_mapper": true
+          }
+        ]
+      },
+      {
+        "selected_position": 3,
+        "revision_matches": true,
+        "parts": [
+          {
+            "part": "notes",
+            "characters": 0,
+            "pages": 1,
+            "offsets": [
+              0
+            ],
+            "sha256_matches_native_mapper": true
+          },
+          {
+            "part": "transcript",
+            "characters": 26335,
+            "pages": 3,
+            "offsets": [
+              0,
+              12000,
+              24000
+            ],
+            "sha256_matches_native_mapper": true
+          }
+        ]
+      },
+      {
+        "selected_position": 4,
+        "revision_matches": true,
+        "parts": [
+          {
+            "part": "notes",
+            "characters": 0,
+            "pages": 1,
+            "offsets": [
+              0
+            ],
+            "sha256_matches_native_mapper": true
+          },
+          {
+            "part": "transcript",
+            "characters": 242,
+            "pages": 1,
+            "offsets": [
+              0
+            ],
+            "sha256_matches_native_mapper": true
+          }
+        ]
+      },
+      {
+        "selected_position": 5,
+        "revision_matches": true,
+        "parts": [
+          {
+            "part": "notes",
+            "characters": 0,
+            "pages": 1,
+            "offsets": [
+              0
+            ],
+            "sha256_matches_native_mapper": true
+          },
+          {
+            "part": "transcript",
+            "characters": 40879,
+            "pages": 4,
+            "offsets": [
+              0,
+              12000,
+              24000,
+              36000
+            ],
+            "sha256_matches_native_mapper": true
+          }
+        ]
+      }
+    ],
+    "cli_calls": [
+      {
+        "operation": "cli-latest-five",
+        "wall_seconds": 0.735
+      },
+      {
+        "operation": "cli-meeting1-text-choices",
+        "wall_seconds": 0.528
+      },
+      {
+        "operation": "cli-meeting1-notes-page1",
+        "wall_seconds": 0.515
+      },
+      {
+        "operation": "cli-meeting1-transcript-page1",
+        "wall_seconds": 0.505
+      },
+      {
+        "operation": "cli-meeting1-transcript-page2",
+        "wall_seconds": 0.511
+      },
+      {
+        "operation": "cli-meeting2-text-choices",
+        "wall_seconds": 0.492
+      },
+      {
+        "operation": "cli-meeting2-notes-page1",
+        "wall_seconds": 0.523
+      },
+      {
+        "operation": "cli-meeting2-transcript-page1",
+        "wall_seconds": 0.8
+      },
+      {
+        "operation": "cli-meeting2-transcript-page2",
+        "wall_seconds": 0.503
+      },
+      {
+        "operation": "cli-meeting2-transcript-page3",
+        "wall_seconds": 0.505
+      },
+      {
+        "operation": "cli-meeting2-transcript-page4",
+        "wall_seconds": 0.519
+      },
+      {
+        "operation": "cli-meeting2-transcript-page5",
+        "wall_seconds": 0.499
+      },
+      {
+        "operation": "cli-meeting2-transcript-page6",
+        "wall_seconds": 0.521
+      },
+      {
+        "operation": "cli-meeting3-text-choices",
+        "wall_seconds": 0.492
+      },
+      {
+        "operation": "cli-meeting3-notes-page1",
+        "wall_seconds": 0.517
+      },
+      {
+        "operation": "cli-meeting3-transcript-page1",
+        "wall_seconds": 0.53
+      },
+      {
+        "operation": "cli-meeting3-transcript-page2",
+        "wall_seconds": 0.596
+      },
+      {
+        "operation": "cli-meeting3-transcript-page3",
+        "wall_seconds": 0.525
+      },
+      {
+        "operation": "cli-meeting4-text-choices",
+        "wall_seconds": 0.496
+      },
+      {
+        "operation": "cli-meeting4-notes-page1",
+        "wall_seconds": 0.518
+      },
+      {
+        "operation": "cli-meeting4-transcript-page1",
+        "wall_seconds": 0.504
+      },
+      {
+        "operation": "cli-meeting5-text-choices",
+        "wall_seconds": 0.486
+      },
+      {
+        "operation": "cli-meeting5-notes-page1",
+        "wall_seconds": 0.52
+      },
+      {
+        "operation": "cli-meeting5-transcript-page1",
+        "wall_seconds": 0.507
+      },
+      {
+        "operation": "cli-meeting5-transcript-page2",
+        "wall_seconds": 0.512
+      },
+      {
+        "operation": "cli-meeting5-transcript-page3",
+        "wall_seconds": 0.565
+      },
+      {
+        "operation": "cli-meeting5-transcript-page4",
+        "wall_seconds": 0.605
+      }
+    ],
+    "provider_calls": 0,
+    "paid_model_calls": 0,
+    "multi_range_part_reads": 4,
+    "package": "isolated installed candidate CLI0.14.0; frozen product backend5385b8c1f; not released-product verification",
+    "notes_observation": "Each selected retained native content field is present as empty string in every captured requested range; complete empty native notes reads are distinct from unavailable data. Provider summary remains separate metadata.",
+    "transcript_characters": 153413,
+    "product_http_call_count": 74,
+    "product_http_non_200_count": 0,
+    "product_http_elapsed_ms_min": 6.832,
+    "product_http_elapsed_ms_max": 166.457
+  },
+  "storage": {
+    "postgres_all_table_total_including_toast": 16769024,
+    "postgres_all_heap_bytes": 1646592,
+    "postgres_all_index_bytes": 2179072,
+    "original_json_text_payload_bytes": 17016348,
+    "filesystem_blob_bytes": 262790,
+    "tables": [
+      {
+        "table": "access_control_membership",
+        "heap": 0,
+        "indexes": 65536,
+        "total_including_toast": 73728
+      },
+      {
+        "table": "api_key",
+        "heap": 0,
+        "indexes": 24576,
+        "total_including_toast": 32768
+      },
+      {
+        "table": "auth_provider",
+        "heap": 0,
+        "indexes": 24576,
+        "total_including_toast": 32768
+      },
+      {
+        "table": "billing_period",
+        "heap": 0,
+        "indexes": 24576,
+        "total_including_toast": 32768
+      },
+      {
+        "table": "capture_scan",
+        "heap": 98304,
+        "indexes": 122880,
+        "total_including_toast": 253952
+      },
+      {
+        "table": "collection",
+        "heap": 8192,
+        "indexes": 65536,
+        "total_including_toast": 81920
+      },
+      {
+        "table": "connection",
+        "heap": 0,
+        "indexes": 32768,
+        "total_including_toast": 40960
+      },
+      {
+        "table": "connection_init_session",
+        "heap": 0,
+        "indexes": 32768,
+        "total_including_toast": 40960
+      },
+      {
+        "table": "entity",
+        "heap": 720896,
+        "indexes": 696320,
+        "total_including_toast": 7675904
+      },
+      {
+        "table": "entity_change",
+        "heap": 606208,
+        "indexes": 106496,
+        "total_including_toast": 7086080
+      },
+      {
+        "table": "entity_count",
+        "heap": 57344,
+        "indexes": 65536,
+        "total_including_toast": 163840
+      },
+      {
+        "table": "entity_definition",
+        "heap": 0,
+        "indexes": 16384,
+        "total_including_toast": 24576
+      },
+      {
+        "table": "entity_relation",
+        "heap": 0,
+        "indexes": 32768,
+        "total_including_toast": 40960
+      },
+      {
+        "table": "feature_flag",
+        "heap": 0,
+        "indexes": 24576,
+        "total_including_toast": 24576
+      },
+      {
+        "table": "integration_credential",
+        "heap": 0,
+        "indexes": 16384,
+        "total_including_toast": 24576
+      },
+      {
+        "table": "node_selection",
+        "heap": 0,
+        "indexes": 32768,
+        "total_including_toast": 40960
+      },
+      {
+        "table": "organization",
+        "heap": 8192,
+        "indexes": 32768,
+        "total_including_toast": 49152
+      },
+      {
+        "table": "organization_billing",
+        "heap": 0,
+        "indexes": 24576,
+        "total_including_toast": 32768
+      },
+      {
+        "table": "owned_provisioning",
+        "heap": 0,
+        "indexes": 24576,
+        "total_including_toast": 32768
+      },
+      {
+        "table": "processed_webhook_event",
+        "heap": 0,
+        "indexes": 16384,
+        "total_including_toast": 24576
+      },
+      {
+        "table": "projection_generation",
+        "heap": 106496,
+        "indexes": 155648,
+        "total_including_toast": 294912
+      },
+      {
+        "table": "redirect_session",
+        "heap": 0,
+        "indexes": 32768,
+        "total_including_toast": 40960
+      },
+      {
+        "table": "search_queries",
+        "heap": 0,
+        "indexes": 81920,
+        "total_including_toast": 90112
+      },
+      {
+        "table": "source_connection",
+        "heap": 8192,
+        "indexes": 81920,
+        "total_including_toast": 98304
+      },
+      {
+        "table": "source_rate_limits",
+        "heap": 0,
+        "indexes": 24576,
+        "total_including_toast": 32768
+      },
+      {
+        "table": "sync",
+        "heap": 8192,
+        "indexes": 32768,
+        "total_including_toast": 49152
+      },
+      {
+        "table": "sync_connection",
+        "heap": 0,
+        "indexes": 32768,
+        "total_including_toast": 32768
+      },
+      {
+        "table": "sync_cursor",
+        "heap": 8192,
+        "indexes": 49152,
+        "total_including_toast": 65536
+      },
+      {
+        "table": "sync_job",
+        "heap": 8192,
+        "indexes": 98304,
+        "total_including_toast": 114688
+      },
+      {
+        "table": "usage",
+        "heap": 0,
+        "indexes": 32768,
+        "total_including_toast": 32768
+      },
+      {
+        "table": "user",
+        "heap": 0,
+        "indexes": 24576,
+        "total_including_toast": 32768
+      },
+      {
+        "table": "user_organization",
+        "heap": 0,
+        "indexes": 16384,
+        "total_including_toast": 24576
+      },
+      {
+        "table": "vector_db_deployment_metadata",
+        "heap": 8192,
+        "indexes": 32768,
+        "total_including_toast": 49152
+      }
+    ]
+  },
+  "operator_artifact_sha256": {
+    "wispr-real-latest5-project-20261002.py": "c9e6a6772f1857598cd53cbb26bff9804adc616ee1e006d3ad0d737735dc4730",
+    "wispr5-cli-proof-20261002.py": "840c9df22a83969ec2d656d33b9a5d80e955a2023a95c19aa16eeb19f3441fde"
+  },
+  "not_verified": [
+    "native Wispr principal identity or real product provisioning",
+    "whole-account content completeness",
+    "automatic capture or Temporal projection activation",
+    "general Wispr search relevance/recall",
+    "paid model behavior",
+    "production release"
+  ]
+}
