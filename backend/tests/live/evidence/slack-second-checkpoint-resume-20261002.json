@@ -1,0 +1,97 @@
+{
+  "stage": "capture_stopped",
+  "elapsed_seconds": 600.52,
+  "lifecycle_exit": 1,
+  "before_counts": {
+    "message": 1376,
+    "channel": 80
+  },
+  "after_counts": {
+    "message": 1855,
+    "channel": 80
+  },
+  "same_cycle": true,
+  "original_digest_verified_after": true,
+  "new_writer_claimed": true,
+  "prior_scans_advanced": 2,
+  "prior_sweep_retained": 1,
+  "cycle_phase": "active",
+  "job_status": "cancelled",
+  "clone_and_checkpoint_preserved": true,
+  "files_enabled": false,
+  "paid_model_calls": 0,
+  "census": {
+    "new_messages": 479,
+    "prior_records_changed": 0,
+    "unique_native_file_ids": 124,
+    "scans": [
+      {
+        "phase": "complete",
+        "count": 27
+      },
+      {
+        "phase": "collecting",
+        "count": 1
+      }
+    ]
+  },
+  "native_get_requests": 99,
+  "records_observed": 635,
+  "rate_limits": [
+    {
+      "status": 429,
+      "retry_after_seconds": 60.0,
+      "request_number": 83
+    },
+    {
+      "status": 429,
+      "retry_after_seconds": 60.0,
+      "request_number": 85
+    },
+    {
+      "status": 429,
+      "retry_after_seconds": 60.0,
+      "request_number": 87
+    },
+    {
+      "status": 429,
+      "retry_after_seconds": 60.0,
+      "request_number": 89
+    },
+    {
+      "status": 429,
+      "retry_after_seconds": 60.0,
+      "request_number": 91
+    },
+    {
+      "status": 429,
+      "retry_after_seconds": 60.0,
+      "request_number": 93
+    },
+    {
+      "status": 429,
+      "retry_after_seconds": 60.0,
+      "request_number": 95
+    },
+    {
+      "status": 429,
+      "retry_after_seconds": 60.0,
+      "request_number": 97
+    },
+    {
+      "status": 429,
+      "retry_after_seconds": 60.0,
+      "request_number": 99
+    }
+  ],
+  "terminal_reason": "TimeoutError",
+  "source_commit": "a6c2d0eaed22da59edf666e6ac2215f69d74f107",
+  "initial_preflight": "Current runtime rejected older schema before any provider request; used original capture runtime without migrations.",
+  "search_index_changed": false,
+  "provider_writes": 0,
+  "limitations": [
+    "Capture cycle remains active; no complete account synchronization claim.",
+    "124 unique file IDs have metadata only; attachment bytes were not acquired.",
+    "Frozen search qualification still contains1376messages; this capture adds479 unprojected originals."
+  ]
+}
