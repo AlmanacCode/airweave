@@ -20,7 +20,7 @@ class ExtractionPart(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     part_index: int = Field(ge=0)
     key: str = Field(min_length=1, max_length=2048)
-    kind: Literal["body", "file", "record"]
+    kind: Literal["body", "file", "record", "metadata"]
     media_type: str | None = Field(default=None, max_length=256)
     extension: str | None = Field(default=None, max_length=32)
     charset_recoveries: tuple[CharsetRecovery, ...] = ()
@@ -30,9 +30,14 @@ class ExtractionOutcome(ExtractionPart):
     """Indexed means every required chunk for this part was successfully published."""
 
     outcome: Literal["indexed", "unsupported", "unavailable_original", "failed"]
-    reason: Literal["unsupported_format", "original_not_captured", "conversion_failed"] | None = (
-        None
-    )
+    reason: (
+        Literal[
+            "unsupported_format", "original_not_captured", "conversion_failed", "ocr_unavailable"
+        ]
+        | None
+    ) = None
+
+    gaps: tuple[Literal["ocr_unavailable"], ...] = ()
 
     @model_validator(mode="after")
     def reason_matches(self):
@@ -43,7 +48,11 @@ class ExtractionOutcome(ExtractionPart):
             "unavailable_original": "original_not_captured",
             "failed": "conversion_failed",
         }
-        if self.reason != expected[self.outcome]:
+        if self.gaps and (self.outcome != "indexed" or len(set(self.gaps)) != len(self.gaps)):
+            raise ValueError("Only indexed content may carry distinct extraction gaps")
+        if self.reason != expected[self.outcome] and not (
+            self.outcome == "unsupported" and self.reason == "ocr_unavailable"
+        ):
             raise ValueError("Extraction outcome requires its exact bounded reason")
         return self
 
@@ -79,10 +88,17 @@ class ExtractionCoverage(BaseModel):
     @property
     def status(self) -> Literal["complete", "partial", "unavailable", "excluded"]:
         """Empty coverage is reserved for intentional exclusions/tombstones."""
-        if not self.parts:
+        content = tuple(part for part in self.parts if part.kind != "metadata")
+        if not content:
             return "excluded"
-        indexed = sum(p.outcome == "indexed" for p in self.parts)
-        return "complete" if indexed == len(self.parts) else "partial" if indexed else "unavailable"
+        indexed = sum(p.outcome == "indexed" for p in content)
+        return (
+            "complete"
+            if indexed == len(content) and not any(part.gaps for part in content)
+            else "partial"
+            if indexed
+            else "unavailable"
+        )
 
     def persisted(self) -> dict:
         """Computed status remains queryable but validates as derived, not trusted input."""

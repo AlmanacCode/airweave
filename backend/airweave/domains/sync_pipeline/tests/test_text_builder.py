@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from airweave.domains.converters._base import ConversionResult
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, SyncFailureError
 from airweave.domains.sync_pipeline.pipeline.text_builder import (
     TextualRepresentationBuilder,
@@ -41,7 +42,7 @@ class FakeConverter:
     async def convert_batch(self, keys):
         if self._side_effect:
             raise self._side_effect
-        return self._results
+        return {key: ConversionResult(text=value) for key, value in self._results.items()}
 
 
 class TestConvertSubBatch:
@@ -56,7 +57,7 @@ class TestConvertSubBatch:
         entity = _make_entity()
 
         with pytest.raises(SyncFailureError, match="infra down"):
-            await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {})
+            await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {}, {})
 
     @pytest.mark.asyncio
     async def test_entity_processing_error_skips_sub_batch(self):
@@ -66,7 +67,7 @@ class TestConvertSubBatch:
         ctx = FakeSyncContext()
         entity = _make_entity()
 
-        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {})
+        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {}, {})
 
         assert failures == [entity]
         ctx.logger.warning.assert_called()
@@ -79,7 +80,7 @@ class TestConvertSubBatch:
         ctx = FakeSyncContext()
         entity = _make_entity()
 
-        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {})
+        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {}, {})
 
         assert failures == [entity]
         ctx.logger.error.assert_called()
@@ -92,7 +93,7 @@ class TestConvertSubBatch:
         ctx = FakeSyncContext()
         entity = _make_entity()
 
-        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {})
+        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {}, {})
 
         assert failures == []
         assert "Hello world content" in entity.textual_representation
@@ -104,7 +105,7 @@ class TestConvertSubBatch:
         entity = _make_entity()
         boundaries = {}
         failures = await builder._convert_sub_batch(
-            converter, [(entity, "/path")], FakeSyncContext(), boundaries
+            converter, [(entity, "/path")], FakeSyncContext(), boundaries, {}
         )
         assert failures == []
         assert "**Source**: test" in entity.textual_representation
@@ -118,7 +119,7 @@ class TestConvertSubBatch:
         ctx = FakeSyncContext()
         entity = _make_entity()
 
-        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {})
+        failures = await builder._convert_sub_batch(converter, [(entity, "/path")], ctx, {}, {})
 
         assert failures == [entity]
 

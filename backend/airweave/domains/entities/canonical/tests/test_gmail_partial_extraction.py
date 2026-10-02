@@ -11,6 +11,7 @@ from sqlalchemy import select, update
 
 from airweave.adapters.storage.filesystem import FilesystemBackend
 from airweave.core.logging import logger
+from airweave.domains.converters._base import ConversionResult
 from airweave.domains.converters.registry import ConverterRegistry
 from airweave.domains.embedders.fakes.embedder import FakeDenseEmbedder, FakeSparseEmbedder
 from airweave.domains.entities.canonical.mail_models import MailFilters
@@ -70,7 +71,7 @@ async def test_body_query_and_original_thread_read_work_before_attachment_finish
     async def unavailable(paths):
         entered.set()
         await release.wait()
-        return dict.fromkeys(paths)
+        return dict.fromkeys(paths, ConversionResult(text=None))
 
     pdf = MagicMock(convert_batch=AsyncMock(side_effect=unavailable))
     project = pipeline(database, tmp_path, with_pdf_converter(pdf))
@@ -113,10 +114,9 @@ async def test_partial_retry_cannot_drop_a_good_part_and_recovers_without_recapt
     page.insert_text((40, 40), "Successful retained attachment investment discussion. " * 3)
     good = pdf.tobytes(deflate=True)
     pdf.close()
-    pdf = fitz.open()
-    pdf.new_page().insert_text((40, 40), "Short cover")
-    needs_ocr = pdf.tobytes(deflate=True)
-    pdf.close()
+    # Invalid native bytes genuinely fail conversion; a valid short text layer
+    # now remains useful partial text when OCR is unavailable.
+    needs_ocr = b"\x00\xff damaged PDF bytes"
     item = attached(
         part(good, mime="application/pdf", filename="good.pdf"),
         part(needs_ocr, mime="application/pdf", filename="scan.pdf"),
@@ -164,7 +164,11 @@ async def test_partial_retry_cannot_drop_a_good_part_and_recovers_without_recapt
         )
         assert text.text == "Full retained body boundary canary"
     # A transient failure of the formerly successful PDF cannot downgrade current text/search.
-    unavailable = MagicMock(convert_batch=AsyncMock(side_effect=lambda paths: dict.fromkeys(paths)))
+    unavailable = MagicMock(
+        convert_batch=AsyncMock(
+            side_effect=lambda paths: dict.fromkeys(paths, ConversionResult(text=None))
+        )
+    )
     degraded = pipeline(database, tmp_path, with_pdf_converter(unavailable))
     result = await degraded.batch(fence.organization_id, fence.sync_id, "gmail", target, logger)
     assert result.published == 0 and result.failed == 1

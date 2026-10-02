@@ -4,7 +4,7 @@ import asyncio
 from typing import Dict, List
 
 from airweave.core.logging import logger
-from airweave.domains.converters._base import BaseTextConverter
+from airweave.domains.converters._base import BaseTextConverter, ConversionResult
 from airweave.domains.sync_pipeline.async_helpers import run_in_thread_pool
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, SyncFailureError
 
@@ -12,7 +12,7 @@ from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, Syn
 class XlsxConverter(BaseTextConverter):
     """Converts XLSX files to markdown using local openpyxl extraction."""
 
-    async def convert_batch(self, file_paths: List[str]) -> Dict[str, str]:
+    async def convert_batch(self, file_paths: List[str]) -> Dict[str, ConversionResult]:
         """Convert XLSX files to markdown text using openpyxl."""
         try:
             import openpyxl  # noqa: F401
@@ -50,7 +50,7 @@ class XlsxConverter(BaseTextConverter):
         successful = sum(1 for r in results.values() if r)
         logger.debug(f"XLSX conversion complete: {successful}/{len(file_paths)} files successful")
 
-        return results
+        return {key: ConversionResult(text=value) for key, value in results.items()}
 
     async def _extract_xlsx_to_markdown(self, xlsx_path: str) -> str:  # noqa: C901
         def _extract() -> str:  # noqa: C901

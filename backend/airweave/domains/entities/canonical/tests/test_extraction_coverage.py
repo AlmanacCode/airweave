@@ -259,7 +259,7 @@ async def test_unsupported_only_publication_is_explicit_and_retries_on_pipeline_
     ).published == 1
     async with database() as db:
         row = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
-        assert row.indexed_chunk_count == 0 and row.completeness == "complete"
+        assert row.indexed_chunk_count > 0 and row.completeness == "complete"
         assert (
             await current_extraction(
                 db, fence.organization_id, fence.sync_id, row.id, row.record_revision
@@ -436,7 +436,7 @@ async def test_drive_metadata_only_reports_missing_original_then_new_bytes_are_i
         coverage = await current_extraction(
             db, fence.organization_id, fence.sync_id, row.id, row.record_revision
         )
-        assert coverage.status == "unavailable" and row.indexed_chunk_count == 0
+        assert coverage.status == "unavailable" and row.indexed_chunk_count > 0
         assert coverage.parts[0].outcome == "unavailable_original"
         assert coverage.parts[0].reason == "original_not_captured"
     content = b"Recovered original text contains the complete available document."
@@ -467,7 +467,7 @@ async def test_drive_metadata_only_reports_missing_original_then_new_bytes_are_i
     ).published == 1
     async with database() as db:
         row = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
-        assert row.indexed_chunk_count == 0
+        assert row.indexed_chunk_count > 0
         assert (
             await db.scalar(select(Entity.id).join(Sync).where(publication_matches(previous)))
             is None
@@ -477,3 +477,79 @@ async def test_drive_metadata_only_reports_missing_original_then_new_bytes_are_i
                 db, fence.organization_id, fence.sync_id, row.id, row.record_revision
             )
         ).status == "unavailable"
+
+
+async def test_pdf_partial_and_unavailable_ocr_are_published_without_losing_originals(
+    database, source, tmp_path
+):
+    from airweave.domains.entities.canonical.tests.test_gmail_projection import blob, record
+
+    service, fence = source
+    binding = await bind_projection(database, fence, "google_drive")
+    storage = FilesystemBackend(tmp_path)
+    originals = {}
+    for native_id, text in (
+        ("mixed", "Preserved embedded text beside an unread scanned diagram."),
+        ("scan", None),
+        ("broken", None),
+    ):
+        pdf = fitz.open()
+        page = pdf.new_page()
+        if text:
+            page.insert_text((40, 40), text)
+        image = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 2, 2), False)
+        image.clear_with(128)
+        page.insert_image(fitz.Rect(40, 100, 80, 140), pixmap=image)
+        content = pdf.tobytes() if native_id != "broken" else b"\x00\xff damaged PDF"
+        pdf.close()
+        ref = blob(record({}, sync_id=fence.sync_id), content).model_copy(
+            update={"media_type": "application/pdf"}
+        )
+        await storage.write_file(ref.key, content)
+        originals[native_id] = (ref, content)
+        await capture(
+            database,
+            service,
+            fence,
+            observation(
+                identity=RecordIdentity(record_type="file", native_id=native_id),
+                payload={
+                    "id": native_id,
+                    "name": native_id + ".pdf",
+                    "mimeType": "application/pdf",
+                },
+                blobs=(ref,),
+            ),
+        )
+    result = await projector(database, storage).batch(
+        fence.organization_id,
+        fence.sync_id,
+        "google_drive",
+        destination(binding.collection_id),
+        logger,
+    )
+    assert result.published == 3 and result.failed == 1
+    async with database() as db:
+        rows = (await db.scalars(select(Entity).where(Entity.sync_id == fence.sync_id))).all()
+        by_native = {row.source_payload["id"]: row for row in rows}
+        for native, status in (
+            ("mixed", "partial"),
+            ("scan", "unavailable"),
+            ("broken", "unavailable"),
+        ):
+            row = by_native[native]
+            coverage = await current_extraction(
+                db, fence.organization_id, fence.sync_id, row.id, row.record_revision
+            )
+            assert coverage.status == status
+            if native == "mixed":
+                assert coverage.parts[0].gaps == ("ocr_unavailable",)
+                assert row.indexed_chunk_count > 0
+            else:
+                assert coverage.parts[0].reason == (
+                    "conversion_failed" if native == "broken" else "ocr_unavailable"
+                )
+                assert row.indexed_chunk_count > 0
+                assert coverage.parts[-1].kind == "metadata"
+            ref, original = originals[native]
+            assert await storage.read_file(ref.key) == original

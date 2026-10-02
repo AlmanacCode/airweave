@@ -4,7 +4,7 @@ import asyncio
 from typing import Dict, List
 
 from airweave.core.logging import logger
-from airweave.domains.converters._base import BaseTextConverter
+from airweave.domains.converters._base import BaseTextConverter, ConversionResult
 from airweave.domains.sync_pipeline.async_helpers import run_in_thread_pool
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError
 
@@ -12,7 +12,7 @@ from airweave.domains.sync_pipeline.exceptions import EntityProcessingError
 class HtmlConverter(BaseTextConverter):
     """Converts HTML files to markdown text using html-to-markdown."""
 
-    async def convert_batch(self, file_paths: List[str]) -> Dict[str, str | None]:
+    async def convert_batch(self, file_paths: List[str]) -> Dict[str, ConversionResult]:
         """Convert HTML files to markdown text."""
         try:
             from html_to_markdown import convert
@@ -75,4 +75,4 @@ class HtmlConverter(BaseTextConverter):
         successful = sum(1 for r in results.values() if r is not None)
         logger.info(f"HTML conversion complete: {successful}/{len(file_paths)} files successful")
 
-        return results
+        return {key: ConversionResult(text=value) for key, value in results.items()}

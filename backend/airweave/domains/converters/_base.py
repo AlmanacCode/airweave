@@ -4,26 +4,36 @@ from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict
 
 from airweave.core.logging import logger
 from airweave.domains.ocr.protocols import OcrProvider
-from airweave.domains.sync_pipeline.exceptions import SyncFailureError
+from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, SyncFailureError
+
+
+class ConversionResult(BaseModel):
+    """Known extracted content and a bounded gap; None without a gap is failure."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    text: str | None
+    gap: Literal["ocr_unavailable"] | None = None
 
 
 class BaseTextConverter(ABC):
     """Base class for all text converters."""
 
     @abstractmethod
-    async def convert_batch(self, file_paths: List[str]) -> Dict[str, Optional[str]]:
+    async def convert_batch(self, file_paths: List[str]) -> Dict[str, ConversionResult]:
         """Batch convert files to markdown text.
 
         Args:
             file_paths: List of file paths to convert
 
         Returns:
-            Dict mapping file_path to markdown; empty text is a successful empty
-            extraction, None means unavailable or failed conversion.
+            Mapping from file path to extracted content and any known gap.
+            None text without a gap means conversion failed.
         """
         pass
 
@@ -56,6 +66,9 @@ class HybridDocumentConverter(BaseTextConverter):
             Extracted markdown if successful, or ``None`` if OCR is needed.
         """
 
+    async def _extract_local(self, path: str) -> ConversionResult:
+        return ConversionResult(text=await self._try_extract(path))
+
     @staticmethod
     def _try_read_as_text(path: str, max_probe_bytes: int = 8192) -> Optional[str]:
         """Check if a file is actually plain text despite its extension."""
@@ -86,55 +99,57 @@ class HybridDocumentConverter(BaseTextConverter):
         except Exception:
             return None
 
-    async def convert_batch(self, file_paths: List[str]) -> Dict[str, Optional[str]]:
+    async def _extract_with_fallback(self, path: str) -> ConversionResult:
+        """A text-disguised-as-binary fallback does not hide infrastructure errors."""
+        try:
+            local = await self._extract_local(path)
+            if local.text is not None or local.gap is not None:
+                return local
+        except SyncFailureError:
+            raise
+        except Exception as exc:
+            logger.warning(f"{os.path.basename(path)}: extraction error ({exc}), needs OCR")
+        return ConversionResult(text=self._try_read_as_text(path))
+
+    async def convert_batch(self, file_paths: List[str]) -> Dict[str, ConversionResult]:
         """Convert files to markdown, trying extraction first.
 
         For each file, calls :meth:`_try_extract`. If that returns content,
         uses it directly (0 API calls). Otherwise, batches the file for OCR.
         """
-        results: Dict[str, Optional[str]] = {}
-        needs_ocr: List[str] = []
+        results: Dict[str, ConversionResult] = {}
+        needs_ocr: Dict[str, ConversionResult] = {}
 
         for path in file_paths:
-            name = os.path.basename(path)
-            try:
-                markdown = await self._try_extract(path)
-                if markdown:
-                    results[path] = markdown
-                    logger.debug(f"{name}: extracted via text layer")
-                else:
-                    text_content = self._try_read_as_text(path)
-                    if text_content:
-                        results[path] = text_content
-                        logger.info(
-                            f"{name}: extension suggests binary but content is plain text, "
-                            "using text fallback instead of OCR"
-                        )
-                    else:
-                        logger.debug(f"{name}: text extraction insufficient, needs OCR")
-                        needs_ocr.append(path)
-            except SyncFailureError:
-                raise
-            except Exception as exc:
-                logger.warning(f"{name}: extraction error ({exc}), needs OCR")
-                text_content = self._try_read_as_text(path)
-                if text_content:
-                    results[path] = text_content
-                    logger.info(
-                        f"{name}: extraction failed but content is plain text, "
-                        "using text fallback instead of OCR"
-                    )
-                else:
-                    needs_ocr.append(path)
+            local = await self._extract_with_fallback(path)
+            if (local.text is not None and local.gap is None) or (
+                local.gap is not None and self._ocr_provider is None
+            ):
+                results[path] = local
+            else:
+                needs_ocr[path] = local
 
         if needs_ocr:
             if self._ocr_provider is None:
                 logger.warning(f"No OCR converter configured, {len(needs_ocr)} files will fail")
                 for path in needs_ocr:
-                    results[path] = None
+                    results[path] = ConversionResult(text=None)
             else:
-                ocr_results = await self._ocr_provider.convert_batch(needs_ocr)
-                results.update(ocr_results)
+                try:
+                    ocr_results = await self._ocr_provider.convert_batch(list(needs_ocr))
+                except EntityProcessingError:
+                    # A recoverable OCR failure cannot discard locally recovered text.
+                    # Infrastructure errors and cancellation still propagate.
+                    ocr_results = {}
+                for path, local in needs_ocr.items():
+                    text = ocr_results.get(path)
+                    results[path] = (
+                        ConversionResult(text=text)
+                        if text
+                        else local
+                        if local.gap is not None
+                        else ConversionResult(text=text)
+                    )
 
         return results
 
@@ -145,5 +160,6 @@ class OcrConverterAdapter(BaseTextConverter):
     def __init__(self, ocr: OcrProvider) -> None:
         self._ocr = ocr
 
-    async def convert_batch(self, file_paths: List[str]) -> Dict[str, Optional[str]]:
-        return await self._ocr.convert_batch(file_paths)
+    async def convert_batch(self, file_paths: List[str]) -> Dict[str, ConversionResult]:
+        results = await self._ocr.convert_batch(file_paths)
+        return {path: ConversionResult(text=value) for path, value in results.items()}

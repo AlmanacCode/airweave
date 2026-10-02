@@ -9,7 +9,7 @@ from typing import Dict, List
 import aiofiles
 
 from airweave.core.logging import logger
-from airweave.domains.converters._base import BaseTextConverter
+from airweave.domains.converters._base import BaseTextConverter, ConversionResult
 from airweave.domains.sync_pipeline.async_helpers import run_in_thread_pool
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError
 
@@ -17,7 +17,7 @@ from airweave.domains.sync_pipeline.exceptions import EntityProcessingError
 class TxtConverter(BaseTextConverter):
     """Converts text files (TXT, JSON, XML, MD, YAML, TOML) to markdown."""
 
-    async def convert_batch(self, file_paths: List[str]) -> Dict[str, str]:
+    async def convert_batch(self, file_paths: List[str]) -> Dict[str, ConversionResult]:
         """Convert text files to markdown."""
         logger.debug(f"Converting {len(file_paths)} text files to markdown...")
 
@@ -53,7 +53,7 @@ class TxtConverter(BaseTextConverter):
         successful = sum(1 for r in results.values() if r)
         logger.debug(f"Text conversion complete: {successful}/{len(file_paths)} successful")
 
-        return results
+        return {key: ConversionResult(text=value) for key, value in results.items()}
 
     @staticmethod
     def _try_chardet_decode(raw_bytes: bytes, path: str) -> str | None:

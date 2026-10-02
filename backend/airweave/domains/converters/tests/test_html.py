@@ -38,9 +38,9 @@ class TestHtmlConverterEncodingValidation:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] is not None
-        assert "Hello World" in result[file_path]
-        assert "test paragraph" in result[file_path]
+        assert result[file_path].text is not None
+        assert "Hello World" in result[file_path].text
+        assert "test paragraph" in result[file_path].text
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("content", ["", "  ", "<html><body></body></html>"])
@@ -52,7 +52,7 @@ class TestHtmlConverterEncodingValidation:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] == ""
+        assert result[file_path].text == ""
 
     @pytest.mark.asyncio
     async def test_convert_batch_multiple_html_files(self, converter, temp_dir):
@@ -73,7 +73,7 @@ class TestHtmlConverterEncodingValidation:
     async def test_convert_nonexistent_file(self, converter):
         result = await converter.convert_batch(["/nonexistent/page.html"])
         assert "/nonexistent/page.html" in result
-        assert result["/nonexistent/page.html"] is None
+        assert result["/nonexistent/page.html"].text is None
 
     @pytest.mark.asyncio
     async def test_html_with_excessive_binary_returns_none(self, converter, temp_dir):
@@ -86,4 +86,4 @@ class TestHtmlConverterEncodingValidation:
 
         result = await converter.convert_batch([file_path])
         assert file_path in result
-        assert result[file_path] is None
+        assert result[file_path].text is None

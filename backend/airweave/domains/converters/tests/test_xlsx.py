@@ -55,10 +55,10 @@ class TestXlsxConverter:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] is not None
-        assert "Alice" in result[file_path]
-        assert "Bob" in result[file_path]
-        assert "| Name | Age |" in result[file_path]
+        assert result[file_path].text is not None
+        assert "Alice" in result[file_path].text
+        assert "Bob" in result[file_path].text
+        assert "| Name | Age |" in result[file_path].text
 
     @pytest.mark.asyncio
     async def test_default_empty_workbook_still_extracts(self, converter, temp_dir):
@@ -75,7 +75,7 @@ class TestXlsxConverter:
 
         assert file_path in result
         # openpyxl reports at least A1 even on an empty sheet
-        assert result[file_path] is not None
+        assert result[file_path].text is not None
 
     @pytest.mark.asyncio
     async def test_no_sheets_raises_error(self, converter, temp_dir):
@@ -97,7 +97,7 @@ class TestXlsxConverter:
             result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] is None
+        assert result[file_path].text is None
 
     @pytest.mark.asyncio
     async def test_multi_sheet_xlsx(self, converter, temp_dir):
@@ -113,12 +113,12 @@ class TestXlsxConverter:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert "Sheet: Users" in result[file_path]
-        assert "Sheet: Products" in result[file_path]
-        assert "Charlie" in result[file_path]
-        assert "Widget" in result[file_path]
+        assert "Sheet: Users" in result[file_path].text
+        assert "Sheet: Products" in result[file_path].text
+        assert "Charlie" in result[file_path].text
+        assert "Widget" in result[file_path].text
 
     @pytest.mark.asyncio
     async def test_nonexistent_file_returns_none(self, converter):
         result = await converter.convert_batch(["/nonexistent/file.xlsx"])
-        assert result["/nonexistent/file.xlsx"] is None
+        assert result["/nonexistent/file.xlsx"].text is None

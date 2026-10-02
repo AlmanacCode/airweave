@@ -31,7 +31,7 @@ class TestTxtConverterEncodingValidation:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] == "Hello world! This is clean UTF-8 text."
+        assert result[file_path].text == "Hello world! This is clean UTF-8 text."
 
     @pytest.mark.asyncio
     async def test_convert_unicode_text(self, converter, temp_dir):
@@ -42,7 +42,7 @@ class TestTxtConverterEncodingValidation:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] == "Hello 世界 🌍 こんにちは"
+        assert result[file_path].text == "Hello 世界 🌍 こんにちは"
 
     @pytest.mark.asyncio
     async def test_convert_corrupted_text_file(self, converter, temp_dir):
@@ -63,7 +63,7 @@ class TestTxtConverterEncodingValidation:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] is None
+        assert result[file_path].text is None
 
     @pytest.mark.asyncio
     async def test_convert_json_clean(self, converter, temp_dir):
@@ -74,8 +74,8 @@ class TestTxtConverterEncodingValidation:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] is not None
-        assert "name" in result[file_path]
+        assert result[file_path].text is not None
+        assert "name" in result[file_path].text
 
     @pytest.mark.asyncio
     async def test_convert_json_with_corruption(self, converter, temp_dir):
@@ -86,7 +86,7 @@ class TestTxtConverterEncodingValidation:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] is None
+        assert result[file_path].text is None
 
     @pytest.mark.asyncio
     async def test_convert_xml_clean(self, converter, temp_dir):
@@ -97,8 +97,8 @@ class TestTxtConverterEncodingValidation:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] is not None
-        assert "item" in result[file_path]
+        assert result[file_path].text is not None
+        assert "item" in result[file_path].text
 
     @pytest.mark.asyncio
     async def test_convert_batch_mixed_files(self, converter, temp_dir):
@@ -112,8 +112,8 @@ class TestTxtConverterEncodingValidation:
 
         result = await converter.convert_batch([clean_path, empty_path])
 
-        assert result[clean_path] == "Clean text"
-        assert result[empty_path] is None
+        assert result[clean_path].text == "Clean text"
+        assert result[empty_path].text is None
 
 
 class TestTxtConverterChardetFallback:
@@ -142,7 +142,7 @@ class TestTxtConverterChardetFallback:
         result = await converter.convert_batch([file_path])
         assert file_path in result
         # If chardet succeeds, content is returned; if not, fallback handles it
-        assert result[file_path] is not None or result[file_path] is None
+        assert result[file_path].text is not None or result[file_path].text is None
 
     @pytest.mark.asyncio
     async def test_chardet_decode_raises_unicode_error(self, converter, temp_dir):
@@ -166,7 +166,7 @@ class TestTxtConverterChardetFallback:
 
         result = await converter.convert_batch([file_path])
         assert file_path in result
-        assert result[file_path] is None
+        assert result[file_path].text is None
 
 
 class TestTxtConverterJsonXmlReplacementLimits:
@@ -183,7 +183,7 @@ class TestTxtConverterJsonXmlReplacementLimits:
 
         result = await converter.convert_batch([file_path])
         assert file_path in result
-        assert result[file_path] is None
+        assert result[file_path].text is None
 
     @pytest.mark.asyncio
     async def test_json_with_few_replacement_chars_still_parses(self, converter, temp_dir):
@@ -207,7 +207,7 @@ class TestTxtConverterJsonXmlReplacementLimits:
 
         result = await converter.convert_batch([file_path])
         assert file_path in result
-        assert result[file_path] is None
+        assert result[file_path].text is None
 
     @pytest.mark.asyncio
     async def test_xml_fallback_raw_with_excessive_binary(self, converter, temp_dir):
@@ -220,7 +220,7 @@ class TestTxtConverterJsonXmlReplacementLimits:
 
         result = await converter.convert_batch([file_path])
         assert file_path in result
-        assert result[file_path] is None
+        assert result[file_path].text is None
 
 
 class TestTryChardetDecode:
@@ -267,7 +267,7 @@ class TestTxtConverterEdgeCases:
     async def test_convert_nonexistent_file(self, converter):
         result = await converter.convert_batch(["/nonexistent/file.txt"])
         assert "/nonexistent/file.txt" in result
-        assert result["/nonexistent/file.txt"] is None
+        assert result["/nonexistent/file.txt"].text is None
 
     @pytest.mark.asyncio
     async def test_convert_whitespace_only_file(self, converter, temp_dir):
@@ -278,4 +278,4 @@ class TestTxtConverterEdgeCases:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] is None
+        assert result[file_path].text is None

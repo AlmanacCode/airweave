@@ -6,13 +6,13 @@ from typing import Dict, List
 import aiofiles
 
 from airweave.core.logging import logger
-from airweave.domains.converters._base import BaseTextConverter
+from airweave.domains.converters._base import BaseTextConverter, ConversionResult
 
 
 class CodeConverter(BaseTextConverter):
     """Converts code files to markdown code fences."""
 
-    async def convert_batch(self, file_paths: List[str]) -> Dict[str, str]:
+    async def convert_batch(self, file_paths: List[str]) -> Dict[str, ConversionResult]:
         """Convert code files to markdown code fences."""
         logger.debug(f"Converting {len(file_paths)} code files to markdown...")
 
@@ -67,4 +67,4 @@ class CodeConverter(BaseTextConverter):
         successful = sum(1 for r in results.values() if r)
         logger.debug(f"Code conversion complete: {successful}/{len(file_paths)} successful")
 
-        return results
+        return {key: ConversionResult(text=value) for key, value in results.items()}

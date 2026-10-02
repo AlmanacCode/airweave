@@ -28,6 +28,7 @@ class PageExtractionResult:
     page_num: int
     text: str
     needs_ocr: bool
+    failed: bool = False
 
 
 @dataclass
@@ -40,7 +41,7 @@ class PdfExtractionResult:
     @property
     def full_text(self) -> str:
         """Return concatenated text from all successfully extracted pages."""
-        texts = [p.text for p in self.pages if p.text and not p.needs_ocr]
+        texts = [p.text for p in self.pages if p.text]
         return "\n\n".join(texts)
 
     @property
@@ -111,17 +112,17 @@ def _extract_page(page, page_num: int) -> PageExtractionResult:
         char_count = len(text.strip())
 
         if char_count < MIN_CHARS_PER_PAGE:
-            return PageExtractionResult(page_num=page_num, text="", needs_ocr=True)
+            return PageExtractionResult(page_num=page_num, text=text.strip(), needs_ocr=True)
 
         image_list = page.get_images()
         if image_list and char_count < 200:
-            return PageExtractionResult(page_num=page_num, text="", needs_ocr=True)
+            return PageExtractionResult(page_num=page_num, text=text.strip(), needs_ocr=True)
 
         return PageExtractionResult(page_num=page_num, text=text.strip(), needs_ocr=False)
 
     except Exception as exc:
         logger.warning(f"Text extraction failed for page {page_num}: {exc}")
-        return PageExtractionResult(page_num=page_num, text="", needs_ocr=True)
+        return PageExtractionResult(page_num=page_num, text="", needs_ocr=True, failed=True)
 
 
 def text_to_markdown(text: str) -> str:

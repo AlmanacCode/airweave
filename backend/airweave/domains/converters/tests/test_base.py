@@ -17,7 +17,7 @@ async def test_infrastructure_failure_does_not_become_unavailable_conversion(tmp
     path.write_bytes(b"synthetic PDF bytes")
     fallback = AsyncMock()
     converter = PdfConverter(ocr_provider=fallback)
-    converter._try_extract = AsyncMock(side_effect=SyncFailureError("Parser unavailable"))
+    converter._extract_local = AsyncMock(side_effect=SyncFailureError("Parser unavailable"))
     with pytest.raises(SyncFailureError, match="Parser unavailable"):
         await converter.convert_batch([str(path)])
     fallback.convert_batch.assert_not_awaited()

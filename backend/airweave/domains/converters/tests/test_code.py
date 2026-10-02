@@ -34,7 +34,7 @@ class TestCodeConverterEncodingValidation:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] == code
+        assert result[file_path].text == code
 
     @pytest.mark.asyncio
     async def test_convert_empty_code_file(self, converter, temp_dir):
@@ -45,7 +45,7 @@ class TestCodeConverterEncodingValidation:
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] is None
+        assert result[file_path].text is None
 
     @pytest.mark.asyncio
     async def test_convert_batch_multiple_code_files(self, converter, temp_dir):
@@ -59,11 +59,11 @@ class TestCodeConverterEncodingValidation:
 
         result = await converter.convert_batch([py_path, js_path])
 
-        assert result[py_path] == "print('Python')"
-        assert result[js_path] == "console.log('JavaScript');"
+        assert result[py_path].text == "print('Python')"
+        assert result[js_path].text == "console.log('JavaScript');"
 
     @pytest.mark.asyncio
     async def test_convert_nonexistent_file(self, converter):
         result = await converter.convert_batch(["/nonexistent/code.py"])
         assert "/nonexistent/code.py" in result
-        assert result["/nonexistent/code.py"] is None
+        assert result["/nonexistent/code.py"].text is None

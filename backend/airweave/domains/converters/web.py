@@ -8,7 +8,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from airweave.core.config import settings
 from airweave.core.logging import logger
-from airweave.domains.converters._base import BaseTextConverter
+from airweave.domains.converters._base import BaseTextConverter, ConversionResult
 from airweave.domains.sync_pipeline.exceptions import SyncFailureError
 from airweave.platform.rate_limiters import FirecrawlRateLimiter
 
@@ -52,7 +52,7 @@ class WebConverter(BaseTextConverter):
         except ImportError:
             raise SyncFailureError("firecrawl-py package required but not installed")
 
-    async def convert_batch(self, urls: List[str]) -> Dict[str, str]:
+    async def convert_batch(self, urls: List[str]) -> Dict[str, ConversionResult]:
         """Fetch URLs and convert to markdown using Firecrawl batch scrape."""
         if not urls:
             return {}
@@ -65,7 +65,7 @@ class WebConverter(BaseTextConverter):
             await self.rate_limiter.acquire()
             batch_result = await self._batch_scrape_with_retry(urls)
             self._extract_results(urls, batch_result, results)
-            return results
+            return {key: ConversionResult(text=value) for key, value in results.items()}
 
         except SyncFailureError:
             raise
@@ -89,7 +89,7 @@ class WebConverter(BaseTextConverter):
                 raise SyncFailureError(f"Firecrawl infrastructure failure: {e}")
 
             logger.warning(f"Firecrawl batch scrape error (entities will be skipped): {e}")
-            return results
+            return {key: ConversionResult(text=value) for key, value in results.items()}
 
     async def _batch_scrape_with_retry(self, urls: List[str]):
         @retry(

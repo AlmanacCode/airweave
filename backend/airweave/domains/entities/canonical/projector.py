@@ -155,7 +155,11 @@ class CanonicalProjector:
                     mapped, work, source_name, generation, self._processor.supports_file_extension
                 )
                 context = ProjectionContext(logger, source_name)
-                runtime = ProjectionRuntime(ProjectionConversionTracker())
+                runtime = ProjectionRuntime(
+                    ProjectionConversionTracker(
+                        allow_failures=any(part.kind == "metadata" for part in coverage.parts)
+                    )
+                )
                 selected_ids = {entity.entity_id for entity in selected}
                 native_bodies = {
                     item.entity.entity_id: item.native_body
@@ -173,8 +177,14 @@ class CanonicalProjector:
                     built, coverage = outcome
                 else:
                     built = await self._processor.build_text(
-                        selected, context, runtime, native_bodies=native_bodies
+                        selected,
+                        context,
+                        runtime,
+                        native_bodies=native_bodies,
+                        strict_conversion=True,
                     )
+                    _check_converted_parts(selected_ids, built, runtime.entity_tracker)
+                coverage = _conversion_coverage(built, coverage)
                 _stamp_content(built, coverage)
                 artifacts = prepare_text(built.representations, generation)
                 chunks = await self._processor.process_built_text(
@@ -182,11 +192,7 @@ class CanonicalProjector:
                     context,
                     runtime,
                     strict=True,
-                    expected_ids=(
-                        {entity.entity_id for entity in built.entities}
-                        if source_name == "gmail" and work.record.identity.record_type == "message"
-                        else selected_ids
-                    ),
+                    expected_ids={entity.entity_id for entity in built.entities},
                 )
                 _stamp_chunks(chunks, work.record)
                 prepared = destination.prepare_documents(chunks)
@@ -253,25 +259,14 @@ class CanonicalProjector:
             files, context, ProjectionRuntime(file_tracker), strict_conversion=True
         )
         _check_converted_parts(file_ids, file_text, file_tracker)
-        failed_parts = {_part_index(identity) for identity in file_text.failed_entity_ids}
-        parts = []
-        for part in coverage.parts:
-            if part.part_index in failed_parts:
-                if part.kind != "file" or part.outcome != "indexed":
-                    raise ValueError("Only captured selected attachments may fail conversion")
-                part = ExtractionOutcome(
-                    **part.model_dump(exclude={"outcome", "reason"}),
-                    outcome="failed",
-                    reason="conversion_failed",
-                )
-            parts.append(part)
         return (
             BuiltTextBatch(
                 entities=body_text.entities + file_text.entities,
                 representations=body_text.representations + file_text.representations,
                 failed_entity_ids=file_text.failed_entity_ids,
+                conversion_gaps={**body_text.conversion_gaps, **file_text.conversion_gaps},
             ),
-            ExtractionCoverage(parts=tuple(parts)),
+            coverage,
         )
 
     async def batch(
@@ -323,6 +318,38 @@ class CanonicalProjector:
         )
 
 
+def _conversion_coverage(built: BuiltTextBatch, coverage: ExtractionCoverage) -> ExtractionCoverage:
+    """Known OCR gaps are distinct from failed conversion and absent originals."""
+    available = {_part_index(entity.entity_id) for entity in built.entities}
+    gaps = {_part_index(identity): reason for identity, reason in built.conversion_gaps.items()}
+    failed = {_part_index(identity) for identity in built.failed_entity_ids}
+    if set(gaps) - {part.part_index for part in coverage.parts}:
+        raise ValueError("Conversion gap does not belong to a selected source part")
+    parts = []
+    for part in coverage.parts:
+        if part.part_index in failed:
+            if part.kind != "file" or part.outcome != "indexed":
+                raise ValueError("Only captured selected file content may fail conversion")
+            part = ExtractionOutcome(
+                **part.model_dump(exclude={"outcome", "reason"}),
+                outcome="failed",
+                reason="conversion_failed",
+            )
+        if part.part_index in gaps:
+            if part.outcome != "indexed":
+                raise ValueError("Conversion gap contradicts selected original")
+            fields = part.model_dump(exclude={"outcome", "reason", "gaps"})
+            part = (
+                ExtractionOutcome(**fields, outcome="indexed", gaps=(gaps[part.part_index],))
+                if part.part_index in available
+                else ExtractionOutcome(
+                    **fields, outcome="unsupported", reason=gaps[part.part_index]
+                )
+            )
+        parts.append(part)
+    return ExtractionCoverage(parts=tuple(parts))
+
+
 def _check_converted_parts(
     expected: set[str], built: BuiltTextBatch, tracker: ProjectionConversionTracker
 ) -> None:
@@ -336,7 +363,8 @@ def _check_converted_parts(
         or len(set(failed)) != len(failed)
         or set(entities) != set(representations)
         or set(entities) & set(failed)
-        or set(entities) | set(failed) != expected
+        or set(failed) & set(built.conversion_gaps)
+        or set(entities) | set(failed) | set(built.conversion_gaps) != expected
         or len(failed) != tracker.failed_count
     ):
         raise ValueError("Projection conversion did not account for its exact selected parts")

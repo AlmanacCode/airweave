@@ -185,3 +185,50 @@ class TestTextToMarkdown:
         result = text_to_markdown("• Item one\n• Item two")
         assert "- Item one" in result
         assert "- Item two" in result
+
+
+async def test_partial_pdf_preserves_text_without_ocr_and_when_ocr_has_no_result(tmp_path):
+    import hashlib
+
+    import fitz
+
+    path = tmp_path / "mixed.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    known = "Useful embedded details remain readable while the scanned diagram needs OCR."
+    page.insert_text((40, 40), known)
+    image = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 2, 2), False)
+    image.clear_with(128)
+    page.insert_image(fitz.Rect(40, 100, 80, 140), pixmap=image)
+    doc.save(path)
+    doc.close()
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    converter = PdfConverter()
+    result = (await converter.convert_batch([str(path)]))[str(path)]
+    assert known in result.text
+    assert result.gap == "ocr_unavailable"
+    ocr = AsyncMock()
+    ocr.convert_batch.return_value = {str(path): None}
+    retried = (await PdfConverter(ocr).convert_batch([str(path)]))[str(path)]
+    assert retried == result
+    ocr.convert_batch.assert_awaited_once_with([str(path)])
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+
+
+async def test_image_only_pdf_is_unavailable_but_parse_failure_is_not_an_ocr_gap(tmp_path):
+    import fitz
+
+    path = tmp_path / "scan.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    image = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 2, 2), False)
+    image.clear_with(128)
+    page.insert_image(fitz.Rect(40, 100, 80, 140), pixmap=image)
+    doc.save(path)
+    doc.close()
+    result = (await PdfConverter().convert_batch([str(path)]))[str(path)]
+    assert result.text is None and result.gap == "ocr_unavailable"
+    path.write_bytes(b"\x00\xffbroken PDF")
+    failed = (await PdfConverter().convert_batch([str(path)]))[str(path)]
+    assert failed.text is None and failed.gap is None

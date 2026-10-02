@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from airweave.core.shared_models import AirweaveFieldFlag
+from airweave.domains.converters._base import BaseTextConverter, ConversionResult
 from airweave.domains.converters.protocols import ConverterRegistryProtocol
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, SyncFailureError
 from airweave.domains.sync_pipeline.file_types import SUPPORTED_FILE_EXTENSIONS
@@ -88,6 +89,7 @@ class TextualRepresentationBuilder:
         ):
             raise EntityProcessingError("Native body cannot override converted content")
         content_starts: dict[str, int] = {}
+        conversion_gaps: dict[str, ConversionResult] = {}
         source_name = sync_context.source_short_name
 
         # Step 1: Build metadata section for all entities
@@ -109,9 +111,16 @@ class TextualRepresentationBuilder:
             converter_groups,
             sync_context,
             content_starts,
+            conversion_gaps,
             strict_conversion=strict_conversion,
         )
         failed_entities.extend(additional_failures)
+
+        entities[:] = [
+            e
+            for e in entities
+            if e.entity_id not in conversion_gaps or conversion_gaps[e.entity_id].text is not None
+        ]
 
         # Step 4: Handle failures
         await self._handle_conversion_failures(entities, failed_entities, sync_context, runtime)
@@ -134,6 +143,9 @@ class TextualRepresentationBuilder:
                 for entity in entities
             ),
             failed_entity_ids=tuple(entity.entity_id for entity in failed_entities),
+            conversion_gaps={
+                key: value.gap for key, value in conversion_gaps.items() if value.gap is not None
+            },
         )
 
     # ------------------------------------------------------------------------------------
@@ -401,6 +413,7 @@ class TextualRepresentationBuilder:
         converter_groups: Dict[Any, List[Tuple[BaseEntity, str]]],
         sync_context: "ProcessingContext",
         content_starts: dict[str, int],
+        conversion_gaps: dict[str, ConversionResult],
         *,
         strict_conversion: bool = False,
     ) -> List[BaseEntity]:
@@ -410,6 +423,7 @@ class TextualRepresentationBuilder:
             converter_groups: Dict mapping converter to (entity, key) tuples
             sync_context: Sync context for logging
             content_starts: Per-entity converter-content offsets to populate
+            conversion_gaps: Known incomplete conversions, retained separately from failures
             strict_conversion: Only explicit unavailable converter results may omit content
 
         Returns:
@@ -427,6 +441,7 @@ class TextualRepresentationBuilder:
                     sub_batch,
                     sync_context,
                     content_starts,
+                    conversion_gaps,
                     strict_conversion=strict_conversion,
                 )
                 failed_entities.extend(failures)
@@ -435,10 +450,11 @@ class TextualRepresentationBuilder:
 
     async def _convert_sub_batch(
         self,
-        converter: Any,
+        converter: BaseTextConverter,
         sub_batch: List[Tuple[BaseEntity, str]],
         sync_context: "ProcessingContext",
         content_starts: dict[str, int],
+        conversion_gaps: dict[str, ConversionResult],
         *,
         strict_conversion: bool = False,
     ) -> List[BaseEntity]:
@@ -449,6 +465,7 @@ class TextualRepresentationBuilder:
             sub_batch: List of (entity, key) tuples
             sync_context: Sync context for logging
             content_starts: Per-entity converter-content offsets to populate
+            conversion_gaps: Known incomplete conversions, retained separately from failures
             strict_conversion: Propagate unexpected converter exceptions
 
         Returns:
@@ -465,9 +482,8 @@ class TextualRepresentationBuilder:
 
             # Append content to each entity
             for entity, key in sub_batch:
-                text_content = results.get(key)
-
-                if text_content is None:
+                result = results.get(key)
+                if not self._append_conversion(entity, result, content_starts, conversion_gaps):
                     sync_context.logger.warning(
                         f"Conversion returned no content for "
                         f"{entity.__class__.__name__}[{entity.entity_id}] "
@@ -475,10 +491,6 @@ class TextualRepresentationBuilder:
                     )
                     failed_entities.append(entity)
                     continue
-
-                prefix = f"{entity.textual_representation}\n\n# Content\n\n"
-                content_starts[entity.entity_id] = len(prefix)
-                entity.textual_representation = prefix + text_content
 
         except SyncFailureError:
             # Infrastructure failure - propagate to fail entire sync
@@ -504,6 +516,27 @@ class TextualRepresentationBuilder:
             failed_entities.extend([entity for entity, _ in sub_batch])
 
         return failed_entities
+
+    @staticmethod
+    def _append_conversion(
+        entity: BaseEntity,
+        result: ConversionResult | None,
+        content_starts: dict[str, int],
+        conversion_gaps: dict[str, ConversionResult],
+    ) -> bool:
+        """Record a known gap without fabricating content or masking failed conversion."""
+        if result is None:
+            return False
+        if result.gap is not None:
+            conversion_gaps[entity.entity_id] = result
+            if result.text is None:
+                return True
+        if result.text is None:
+            return False
+        prefix = f"{entity.textual_representation}\n\n# Content\n\n"
+        content_starts[entity.entity_id] = len(prefix)
+        entity.textual_representation = prefix + result.text
+        return True
 
     # ------------------------------------------------------------------------------------
     # Failure Handling
