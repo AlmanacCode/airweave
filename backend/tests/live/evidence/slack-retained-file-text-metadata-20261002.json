@@ -1,0 +1,136 @@
+{
+  "qualification": "Retained-only Slack file extraction and metadata discovery",
+  "fork_commit": "c202fdb",
+  "product_model_reader_commit": "9fb450df2",
+  "scope": {
+    "real_retained_files": 3,
+    "mime_types": [
+      "application/pdf",
+      "image/png",
+      "image/jpeg"
+    ],
+    "retained_original_bytes": 638335,
+    "all_reprojected_records": 86,
+    "channel_metadata_records": 80,
+    "messages": 3,
+    "pipeline_version_before": 3,
+    "pipeline_version_after": 4,
+    "capture_complete": false,
+    "original_coverage": "Three preselected files; not all124 file IDs"
+  },
+  "projection": {
+    "terminal": "completed",
+    "elapsed_seconds": 16.617,
+    "workflow_started": true,
+    "counts": {
+      "derived_bytes": 12676,
+      "document_bytes": 1028072,
+      "documents": 87,
+      "local_dense_requests": 87,
+      "vespa_requests": 87,
+      "forbidden_requests": 0
+    },
+    "runtime_commit": "c202fdb",
+    "capture_complete": false,
+    "live_original_files": 3,
+    "paid_calls": 0,
+    "provider_calls": 0,
+    "limits": {
+      "seconds": 120,
+      "aggregate_derived_bytes": 33554432,
+      "free_floor": 2147483648
+    },
+    "cleanup_verified": false,
+    "policy_exclusions": 0,
+    "policy_exclusion_basis": "Actual86 publications include80 channel metadata records; no zero-document exclusions were observed",
+    "original_checkpoint_and_payload_unchanged": true,
+    "clone_checkpoint_and_payload_unchanged": true,
+    "per_kind": [
+      {
+        "entity_definition_short_name": "message",
+        "records": 3,
+        "current_publications": 3,
+        "zero_chunk_publications": 0,
+        "failures": 0
+      },
+      {
+        "entity_definition_short_name": "file",
+        "records": 3,
+        "current_publications": 3,
+        "zero_chunk_publications": 0,
+        "failures": 0
+      },
+      {
+        "entity_definition_short_name": "channel",
+        "records": 80,
+        "current_publications": 80,
+        "zero_chunk_publications": 0,
+        "failures": 0
+      }
+    ],
+    "extraction": {
+      "unavailable": 2,
+      "partial": 1
+    }
+  },
+  "cli": {
+    "commands": 15,
+    "fixture_authentication": "Explicit synthetic owner/account binding over actual retained records, not deployed auth",
+    "client": "Installed entrypoint with candidate CLI modules, not a published release",
+    "all_exact_file_identities_found_by_filename": true,
+    "all_original_downloads_exact_size_and_sha256": true,
+    "text": [
+      {
+        "mime": "image/jpeg",
+        "file_text_unavailable": true,
+        "metadata_opt_in_explicit": true
+      },
+      {
+        "mime": "application/pdf",
+        "text_characters": 154,
+        "ocr_gap_explicit": true
+      },
+      {
+        "mime": "image/png",
+        "file_text_unavailable": true,
+        "metadata_opt_in_explicit": true
+      }
+    ],
+    "search_metadata": [
+      {
+        "mime": "image/jpeg",
+        "matched_kind": "metadata",
+        "matched_key": "file_metadata",
+        "explicit_metadata_read_verified": true
+      },
+      {
+        "mime": "application/pdf",
+        "matched_kind": "metadata",
+        "matched_key": "file_metadata"
+      },
+      {
+        "mime": "image/png",
+        "matched_kind": "metadata",
+        "matched_key": "file_metadata",
+        "explicit_metadata_read_verified": true
+      }
+    ]
+  },
+  "verification": {
+    "converter_text_builder_tests": 87,
+    "real_sql_extraction_tests": 15,
+    "product_model_cli_tests": "29 passed in shared run; root metadata chooser expectation then corrected and13 CLI passed",
+    "reader_component_tests": 6,
+    "website_typecheck": "passed",
+    "provider_calls": 0,
+    "paid_calls": 0,
+    "runtime_detached_health_verified": true
+  },
+  "limitations": [
+    "OCR unavailable: image text remains unextracted; recovered PDF text explicitly partial.",
+    "No continuous full Slack capture qualification; selected message scopes remain nonfinal.",
+    "Local loopback fixture is isolated and not a staging deployment.",
+    "Existing earlier publication evidence retained; this tiny fixture deliberately evolved to version4.",
+    "Composio upstream redirect custody remains unverified; this retained-only run makes no provider requests."
+  ]
+}
