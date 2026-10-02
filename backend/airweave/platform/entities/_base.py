@@ -64,6 +64,7 @@ class AirweaveSystemMetadata(BaseModel):
 
     # Canonical projector-owned metadata. Provider entity fallbacks do not set these.
     canonical_record_type: Optional[str] = None
+    native_type: Optional[str] = None
     source_created_us: Optional[int] = None
     source_updated_us: Optional[int] = None
     source_created_known: Optional[int] = None

@@ -71,6 +71,11 @@ schema base_entity {
             attribute: fast-search
         }
 
+        field airweave_system_metadata_native_type type string {
+            indexing: attribute | summary
+            attribute: fast-search
+        }
+
         field airweave_system_metadata_source_created_us type long {
             indexing: attribute | summary
             attribute: fast-search

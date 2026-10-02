@@ -327,6 +327,7 @@ class EntityTransformer:
         meta_fields.update(
             {
                 "canonical_record_type": meta.canonical_record_type,
+                "native_type": meta.native_type,
                 "source_created_us": meta.source_created_us,
                 "source_updated_us": meta.source_updated_us,
                 "source_created_known": meta.source_created_known,

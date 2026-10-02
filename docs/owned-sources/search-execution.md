@@ -304,3 +304,24 @@ reprojected by this implementation. Migration 0015 only rebuilds meeting-start f
 | --- | --- | --- | --- | --- | --- | --- |
 | Wispr meetings | Latest retained meetings | `/wispr/meetings` | Existing originals plus validated native start on Entity | Capture-sequence-fenced newest-first traversal; current source/ancestor gates | Synthetic real SQL/HTTP 260-meeting traversal, malformed/missing/start-conflict gaps, half-open dates and revocation | Retained list is not proof of provider-wide capture |
 | Wispr notes/transcript | Retained meeting text | Existing exact record/text endpoints with named `notes`/`transcript` parts | Full reassembled native ranges in existing text artifacts | Immutable revision/generation binding, explicit absent versus unknown transcript | Real mapper/projector/storage/content pagination preserves >40,000-character native fields | Existing generated-only generations require deliberate reprojection; raw editor JSON remains provider-omitted |
+
+### Exact authored native types
+
+`native_types` is an optional filter on the native kind (person, page, task,
+project, and the other authored kinds; session/message are also explicit).
+It is ANDed with `record_types` and all date/scope filters before the bounded
+retrieval window. Empty means unrestricted. Provider records have no native type.
+The canonical SQL enrichment independently checks the retained original's type.
+
+Vespa stores this as `airweave_system_metadata_native_type`, an attribute stamped
+from the retained native original. Exact-native-type requests require pipeline 3;
+older selected scopes return `reindex_required`, rather than an incorrect empty
+result. Existing canonical type/date filters still require pipeline 2. Deployment
+must install the new Vespa schema and reproject native originals at pipeline 3;
+no upstream recapture is needed. That deployment/reprojection is not performed by
+these changes.
+
+The focused SQL/HTTP fixture verifies the version gate before any embedding/query,
+filter construction, metadata feed serialization, and rejection of a wrong-type
+candidate even when a fake engine ignores the filter. This does not yet prove the
+new attribute against the running Vespa corpus.

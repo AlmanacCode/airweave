@@ -21,6 +21,22 @@ class OwnedSearchRequest(BaseModel):
     sync_ids: tuple[UUID, ...] = Field(min_length=1, max_length=20)
     mode: RetrievalStrategy = RetrievalStrategy.HYBRID
     record_types: tuple[str, ...] = Field(default=(), max_length=20)
+    native_types: tuple[
+        Literal[
+            "person",
+            "organisation",
+            "place",
+            "event",
+            "creative_work",
+            "topic",
+            "page",
+            "task",
+            "project",
+            "session",
+            "message",
+        ],
+        ...,
+    ] = Field(default=(), max_length=11)
     created_after: AwareDatetime | None = None
     created_before: AwareDatetime | None = None
     updated_after: AwareDatetime | None = None

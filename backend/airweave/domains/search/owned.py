@@ -22,6 +22,7 @@ from airweave.domains.entities.canonical.projection_store import publications_ma
 from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.entities.canonical.search_metadata import (
+    NATIVE_TYPE_PIPELINE_VERSION,
     SEARCH_METADATA_PIPELINE_VERSION,
     epoch_microseconds,
 )
@@ -85,6 +86,7 @@ class _EnrichmentRecord(BaseModel):
     completeness: str
     email_thread_id: str | None
     native_version: NativeVersion | None
+    native_type: str | None
 
 
 class _CollectionResult(BaseModel):
@@ -132,9 +134,13 @@ class OwnedSearchService:
         """Resolve exact authorized scopes before any embedding/index request."""
         async with sessions() as db:
             scopes, groups = await self._resolve_scopes(db, ctx, request)
+        required_version = (
+            NATIVE_TYPE_PIPELINE_VERSION
+            if request.native_types
+            else SEARCH_METADATA_PIPELINE_VERSION
+        )
         if self._filtered(request) and any(
-            scope.index_pipeline_version < SEARCH_METADATA_PIPELINE_VERSION
-            for scope in scopes.values()
+            scope.index_pipeline_version < required_version for scope in scopes.values()
         ):
             raise HTTPException(
                 409,
@@ -518,6 +524,7 @@ class OwnedSearchService:
     def _filtered(request: OwnedSearchRequest) -> bool:
         return bool(
             request.record_types
+            or request.native_types
             or request.created_after
             or request.created_before
             or request.updated_after
@@ -539,6 +546,14 @@ class OwnedSearchService:
                     field="airweave_system_metadata.canonical_record_type",
                     operator="in",
                     value=list(request.record_types),
+                )
+            )
+        if request.native_types:
+            conditions.append(
+                FilterCondition(
+                    field="airweave_system_metadata.native_type",
+                    operator="in",
+                    value=list(request.native_types),
                 )
             )
         for name, after, before in (
@@ -672,6 +687,21 @@ class OwnedSearchService:
                     ),
                     else_=None,
                 ).label("native_version"),
+                case(
+                    (
+                        Entity.sync_id.in_(
+                            [sync for sync in sync_ids if scopes[sync].short_name == "almanac"]
+                        ),
+                        case(
+                            (
+                                Entity.entity_definition_short_name == "knowledge",
+                                Entity.source_payload["original"]["type"].astext,
+                            ),
+                            else_=Entity.entity_definition_short_name,
+                        ),
+                    ),
+                    else_=None,
+                ).label("native_type"),
                 case(
                     (
                         func.jsonb_typeof(Entity.source_payload["threadId"]) == "string",
@@ -861,6 +891,8 @@ class OwnedSearchService:
     @staticmethod
     def _matches(row: _EnrichmentRecord, request: OwnedSearchRequest) -> bool:
         if request.record_types and row.entity_definition_short_name not in request.record_types:
+            return False
+        if request.native_types and row.native_type not in request.native_types:
             return False
         for value, after, before in (
             (row.source_created_at, request.created_after, request.created_before),
