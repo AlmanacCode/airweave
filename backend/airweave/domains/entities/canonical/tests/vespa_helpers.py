@@ -26,7 +26,9 @@ async def wait_healthy(client, url, seconds=180):
     raise AssertionError(f"Disposable Vespa did not become ready: {url}")
 
 
-async def deploy_schema(http):
+async def deploy_schema(
+    http, *, config_url="http://localhost:19071", query_url="http://localhost:8081"
+):
     """Deploy only to the explicitly disposable engine used by these tests."""
     package = Path(__file__).resolve().parents[6] / "vespa/app"
     archive = io.BytesIO()
@@ -37,11 +39,11 @@ async def deploy_schema(http):
                 output.writestr(
                     str(path.relative_to(package)), content.replace("{{VERSION}}", "test")
                 )
-    await wait_healthy(http, "http://localhost:19071/state/v1/health")
+    await wait_healthy(http, f"{config_url}/state/v1/health")
     deployed = await http.post(
-        "http://localhost:19071/application/v2/tenant/default/prepareandactivate",
+        f"{config_url}/application/v2/tenant/default/prepareandactivate",
         content=archive.getvalue(),
         headers={"Content-Type": "application/zip"},
     )
     assert deployed.status_code == 200, deployed.text
-    await wait_healthy(http, "http://localhost:8081/state/v1/health")
+    await wait_healthy(http, f"{query_url}/state/v1/health")

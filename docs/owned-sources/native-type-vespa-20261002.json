@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-02",
+  "status": "passed",
+  "engine": "Vespa",
+  "image": "vespaengine/vespa:8",
+  "image_digest": "sha256:5c30f5c41e7563498c4f925db6a837a3848f04726a3ed26aed4a7c8ab69f18fd",
+  "test": "backend/tests/integration/test_owned_vespa_native_types.py",
+  "duration_seconds": 63.74,
+  "container_memory_limit_bytes": 3221225472,
+  "oom_killed": false,
+  "corpus": "five synthetic documents; fixed 384-dimensional vectors",
+  "modes": [
+    "keyword",
+    "semantic",
+    "hybrid"
+  ],
+  "filters": [
+    [
+      "person"
+    ],
+    [
+      "person",
+      "task"
+    ]
+  ],
+  "assertions": [
+    "native type applied in real compiled engine queries",
+    "missing native type excluded",
+    "other collection excluded",
+    "engine_partial false"
+  ],
+  "preserved_demo_modified": false,
+  "model_calls": 0,
+  "provider_calls": 0,
+  "deployment_claim": "disposable local application only",
+  "relevance_claim": false,
+  "cleanup": "test deletes its synthetic documents; disposable container stopped and removed"
+}

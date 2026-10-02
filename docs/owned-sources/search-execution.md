@@ -38,8 +38,9 @@ internal HTTP transfer; the existing reranker's token limit remains separate.
 
 This endpoint is for Almanac's server to validate current native DB ownership and
 versions before model disclosure. `authority=canonical_snapshot` deliberately
-does not certify current wiki/session authority. Product validation and shared
-reranking of the eligible mixed shortlist are still required integration work.
+does not certify current wiki/session authority. Almanac implements product validation and shared reranking of the eligible mixed
+shortlist at commit `5385b8c1f`; its joined proof distinguishes real HTTP/SQL
+authority from deterministic synthetic retrieval and ranking.
 No candidate cache, second index lookup or durable search session is introduced.
 
 After validating current native authority, the product backend can submit its
@@ -319,10 +320,15 @@ older selected native scopes return `reindex_required`, rather than an incorrect
 result. New native sources start at pipeline 3; existing sources never upgrade implicitly.
 Provider scopes and existing canonical type/date filters still require pipeline 2. Deployment
 must install the new Vespa schema and reproject native originals at pipeline 3;
-no upstream recapture is needed. That deployment/reprojection is not performed by
-these changes.
+The native-type attribute itself does not require upstream recapture. Old native
+session snapshots that lack the separately required parent creation clock need a
+new capture identity or an explicit migration; ordinary same-ID refresh currently
+fails closed. The preserved demo deployment/reprojection is not changed here.
 
 The focused SQL/HTTP fixture verifies the version gate before any embedding/query,
 filter construction, metadata feed serialization, and rejection of a wrong-type
-candidate even when a fake engine ignores the filter. This does not yet prove the
-new attribute against the running Vespa corpus.
+candidate even when a fake engine ignores the filter. A separate disposable real
+Vespa gate now proves native-type filtering in keyword, semantic and hybrid modes,
+including missing-attribute and other-collection exclusions. It uses fixed vectors
+and synthetic text, so it proves filter execution rather than relevance. The
+retained demo index was not redeployed. See [sanitized engine evidence](native-type-vespa-20261002.json).
