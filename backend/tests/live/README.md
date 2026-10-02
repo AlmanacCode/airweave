@@ -581,3 +581,41 @@ fix. The original post-run harness incorrectly assumed that loading any cursor
 meant a delta cycle; it now distinguishes resuming incomplete full capture from
 starting a changes pass after a completed cycle. Final SQL verification did not
 recapture the provider. Actual installed-CLI month-grid qualification is separate.
+
+## Real retained Gmail Temporal projection
+
+The [2026-10-02 workflow evidence](evidence/gmail-real-temporal-projection-20261002.json)
+uses a current-migration clone of the preserved 456-message corpus, a fresh Vespa
+collection, the actual `ProjectCanonicalRecordsWorkflow` and activity, the actual
+Gmail source capability, real mapper/converter/chunker, and existing local
+MiniLM/BM25 inference. A local Temporal test server time-skips retry waits; SQL,
+model execution, immutable artifacts, and Vespa feed remain real. No provider or
+paid model was called, no shared schema was redeployed, and original digests stayed
+unchanged. This qualifies pending drain and retries, not production worker
+activation or automatic capture-to-child-workflow dispatch.
+
+The first execution published nothing: offline model resolution still attempted
+remote Hugging Face asset lookups, all blocked by the application network guard.
+After diagnosis, the approved retry used the exact already-cached chunker weights
+through their explicit local URL. A new execution drained the same captured clone
+without recapture. It published 453 messages / 965 documents in 181.742 seconds,
+then failed truthfully after retrying the three known empty bodies. The 21 activity
+pages include two failed-only retry sweeps. Prepared bodies remain ready for 453;
+three remain explicitly unavailable. Final stdout reporting encountered Decimal
+serialization after saving evidence; the workflow was not rerun for reporting.
+
+Actual candidate retrieval and current-revision reads then exercised local keyword,
+semantic, and hybrid search. `kushagra` returned 74, 100, and 100 candidates. A plain
+prose substring independently verified to occur in exactly one published body found
+that message at ranks 1, 38, and 2. An earlier punctuation/numeric substring returned
+zero keyword candidates; its cause remains an explicit query UX follow-up. The
+100-candidate windows are bounded and these observations do not establish general
+relevance or recall. No ranking was tuned against this fixture and no reranker ran.
+
+The retry made 965 local dense requests and 965 Vespa feeds, with 21,919,353 bytes
+of document payload and 1,887,252 bytes of retained text artifacts. One dense call
+per chunk is measured cost/latency evidence for future batching work. Allocated
+PostgreSQL tables/indexes/TOAST totalled 25,239,552 bytes including failed-attempt
+history; filesystem storage was 7,558,909 bytes including 5,671,657 copied original
+blob bytes. Published prepared-body payload was 1,465,083 bytes. These measurements
+are distinct and must not be extrapolated to whole-mailbox or delta-sync costs.

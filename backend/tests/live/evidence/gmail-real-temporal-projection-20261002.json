@@ -1,0 +1,263 @@
+{
+  "date": "2026-10-02",
+  "status": "actual local workflow/activity partial publication qualified; terminal workflow failed honestly for three empty bodies",
+  "corpus": {
+    "provider": "gmail",
+    "records": 456,
+    "scope": "previously completed fixed fourteen-day provider-query enumeration; not entire mailbox, strict timestamp boundary, or point-in-time snapshot",
+    "existing_capture_preserved": true,
+    "isolated_clone_current_migrations": true,
+    "new_vespa_collection": true,
+    "synthetic_service_binding": true
+  },
+  "first_attempt": {
+    "terminal": {
+      "status": "failed",
+      "error_class": "WorkflowFailureError",
+      "cause_class": "ApplicationError",
+      "cause_type": null
+    },
+    "workflow_seconds": 25.907,
+    "activity_pages": 57,
+    "failed_records": 456,
+    "error_classes": {
+      "SyncFailureError": 453,
+      "ValueError": 3
+    },
+    "documents": 0,
+    "local_dense_requests": 0,
+    "blocked_external_model_asset_attempts": 2718,
+    "cause": "Chonkie Model2Vec tried remote Hugging Face weight resolution despite offline environment; strict application network guard denied all requests; no corpus content was sent",
+    "operator_stopped_before_diagnosis_and_approved_retry": true
+  },
+  "retry": {
+    "real_temporal_workflow": true,
+    "real_activity_and_projector": true,
+    "real_gmail_registry_class": true,
+    "terminal": {
+      "status": "failed",
+      "error_class": "WorkflowFailureError",
+      "cause_class": "ApplicationError",
+      "cause_type": null
+    },
+    "workflow_seconds": 181.742,
+    "total_seconds": 182.634,
+    "records": 456,
+    "published_records": 453,
+    "published_chunks": 965,
+    "failed_records": 3,
+    "projection_error_classes": {
+      "ValueError": 3
+    },
+    "indexing": {
+      "metadata_missing": 0,
+      "text_ready": 453,
+      "text_partial": 0,
+      "text_unavailable": 3
+    },
+    "activity_page_count": 21,
+    "documents_prepared": 965,
+    "document_payload_bytes": 21919353,
+    "derived_text_bytes_written_including_retries": 1887252,
+    "network": {
+      "local_dense_requests": 965,
+      "vespa_requests": 965,
+      "forbidden_requests": 0
+    },
+    "provider_calls": 0,
+    "paid_model_calls": 0,
+    "originals_unchanged": true,
+    "source_capture_preserved": true,
+    "shared_vespa_schema_redeployed": false,
+    "resumed_existing_clone": true,
+    "chunk_model_resolution": "same cached minishlab/potion-base-8M weights via explicit local snapshot URL",
+    "runtime_caps": {
+      "seconds": 900,
+      "derived_text_bytes": 67108864,
+      "documents": 5000
+    },
+    "automatic_capture_child_workflow_dispatch_qualified": false,
+    "activity_page_summary": {
+      "initial_bounded_pages": 19,
+      "failed_only_retry_sweeps": 2,
+      "total_activity_pages": 21
+    },
+    "execution_identity": "new execution of the same existing production workflow/activity, draining the SAME captured clone; no recapture or fresh clone",
+    "temporal_server": "local test server with time-skipping; retry waits are simulated, real SQL/models/feed remain real",
+    "model_resolution_fix": "explicit local URL to already cached exact minishlab/potion-base-8M weights; no download or fake embedding",
+    "stdout_reporter": "evidence saved then final stdout serialization failed on Decimal published chunk count; no workflow rerun to fix reporter"
+  },
+  "models": {
+    "chunking": "cached minishlab/potion-base-8M",
+    "dense": "existing local all-MiniLM-L6-v2 inference, 384 dimensions",
+    "sparse": "existing cached Qdrant/bm25 FastEmbed",
+    "reranking_calls": 0,
+    "paid_model_calls": 0,
+    "dense_batching_note": "965 actual dense requests, one per chunk; batching is an observed possible cost/latency improvement, not changed in this proof"
+  },
+  "search": {
+    "path": "actual OwnedSearchService candidates -> SearchPlanExecutor -> local Vespa -> canonical SQL current-authority/exact revision read",
+    "authentication": "explicit isolated organization context; production API auth not qualified",
+    "queries": [
+      {
+        "query_basis": "known_recipient",
+        "mode": "keyword",
+        "seconds": 0.196,
+        "candidate_records": 74,
+        "selected_phrase_record_rank": 41,
+        "returned_record_exact_revision_read": true,
+        "engine_partial": false,
+        "candidate_window_full": false,
+        "shortlist_truncated": false,
+        "excluded_candidates": 0
+      },
+      {
+        "query_basis": "known_recipient",
+        "mode": "semantic",
+        "seconds": 0.203,
+        "candidate_records": 100,
+        "selected_phrase_record_rank": null,
+        "returned_record_exact_revision_read": true,
+        "engine_partial": false,
+        "candidate_window_full": true,
+        "shortlist_truncated": true,
+        "excluded_candidates": 0
+      },
+      {
+        "query_basis": "known_recipient",
+        "mode": "hybrid",
+        "seconds": 0.136,
+        "candidate_records": 100,
+        "selected_phrase_record_rank": 61,
+        "returned_record_exact_revision_read": true,
+        "engine_partial": false,
+        "candidate_window_full": true,
+        "shortlist_truncated": true,
+        "excluded_candidates": 0
+      },
+      {
+        "query_basis": "captured_substring_without_independent_uniqueness_validation",
+        "mode": "keyword",
+        "seconds": 0.021,
+        "candidate_records": 0,
+        "selected_phrase_record_rank": null,
+        "returned_record_exact_revision_read": false,
+        "engine_partial": false,
+        "candidate_window_full": false,
+        "shortlist_truncated": false,
+        "excluded_candidates": 0
+      },
+      {
+        "query_basis": "captured_substring_without_independent_uniqueness_validation",
+        "mode": "semantic",
+        "seconds": 0.215,
+        "candidate_records": 100,
+        "selected_phrase_record_rank": null,
+        "returned_record_exact_revision_read": true,
+        "engine_partial": false,
+        "candidate_window_full": true,
+        "shortlist_truncated": true,
+        "excluded_candidates": 0
+      },
+      {
+        "query_basis": "captured_substring_without_independent_uniqueness_validation",
+        "mode": "hybrid",
+        "seconds": 0.146,
+        "candidate_records": 100,
+        "selected_phrase_record_rank": 23,
+        "returned_record_exact_revision_read": true,
+        "engine_partial": false,
+        "candidate_window_full": true,
+        "shortlist_truncated": true,
+        "excluded_candidates": 0
+      },
+      {
+        "query_basis": "independently_unique_plain_prose",
+        "mode": "keyword",
+        "seconds": 0.19,
+        "candidate_records": 100,
+        "selected_phrase_record_rank": 1,
+        "returned_record_exact_revision_read": true,
+        "engine_partial": false,
+        "candidate_window_full": true,
+        "shortlist_truncated": true,
+        "excluded_candidates": 0
+      },
+      {
+        "query_basis": "independently_unique_plain_prose",
+        "mode": "semantic",
+        "seconds": 0.165,
+        "candidate_records": 100,
+        "selected_phrase_record_rank": 38,
+        "returned_record_exact_revision_read": true,
+        "engine_partial": false,
+        "candidate_window_full": true,
+        "shortlist_truncated": true,
+        "excluded_candidates": 0
+      },
+      {
+        "query_basis": "independently_unique_plain_prose",
+        "mode": "hybrid",
+        "seconds": 0.134,
+        "candidate_records": 100,
+        "selected_phrase_record_rank": 2,
+        "returned_record_exact_revision_read": true,
+        "engine_partial": false,
+        "candidate_window_full": true,
+        "shortlist_truncated": true,
+        "excluded_candidates": 0
+      }
+    ],
+    "plain_prose_selection": "first independently unique alphabetic/space body substring among exact-recipient messages in deterministic SQL ID order; selected before retrieval, with one current published body containing it",
+    "plain_prose_membership": 1,
+    "original_selected_record_had_no_unique_plain_prose_control": true,
+    "plain_prose_uses_different_known_record": true,
+    "query_ux_follow_up": "first captured punctuation/numeric substring returned keyword zero; cause not established. Preserve as natural-language query UX issue, not assumed index failure or explained away by phrase selection",
+    "network_total": {
+      "local_dense_requests": 6,
+      "vespa_requests": 9,
+      "forbidden_requests": 0,
+      "provider_calls": 0,
+      "paid_model_calls": 0
+    },
+    "candidate_limit_per_query": 100,
+    "general_relevance_or_full_recall_claim": false,
+    "query_rank_tuning_or_corpus_changes": false
+  },
+  "storage": {
+    "postgresql_allocated_table_index_toast_bytes": 25239552,
+    "largest_tables": {
+      "entity": 9216000,
+      "entity_change": 7757824,
+      "projection_generation": 6742016,
+      "entity_count": 155648,
+      "sync_job": 114688
+    },
+    "canonical_original_json_text_bytes": 13274324,
+    "published_prepared_body_payload_bytes": 1465083,
+    "filesystem_storage_file_count": 553,
+    "filesystem_storage_bytes": 7558909,
+    "copied_native_blob_bytes": 5671657,
+    "prepared_artifact_write_bytes_including_retries": 1887252,
+    "extrapolation": "none; isolated fixed provider-query corpus and retained projection retry history"
+  },
+  "limits": {
+    "automatic_capture_child_workflow_dispatch_qualified": false,
+    "production_worker_activation_qualified": false,
+    "production_auth_qualified": false,
+    "direct_installed_cli_on_this_projected_clone": false,
+    "original_corpus_installed_cli_http_gate": "recorded separately in gmail-declared-range-20261002.json",
+    "real_cloud_or_production_deployment": false,
+    "native_empty_body_policy": "current strict converter leaves three text-unavailable/pending; do not claim 456 publications or workflow success",
+    "source_and_destination_preserved": true
+  },
+  "operator_artifacts": {
+    "private_manifests_sql_ids_blobs_queries": "retained outside Git in mode0700 directory; files mode0600",
+    "workflow_script": "/tmp/gmail14-temporal-project-20261002.py",
+    "same_clone_retry_script": "/tmp/gmail14-temporal-resume-20261002.py",
+    "read_only_search_script": "/tmp/gmail14-temporal-search-read-20261002.py",
+    "independent_prose_control_script": "/tmp/gmail14-temporal-prose-search-read-20261002.py",
+    "cost_script": "/tmp/gmail14-temporal-cost-20261002.py",
+    "runtime_source_snapshot": "live owned worktree; no immutable boot SHA attested"
+  }
+}
