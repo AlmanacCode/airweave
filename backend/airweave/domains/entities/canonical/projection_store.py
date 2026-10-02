@@ -9,7 +9,6 @@ from sqlalchemy import and_, exists, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
-from airweave.domains.entities.canonical.calendar import is_cancelled_recurring_event
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionBinding,
@@ -20,6 +19,7 @@ from airweave.domains.entities.canonical.projection_models import (
     ProjectionWork,
     projection_document_locator,
 )
+from airweave.domains.entities.canonical.projection_policy import excluded_from_search
 from airweave.domains.entities.canonical.store import content_is_available, source_record
 from airweave.domains.entities.canonical.text_artifacts import text_manifest
 from airweave.domains.entities.canonical.text_models import TextArtifact
@@ -358,18 +358,13 @@ class CanonicalProjectionStore:
         chunk_count: int,
     ) -> bool:
         """Publish only a complete current generation; late writers cannot replace it."""
-        exclusion = work.record.identity.record_type == "event" and is_cancelled_recurring_event(
-            work.record.payload
-        )
-        no_content = (
-            work.record.deleted_at is not None
-            or exclusion
-            or work.record.identity.record_type == "event_occurrence"
+        no_content = work.record.deleted_at is not None or excluded_from_search(
+            work.record, work.binding.source_name
         )
         if chunk_count < 0:
             raise ValueError("Active records require a nonempty complete projection")
         if no_content and chunk_count != 0:
-            raise ValueError("Deleted records and recurrence exclusions must publish no content")
+            raise ValueError("Deleted records and search exclusions must publish no content")
         async with UnitOfWork(db):
             entity = await self._current(db, work)
             if entity is None:

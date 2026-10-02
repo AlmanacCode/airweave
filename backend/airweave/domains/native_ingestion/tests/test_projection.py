@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from airweave.adapters.storage.filesystem import FilesystemBackend
-from airweave.domains.entities.canonical.projection_mappers import excluded_from_search, map_record
+from airweave.domains.entities.canonical.projection_mappers import map_record
+from airweave.domains.entities.canonical.projection_policy import excluded_from_search
 from airweave.domains.entities.canonical.projection_store import (
     CanonicalProjectionStore,
     current_extraction,

@@ -99,10 +99,8 @@ class CanonicalProjector:
         logger: ContextualLogger,
     ) -> bool:
         """Never feed native capture JSON; mapper emits explicit safe projection entities."""
-        from airweave.domains.entities.canonical.projection_mappers import (
-            excluded_from_search,
-            map_record,
-        )
+        from airweave.domains.entities.canonical.projection_mappers import map_record
+        from airweave.domains.entities.canonical.projection_policy import excluded_from_search
 
         if not await self._admit(work, source_name, destination):
             return False

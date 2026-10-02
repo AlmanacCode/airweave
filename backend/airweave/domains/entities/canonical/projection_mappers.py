@@ -12,10 +12,10 @@ from tempfile import TemporaryDirectory
 
 from pydantic import JsonValue, TypeAdapter
 
-from airweave.domains.entities.canonical.calendar import is_cancelled_recurring_event
 from airweave.domains.entities.canonical.extraction_models import ExtractionPart
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_inputs import ProjectionInput, ProjectionInputs
+from airweave.domains.entities.canonical.projection_policy import excluded_from_search
 from airweave.domains.storage.protocols import StorageBackend
 from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
 from airweave.platform.entities._base import BaseEntity, FileEntity
@@ -335,8 +335,6 @@ def _wispr_text(responses: list[JsonValue], field: str) -> str:
 
 
 def _wispr(record: SourceRecord) -> tuple[BaseEntity, ...]:
-    if record.identity.record_type in {"meeting_listing", "scratchpad_listing"}:
-        return ()
     if record.identity.record_type not in {"meeting", "scratchpad_note"}:
         raise ProjectionMappingError("Unsupported Wispr record type")
     responses = record.payload.get("responses")
@@ -369,18 +367,6 @@ def _wispr(record: SourceRecord) -> tuple[BaseEntity, ...]:
             share_link=_string(first.get("share_link")) or None,
             breadcrumbs=[],
         ),
-    )
-
-
-def excluded_from_search(record: SourceRecord, source_name: str) -> bool:
-    """Retained calendar exclusions intentionally publish no searchable meeting."""
-    if source_name == "almanac":
-        from airweave.domains.native_ingestion.projection import excluded_native
-
-        return excluded_native(record)
-    return source_name == "google_calendar" and (
-        record.identity.record_type == "event_occurrence"
-        or (record.identity.record_type == "event" and is_cancelled_recurring_event(record.payload))
     )
 
 
