@@ -18,6 +18,14 @@ queries and publication checks still run separately for each collection. Keyword
 search never performs dense inference. There is no shared result, authorization,
 query or embedding cache and no concurrent use of a database session.
 
+Collection requests overlap with a maximum of four active collection tasks per
+search. Each task owns its SQL session; the shared query embedding is immutable.
+The whole candidate union is still revalidated before reranking and before return.
+An unavailable collection fails the request instead of silently returning a partial
+success. A seven-collection SQL/HTTP rendezvous test proves overlap, the four-task
+bound, distinct sessions and preserved HTTP failure behavior. This is concurrency
+qualification, not a measured production latency improvement.
+
 ## Topology and limits
 
 Almanac's server-owned `CaptureTarget` chooses organization and collection for each
@@ -158,7 +166,7 @@ or a claim that the candidate runtime has been updated with this change.
 Owned search now closes its own authentication and initial source-scope read
 transactions before embedding preparation. Each collection gets a fresh session:
 it performs no SQL until indexed retrieval returns, then validates publication and
-builds cards. That session closes before the next collection. A final fresh read
+builds cards. That session closes when its collection task finishes. A final fresh read
 rechecks authorized sources, coverage and every exact publication. Only frozen typed
 source snapshots cross phases. Source collection UUID and pipeline version are part
 of both the scope comparison and final SQL fence, alongside source/account identity.
