@@ -1,0 +1,91 @@
+{
+  "terminal": "completed",
+  "elapsed_seconds": 14.294,
+  "workflow_started": false,
+  "counts": {
+    "derived_bytes": 101673,
+    "document_bytes": 1821441,
+    "documents": 11,
+    "local_dense_requests": 11,
+    "vespa_requests": 11,
+    "forbidden_requests": 0
+  },
+  "runtime_commit": "b6b1227",
+  "capture_complete": false,
+  "supported_discovery_cycle_complete": true,
+  "representative_records_only": 2,
+  "full_corpus_reprojected": false,
+  "native_principal_attested": false,
+  "raw_editor_audio_qualified": false,
+  "paid_calls": 0,
+  "provider_calls": 0,
+  "limits": {
+    "seconds": 120,
+    "aggregate_derived_bytes": 33554432,
+    "free_floor": 2147483648
+  },
+  "cleanup_verified": false,
+  "policy_exclusions": 282,
+  "policy_exclusion_basis": "260 meeting listings and22 scratchpad listings are relation/discovery records with intentional zero-document publication",
+  "original_checkpoint_and_payload_unchanged": true,
+  "clone_checkpoint_and_payload_unchanged": true,
+  "per_kind": [
+    {
+      "entity_definition_short_name": "meeting",
+      "records": 260,
+      "current_publications": 1,
+      "zero_chunk_publications": 0,
+      "failures": 0
+    },
+    {
+      "entity_definition_short_name": "meeting_listing",
+      "records": 260,
+      "current_publications": 0,
+      "zero_chunk_publications": 0,
+      "failures": 0
+    },
+    {
+      "entity_definition_short_name": "scratchpad_note",
+      "records": 22,
+      "current_publications": 1,
+      "zero_chunk_publications": 0,
+      "failures": 0
+    },
+    {
+      "entity_definition_short_name": "scratchpad_listing",
+      "records": 22,
+      "current_publications": 0,
+      "zero_chunk_publications": 0,
+      "failures": 0
+    }
+  ],
+  "extraction": {
+    "complete": 2
+  },
+  "installed_cli": {
+    "frozen_product_commit": "1d3b9fd21",
+    "fixture_authentication": true,
+    "commands": 5,
+    "results": [
+      {
+        "part": "summary",
+        "kind": "native_text",
+        "exact_native_text": true,
+        "revision_pinned": true,
+        "no_metadata_flag": true,
+        "characters": 2323
+      },
+      {
+        "part": "content",
+        "kind": "native_text",
+        "exact_native_text": true,
+        "revision_pinned": true,
+        "no_metadata_flag": true,
+        "characters": 199
+      }
+    ]
+  },
+  "qualification_scope": "Two representative original records only; remaining clone records are intentionally not republished at version3.",
+  "harness_retry": "Initial pending batch limit600 rejected before any I/O; resumed same clone with bounded100-record pagination.",
+  "runtime_durability": "Ephemeral qualification listeners; not a deployed or durable preview."
+}
