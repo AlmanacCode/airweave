@@ -26,6 +26,7 @@ from airweave.domains.sources.exceptions import SourceError, SourceServerError
 from airweave.domains.sources.token_providers.protocol import ManagedToolAuthProvider
 from airweave.domains.storage import FileSkippedException
 from airweave.domains.storage.file_service import FileService
+from airweave.platform.configs.config import WisprConfig
 from airweave.platform.decorators import source
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
 from airweave.platform.http_client.bounded_response import bounded_response_bytes
@@ -112,6 +113,7 @@ class _Progress(BaseModel):
     auth_methods=[AuthenticationMethod.AUTH_PROVIDER],
     labels=["Meetings"],
     supports_continuous=False,
+    config_class=WisprConfig,
 )
 class WisprSource(BaseSource):
     """Capture available notes, summaries and transcript ranges; never infer deletions.
@@ -143,6 +145,10 @@ class WisprSource(BaseSource):
         """Require an explicit tool session capability, never a raw token."""
         if not isinstance(auth, ManagedToolAuthProvider):
             raise TypeError("Wispr requires managed tool authentication")
+        if config is not None:
+            expected = WisprConfig.model_validate(config.model_dump()).assurance
+            if expected is not None and expected != auth.assurance:
+                raise ValueError("Wispr managed authentication does not match broker assurance")
         instance = cls(auth=auth, logger=logger, http_client=http_client)
         instance._tool_auth = auth
         instance._session_id: str | None = None

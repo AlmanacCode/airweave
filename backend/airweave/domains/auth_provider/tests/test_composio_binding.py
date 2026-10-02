@@ -153,3 +153,40 @@ async def test_managed_binding_validates_disabled_flags(
     else:
         with pytest.raises(error):
             await provider.get_auth_result("wispr", [])
+
+
+async def test_wispr_owned_auth_returns_exact_broker_proof(monkeypatch):
+    from airweave.domains.auth_provider.assurance import BrokerConnection
+
+    provider = await ComposioAuthProvider.create(
+        credentials={"api_key": "synthetic"},
+        config={
+            "project_key": "primary",
+            "account_id": "selected",
+            "user_id": "owner",
+            "auth_config_id": "cfg",
+        },
+    )
+    monkeypatch.setattr(
+        provider,
+        "_get_with_auth",
+        AsyncMock(
+            return_value={
+                "id": "selected",
+                "user_id": "owner",
+                "toolkit": {"slug": "wispr_flow_mcp"},
+                "status": "ACTIVE",
+                "auth_config": {"id": "cfg"},
+            }
+        ),
+    )
+    result = await provider.get_auth_result("wispr", [])
+    assert result.managed_auth.assurance == BrokerConnection(
+        project_key="primary",
+        user_id="owner",
+        connected_account_id="selected",
+        auth_config_id="cfg",
+    )
+    provider.auth_config_id = "wrong"
+    with pytest.raises(AuthProviderConfigError, match="auth config"):
+        await provider.get_auth_result("wispr", [])

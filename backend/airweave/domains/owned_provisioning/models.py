@@ -14,12 +14,19 @@ from pydantic import (
     model_validator,
 )
 
+from airweave.domains.auth_provider.assurance import (
+    AccountAssurance,
+    BrokerConnection,
+    ProviderIdentity,
+)
+
 
 class ManagedSource(BaseModel):
     """Native identity is supplied only by Almanac's verified account authority."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     provider: Literal[
+        "wispr",
         "gmail",
         "google_calendar",
         "google_drive",
@@ -32,7 +39,8 @@ class ManagedSource(BaseModel):
         "github",
         "notion",
     ]
-    expected_identity: str = Field(min_length=1, max_length=512)
+    expected_identity: str | None = Field(default=None, min_length=1, max_length=512)
+    assurance: AccountAssurance | None = None
     expected_user_identity: str | None = Field(default=None, min_length=1, max_length=512)
     collection: str = Field(min_length=1, max_length=255)
     auth_provider: str = Field(min_length=1, max_length=255)
@@ -45,6 +53,24 @@ class ManagedSource(BaseModel):
     @model_validator(mode="after")
     def native_principal(self):
         """Workspace-scoped grants retain the native member or bot, not broker user_id."""
+        if self.provider == "wispr":
+            if not isinstance(self.assurance, BrokerConnection) or (
+                self.expected_identity is not None
+                or self.expected_user_identity is not None
+                or self.assurance.user_id != self.user_id
+                or self.assurance.connected_account_id != self.connected_account_id
+                or self.assurance.auth_config_id != self.auth_config_id
+            ):
+                raise ValueError(
+                    "Wispr requires its exact broker assurance without native identity"
+                )
+            return self
+        if isinstance(self.assurance, BrokerConnection) or self.expected_identity is None:
+            raise ValueError("This provider requires its native principal")
+        if self.assurance is not None and self.assurance != ProviderIdentity(
+            account_id=self.expected_identity, user_id=self.expected_user_identity
+        ):
+            raise ValueError("Provider assurance disagrees with its native principal")
         if (self.provider in {"slack", "notion"}) != (self.expected_user_identity is not None):
             raise ValueError("Slack and Notion require an expected native user or bot identity")
         if self.provider in {"stripe", "linear", "attio", "github", "notion"}:
@@ -79,8 +105,21 @@ class ManagedSource(BaseModel):
             raise ValueError("Use a valid five-field cron schedule")
         return value
 
+    @property
+    def account_assurance(self) -> AccountAssurance:
+        """Return the typed assertion from the supplied facts."""
+        return self.assurance or ProviderIdentity(
+            account_id=self.expected_identity, user_id=self.expected_user_identity
+        )
+
     def source_config(self) -> dict[str, JsonValue]:
         """Expected identity cannot be overridden inside unstructured provider config."""
+        if self.provider == "wispr":
+            from airweave.platform.configs.config import WisprConfig
+
+            return WisprConfig.model_validate(
+                {**self.config, "assurance": self.assurance.model_dump(mode="json")}
+            ).model_dump(mode="json")
         if self.provider == "notion":
             from airweave.platform.configs.config import NotionConfig
 
@@ -141,11 +180,14 @@ class ManagedSource(BaseModel):
 
     def auth_config(self) -> dict[str, str]:
         """Selectors contain no provider tokens or API keys."""
-        return {
+        result = {
             "account_id": self.connected_account_id,
             "auth_config_id": self.auth_config_id,
             "user_id": self.user_id,
         }
+        if self.provider == "wispr":
+            result["project_key"] = self.assurance.project_key
+        return result
 
 
 class EnsureSource(BaseModel):
@@ -178,6 +220,7 @@ class ProvisionedSource(BaseModel):
     source_connection_id: UUID | None
     sync_id: UUID | None
     expected_identity: str | None
+    assurance: AccountAssurance | None = None
     expected_user_identity: str | None = None
 
 
@@ -244,3 +287,21 @@ def _account_principal(provider: str, config: dict) -> tuple[str, str | None]:
     if identity is None:
         raise ValueError("Owned source has no trusted native identity")
     return identity, user
+
+
+def source_assurance(provider: str, config: dict, auth_config: dict) -> AccountAssurance:
+    """Observe only committed, coherent source and credential selectors."""
+    if provider != "wispr":
+        account, user = native_principal(provider, config)
+        return ProviderIdentity(account_id=account, user_id=user)
+    from airweave.platform.configs.config import WisprConfig
+
+    proof = WisprConfig.model_validate(config).assurance
+    if proof is None or (
+        proof.connected_account_id != auth_config.get("account_id")
+        or proof.user_id != auth_config.get("user_id")
+        or proof.auth_config_id != auth_config.get("auth_config_id")
+        or proof.project_key != auth_config.get("project_key")
+    ):
+        raise ValueError("Committed Wispr broker selectors disagree")
+    return proof

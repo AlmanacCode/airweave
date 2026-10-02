@@ -20,6 +20,8 @@ from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+from airweave.domains.auth_provider.assurance import BrokerConnection
+
 
 class AuthProviderKind(str, Enum):
     """Discriminator for auth provider type."""
@@ -98,6 +100,8 @@ class ManagedAuthProvider(BaseModel):
 
 class ManagedToolAuthProvider(BaseModel):
     """Explicit account-bound tool sessions for a provider without a REST proxy."""
+
+    assurance: BrokerConnection | None = None
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     api_key: SecretStr = Field(repr=False)

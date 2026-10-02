@@ -12,10 +12,11 @@ from airweave import schemas
 from airweave.api.context import ApiContext
 from airweave.core.datetime_utils import utc_now_naive
 from airweave.db.unit_of_work import UnitOfWork
+from airweave.domains.auth_provider.assurance import ProviderIdentity
 from airweave.domains.owned_provisioning.models import (
     EnsureSource,
     ProvisionedSource,
-    native_principal,
+    source_assurance,
 )
 from airweave.domains.owned_provisioning.store import ProvisioningStore, locked_intent
 from airweave.domains.sources.protocols import SourceLifecycleServiceProtocol
@@ -78,8 +79,15 @@ class OwnedProvisioningService:
             if row.source_connection_id
             else None
         )
+        assurance = (
+            source_assurance(source.short_name, source.config_fields, source.auth_provider_config)
+            if source
+            else None
+        )
         identity, user = (
-            native_principal(source.short_name, source.config_fields) if source else (None, None)
+            (assurance.account_id, assurance.user_id)
+            if isinstance(assurance, ProviderIdentity)
+            else (None, None)
         )
         return ProvisionedSource(
             account_id=row.account_id,
@@ -95,6 +103,7 @@ class OwnedProvisioningService:
             ),
             source_connection_id=row.source_connection_id,
             sync_id=row.sync_id,
+            assurance=assurance if source and source.short_name == "wispr" else None,
             expected_identity=identity,
             expected_user_identity=user,
         )

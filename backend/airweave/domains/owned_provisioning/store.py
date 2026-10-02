@@ -13,7 +13,7 @@ from airweave.api.context import ApiContext
 from airweave.core.datetime_utils import utc_now_naive
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.source_lifecycle import stop_source_writer
-from airweave.domains.owned_provisioning.models import EnsureSource, native_principal
+from airweave.domains.owned_provisioning.models import EnsureSource, source_assurance
 from airweave.domains.source_connections.protocols import SourceConnectionCreateServiceProtocol
 from airweave.domains.sources.protocols import SourceValidationServiceProtocol
 from airweave.models.connection import Connection
@@ -112,11 +112,13 @@ class ProvisioningStore:
                 )
                 if (
                     source.short_name,
-                    native_principal(source.short_name, source.config_fields),
+                    source_assurance(
+                        source.short_name, source.config_fields, source.auth_provider_config
+                    ),
                     source.readable_collection_id,
                 ) != (
                     request.source.provider,
-                    (request.source.expected_identity, request.source.expected_user_identity),
+                    request.source.account_assurance,
                     request.source.collection,
                 ):
                     raise HTTPException(

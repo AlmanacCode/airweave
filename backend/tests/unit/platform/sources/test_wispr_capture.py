@@ -21,6 +21,36 @@ async def source():
 
 
 @pytest.mark.asyncio
+async def test_managed_broker_assurance_must_match_before_any_network():
+    from airweave.domains.auth_provider.assurance import BrokerConnection
+    from airweave.platform.configs.config import WisprConfig
+
+    proof = BrokerConnection(
+        project_key="primary",
+        user_id="user",
+        toolkit="wispr_flow_mcp",
+        auth_config_id="config",
+        connected_account_id="ca_bound",
+    )
+    http = MagicMock()
+    auth = ManagedToolAuthProvider(
+        api_key="synthetic", connected_account_id="ca_bound", user_id="user", assurance=proof
+    )
+    with pytest.raises(ValueError, match="does not match broker assurance"):
+        await WisprSource.create(
+            auth=auth,
+            config=WisprConfig(assurance=proof.model_copy(update={"project_key": "other"})),
+            logger=MagicMock(),
+            http_client=http,
+        )
+    connector = await WisprSource.create(
+        auth=auth, config=WisprConfig(assurance=proof), logger=MagicMock(), http_client=http
+    )
+    assert connector._tool_auth.assurance == proof
+    assert not http.mock_calls
+
+
+@pytest.mark.asyncio
 async def test_session_is_bound_and_never_auto_connects(monkeypatch):
     connector = await source()
     post = AsyncMock(

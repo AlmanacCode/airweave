@@ -1061,3 +1061,102 @@ async def test_unavailable_withdraws_reads_and_recovers_only_after_verification(
         assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 1
     assert lifecycle.create.await_count == 3
     assert schedules.delete_all_schedules_for_sync.await_count >= 2
+
+
+async def test_wispr_broker_assurance_initial_retry_stop_and_no_inplace_grant(database, setup):
+    from airweave.domains.auth_provider.assurance import BrokerConnection
+    from airweave.domains.entities.canonical.read_authority import source_is_readable
+
+    ctx, service, request, account, lifecycle, schedules, workflows = setup
+    creator = service.store.create
+    creator._source_registry.get.return_value.short_name = "wispr"
+    proof = BrokerConnection(
+        project_key="primary",
+        user_id="owner",
+        connected_account_id="ca_initial",
+        auth_config_id="ac_wispr",
+    )
+    spec = ManagedSource(
+        provider="wispr",
+        assurance=proof,
+        connected_account_id=proof.connected_account_id,
+        auth_config_id=proof.auth_config_id,
+        user_id=proof.user_id,
+        collection="owned",
+        auth_provider="composio",
+        cron="0 * * * *",
+        config={"assurance": {"kind": "broker_connection", "project_key": "wrong"}},
+    )
+    expected = {"assurance": proof.model_dump(mode="json")}
+    creator._source_validation.seed_config_result("wispr", expected)
+    assert spec.source_config() == expected  # Protected proof wins over untrusted config.
+    request = EnsureSource(generation=1, state="active", source=spec)
+    async with database() as db:
+        first = await service.ensure(db, ctx, account, request)
+        assert first.state == "ready" and first.assurance == proof
+        assert first.expected_identity is None and first.expected_user_identity is None
+        stored = await db.get(SourceConnection, first.source_connection_id)
+        assert stored.config_fields == expected
+        assert stored.auth_provider_config == {
+            "account_id": "ca_initial",
+            "user_id": "owner",
+            "auth_config_id": "ac_wispr",
+            "project_key": "primary",
+        }
+    async with database() as db:
+        assert await service.ensure(db, ctx, account, request) == first
+    lifecycle.create.assert_awaited_once()
+    async with database() as db:
+        changed = proof.model_copy(update={"connected_account_id": "ca_other"})
+        replacement = spec.model_copy(
+            update={"assurance": changed, "connected_account_id": "ca_other"}
+        )
+        with pytest.raises(HTTPException, match="Reconnect changes"):
+            await service.ensure(
+                db, ctx, account, EnsureSource(generation=2, state="active", source=replacement)
+            )
+    async with database() as db:
+        assert await service.get(db, ctx, account) == first
+        stopped = await service.ensure(
+            db, ctx, account, EnsureSource(generation=2, state="disconnected")
+        )
+        assert stopped.assurance == proof and stopped.sync_id == first.sync_id
+        assert not await db.scalar(select(source_is_readable(ctx.organization.id, first.sync_id)))
+    async with database() as db:
+        with pytest.raises(HTTPException, match="superseded"):
+            await service.ensure(db, ctx, account, request)
+    assert lifecycle.create.await_count == 1
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"expected_identity": "fake-native"},
+        {"expected_user_identity": "fake-user"},
+        {"user_id": "other"},
+        {"connected_account_id": "other"},
+        {"auth_config_id": "other"},
+        {"assurance": None},
+    ],
+)
+def test_wispr_provisioning_cannot_fabricate_native_or_mismatch_broker(changes):
+    from airweave.domains.auth_provider.assurance import BrokerConnection
+
+    proof = BrokerConnection(
+        project_key="primary",
+        user_id="owner",
+        connected_account_id="ca_initial",
+        auth_config_id="ac_wispr",
+    )
+    data = {
+        "provider": "wispr",
+        "assurance": proof,
+        "connected_account_id": proof.connected_account_id,
+        "auth_config_id": proof.auth_config_id,
+        "user_id": proof.user_id,
+        "collection": "owned",
+        "auth_provider": "composio",
+        "cron": "0 * * * *",
+    }
+    with pytest.raises(ValueError):
+        ManagedSource.model_validate({**data, **changes})

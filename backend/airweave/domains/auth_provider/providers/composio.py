@@ -12,6 +12,7 @@ from airweave.core.credential_sanitizer import (
     sanitize_credentials_dict,
 )
 from airweave.domains.auth_provider._base import BaseAuthProvider
+from airweave.domains.auth_provider.assurance import BrokerConnection
 from airweave.domains.auth_provider.exceptions import (
     AuthProviderAccountNotFoundError,
     AuthProviderConfigError,
@@ -117,6 +118,7 @@ class ComposioAuthProvider(BaseAuthProvider):
         instance.auth_config_id = config.get("auth_config_id")
         instance.account_id = config.get("account_id")
         instance.user_id = config.get("user_id")
+        instance.project_key = config.get("project_key")
         instance._last_credential_blob = None
         return instance
 
@@ -132,7 +134,6 @@ class ComposioAuthProvider(BaseAuthProvider):
         from airweave.domains.auth_provider.auth_result import AuthResult
         from airweave.domains.sources.token_providers.protocol import (
             ManagedAuthProvider,
-            ManagedToolAuthProvider,
         )
 
         hosts = {
@@ -195,21 +196,39 @@ class ComposioAuthProvider(BaseAuthProvider):
                 "Connected account requires attention", provider_name="composio"
             )
         if source_short_name == "wispr":
-            if not self.user_id:
-                raise AuthProviderConfigError(
-                    "Wispr requires an explicit Composio user binding", provider_name="composio"
-                )
-            return AuthResult(
-                managed_auth=ManagedToolAuthProvider(
-                    api_key=self.api_key, connected_account_id=self.account_id, user_id=self.user_id
-                )
-            )
+            return AuthResult(managed_auth=self._wispr_tool_auth())
         return AuthResult(
             managed_auth=ManagedAuthProvider(
                 api_key=self.api_key,
                 connected_account_id=self.account_id,
                 allowed_hosts=hosts[source_short_name],
             )
+        )
+
+    def _wispr_tool_auth(self):
+        from airweave.domains.sources.token_providers.protocol import ManagedToolAuthProvider
+
+        if not self.user_id:
+            raise AuthProviderConfigError(
+                "Wispr requires an explicit Composio user binding", provider_name="composio"
+            )
+        proof = None
+        if self.project_key is not None:
+            if not self.auth_config_id:
+                raise AuthProviderConfigError(
+                    "Wispr requires its auth config", provider_name="composio"
+                )
+            proof = BrokerConnection(
+                project_key=self.project_key,
+                user_id=self.user_id,
+                connected_account_id=self.account_id,
+                auth_config_id=self.auth_config_id,
+            )
+        return ManagedToolAuthProvider(
+            assurance=proof,
+            api_key=self.api_key,
+            connected_account_id=self.account_id,
+            user_id=self.user_id,
         )
 
     def _get_composio_slug(self, airweave_short_name: str) -> str:

@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from airweave.domains.auth_provider.assurance import BrokerConnection
 from airweave.platform.configs._base import BaseConfig, RequiredTemplateConfig
 from airweave.platform.utils.ssrf import validate_host, validate_url
 
@@ -1345,8 +1346,16 @@ class AuthProviderConfig(BaseConfig):
     pass
 
 
+class WisprConfig(BaseConfig):
+    """Optional operator assertion, required by owned broker provisioning."""
+
+    assurance: BrokerConnection | None = None
+
+
 class ComposioConfig(AuthProviderConfig):
     """Composio Auth Provider configuration schema."""
+
+    project_key: str | None = None
 
     auth_config_id: str = Field(
         title="Auth Config ID",
