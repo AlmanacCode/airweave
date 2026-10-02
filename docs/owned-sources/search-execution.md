@@ -205,7 +205,9 @@ The existing projection worker prepares one immutable, full converter body fact 
 ProjectionGeneration before embeddings. It excludes generated headers and attachment
 content. `documents=NULL` marks this prepared-body-only stage; the complete index
 manifest seals once before remote feed. NULL can never publish an index generation.
-Literal body search selects the latest validated fact for the current canonical
+Literal query matches parsed sender/To names and mailboxes, subject, and prepared body.
+Each participant value is casefolded during capture/backfill; missing participant facts
+remain metadata gaps. No transport headers or snippets participate. Literal body search selects the latest validated fact for the current canonical
 revision and explicit current pipeline, regardless of embedding/feed success.
 Failed attempts without a prepared body cannot hide earlier valid text. Existing GC
 keeps the designated eligible body and reclaims superseded attempts. Sync's derived

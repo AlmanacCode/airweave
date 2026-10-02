@@ -4,7 +4,7 @@ from uuid import UUID
 
 from jose import JWTError, jwt
 from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
-from sqlalchemy import and_, case, func, or_, select, true, tuple_
+from sqlalchemy import and_, case, false, func, or_, select, true, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.coverage import capture_coverage
@@ -64,6 +64,9 @@ def _metadata_ready():
         Entity.gmail_metadata.is_not(None),
         Entity.gmail_metadata_revision == Entity.record_revision,
         Entity.source_created_at.is_not(None),
+        func.coalesce(
+            func.jsonb_typeof(Entity.gmail_metadata["participants_folded"]) == "array", false()
+        ),
     )
 
 
@@ -183,10 +186,18 @@ class CanonicalMailQuery:
         )
         candidate = candidate.where(scope, _metadata_ready(), *facets)
         if query.filters.query:
+            participants = func.jsonb_array_elements_text(
+                Entity.gmail_metadata["participants_folded"]
+            ).table_valued("value")
             candidate = candidate.where(
                 or_(
                     func.strpos(Entity.gmail_metadata["subject_folded"].astext, query.filters.query)
                     > 0,
+                    select(1)
+                    .select_from(participants)
+                    .where(func.strpos(participants.c.value, query.filters.query) > 0)
+                    .correlate(Entity)
+                    .exists(),
                     func.strpos(body.c.mail_body_text, query.filters.query) > 0,
                 )
             )

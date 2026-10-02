@@ -130,6 +130,38 @@ async def test_metadata_sql_inventory_over_200_and_exact_facets(database, source
     assert not (await read(database, fence, filters=MailFilters(unread=False))).messages
 
 
+async def test_literal_parsed_participants_without_subject_or_prepared_body(database, source):
+    service, fence = source
+    await bind_projection(database, fence)
+    await capture(
+        database,
+        service,
+        fence,
+        message("header-only", subject="", sender='"Kushagra Straße" <Kushagra@EXAMPLE.test>'),
+        message("unrelated", subject="", sender="other@example.test"),
+        message("old-facts", subject="", sender="legacy@example.test"),
+    )
+    async with database() as db:
+        old = await db.scalar(select(Entity).where(Entity.native_id == "old-facts"))
+        old.gmail_metadata = {
+            key: value for key, value in old.gmail_metadata.items() if key != "participants_folded"
+        }
+        await db.commit()
+    for term, expected in (
+        ("KUSHAGRA", {"header-only"}),
+        ("STRASSE", {"header-only"}),
+        ("kushagra@example.TEST", {"header-only"}),
+        ("RECIPIENT, ONE", {"header-only", "unrelated"}),
+        ("ONE@EXAMPLE.TEST", {"header-only", "unrelated"}),
+        ("legacy", set()),
+    ):
+        page = await read(database, fence, filters=MailFilters(query=term))
+        assert {item.native_id for item in page.messages} == expected
+        assert page.indexing.text_unavailable == 2
+        assert page.indexing.metadata_missing == 1
+    assert len((await read(database, fence)).messages) == 2
+
+
 async def test_http_scope_filter_cursor_change_revocation_and_gaps(database, source, monkeypatch):
     service, fence = source
     await bind_projection(database, fence)

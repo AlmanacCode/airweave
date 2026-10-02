@@ -23,6 +23,7 @@ class GmailMetadata(BaseModel):
     thread_id: str = Field(min_length=1)
     subject: str
     subject_folded: str
+    participants_folded: tuple[str, ...]
     sender: tuple[MailAddress, ...]
     to: tuple[MailAddress, ...]
     sent_at: AwareDatetime
@@ -96,13 +97,21 @@ def gmail_metadata_v1(
         sender = _addresses(message.payload.headers, "from")
         if not sender:
             return None
+        recipients = _addresses(message.payload.headers, "to")
+        participants = tuple(
+            value.casefold()
+            for mailbox in (*sender, *recipients)
+            for value in (mailbox.name, mailbox.address)
+            if value
+        )
         return GmailMetadata(
             native_id=message.id,
             thread_id=message.threadId,
             subject=subject,
             subject_folded=subject.casefold(),
+            participants_folded=participants,
             sender=sender,
-            to=_addresses(message.payload.headers, "to"),
+            to=recipients,
             sent_at=sent_at,
             labels=message.labelIds,
             snippet=message.snippet,
