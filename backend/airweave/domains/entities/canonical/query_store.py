@@ -18,6 +18,7 @@ from airweave.domains.entities.canonical.store import (
     with_content_access,
 )
 from airweave.models.entity import Entity
+from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
 
 
@@ -46,6 +47,34 @@ class CanonicalQueryStore:
             )
         ).one_or_none()
         return with_content_access(source_record(row[0]), bool(row[1])) if row else None
+
+    async def message_id(
+        self, db: AsyncSession, organization_id: UUID, sync_id: UUID, native_id: str
+    ) -> UUID | None:
+        """Exact visible message identity, never a mailbox scan or index lookup."""
+        return (
+            await db.execute(
+                select(Entity.id).where(
+                    Entity.organization_id == organization_id,
+                    Entity.sync_id == sync_id,
+                    Entity.entity_definition_short_name == "message",
+                    Entity.native_id == native_id,
+                    select(SourceConnection.id)
+                    .where(
+                        SourceConnection.organization_id == organization_id,
+                        SourceConnection.sync_id == sync_id,
+                        SourceConnection.short_name == "gmail",
+                        SourceConnection.is_authenticated.is_(True),
+                    )
+                    .exists(),
+                    Entity.record_revision > 0,
+                    Entity.deleted_at.is_(None),
+                    content_is_available(),
+                    parent_is_visible(),
+                    source_is_readable(organization_id, sync_id),
+                )
+            )
+        ).scalar_one_or_none()
 
     async def captured_counts(
         self,

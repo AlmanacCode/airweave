@@ -213,6 +213,17 @@ class CanonicalQueryService:
             high_watermark=page.high_watermark,
         )
 
+    async def mail_message(
+        self, db: AsyncSession, organization_id: UUID, sync_id: UUID, native_id: str
+    ) -> SourceRecord:
+        """Resolve one current message through its scoped canonical identity."""
+        record_id = await self.queries.message_id(db, organization_id, sync_id, native_id)
+        if record_id is None:
+            raise RecordNotFound("Message not found in this source")
+        record = await self.read(db, organization_id, sync_id, record_id)
+        self._check_blob_record(record, record.revision)
+        return record
+
     async def mail_thread(
         self,
         db: AsyncSession,

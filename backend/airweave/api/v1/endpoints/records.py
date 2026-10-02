@@ -22,6 +22,7 @@ from airweave.domains.entities.canonical.mail_models import (
     MailMessageQuery,
 )
 from airweave.domains.entities.canonical.mail_query import CanonicalMailQuery
+from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_store import current_extraction
 from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.query_models import (
@@ -352,6 +353,18 @@ async def mail_messages(
         sync_id,
         MailMessageQuery(filters=filters, limit=limit, cursor=cursor),
     )
+
+
+@router.get("/{sync_id}/mail/messages/{message_id}", response_model=SourceRecord)
+async def mail_message(
+    sync_id: UUID,
+    message_id: str = Path(min_length=1, max_length=512),
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> SourceRecord:
+    """Read one retained native message identity without querying the provider."""
+    return await service.mail_message(db, ctx.organization.id, sync_id, message_id)
 
 
 @router.get("/{sync_id}/mail/threads/{thread_id}", response_model=MailThreadPage)
