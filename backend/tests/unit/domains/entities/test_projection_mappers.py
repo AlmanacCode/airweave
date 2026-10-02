@@ -109,12 +109,45 @@ async def test_wispr_ranges_do_not_duplicate_default_content():
         ]
     }
     async with map_record(record("meeting", payload), "wispr", AsyncMock()) as mapped:
-        assert [part.part.key for part in mapped.parts] == ["notes", "transcript"]
+        assert [part.part.key for part in mapped.parts] == ["notes", "transcript", "summary"]
         assert mapped.parts[0].native_body.text == "notes"
         assert mapped.parts[1].native_body.text == "abcdef"
+        assert mapped.parts[2].native_body.text == "summary"
+        assert mapped.entities[0].summary == mapped.entities[1].summary == ""
         assert mapped.entities[0].transcript == ""
         assert mapped.entities[1].notes == ""
         assert "guidance" not in mapped.parts[1].native_body.text
+
+
+@pytest.mark.parametrize("record_type", ["meeting", "scratchpad_note"])
+async def test_wispr_provider_summary_and_scratchpad_are_native_content(record_type):
+    from airweave.domains.sync_pipeline.pipeline.text_builder import TextualRepresentationBuilder
+
+    body = "  Provider-authored résumé 😀\n\n"
+    response = {"id": "id", "content": body}
+    requested = {"view_content": {"start_char": 0}}
+    if record_type == "meeting":
+        response.update(content="", summary=body, transcript="Verbatim recording")
+        requested["view_transcript"] = {"start_char": 0}
+    original = record(
+        record_type, {"responses": [{"response": response, "requested_ranges": requested}]}
+    )
+    async with map_record(original, "wispr", AsyncMock()) as mapped:
+        key = "summary" if record_type == "meeting" else "content"
+        selected = next(part for part in mapped.parts if part.part.key == key)
+        built = await TextualRepresentationBuilder(MagicMock()).build_with_text(
+            [selected.entity],
+            SimpleNamespace(source_short_name="wispr", logger=MagicMock()),
+            SimpleNamespace(entity_tracker=SimpleNamespace(record_skipped=AsyncMock())),
+            native_bodies={selected.entity.entity_id: selected.native_body},
+        )
+        text = built.representations[0]
+        assert text.kind == "native_text"
+        assert text.text[text.content_start :] == body
+        assert body not in text.text[: text.content_start]
+        if record_type == "meeting":
+            assert mapped.parts[0].native_body.text == ""
+            assert "Verbatim recording" not in text.text
 
 
 @pytest.mark.asyncio
@@ -261,8 +294,10 @@ async def test_wispr_scratchpad_retains_all_text_ranges_without_meeting_fields()
     original = record("scratchpad_note", payload, native_id="note")
     before = original.model_dump()
     storage = AsyncMock()
-    async with map_record(original, "wispr", storage) as entities:
-        entities = entities.entities
+    async with map_record(original, "wispr", storage) as mapped:
+        assert mapped.parts[0].part.key == "content"
+        assert mapped.parts[0].native_body.text == "abcdef"
+        entities = mapped.entities
         assert entities[0].note_id == "note"
         assert entities[0].content == "abcdef"
         assert entities[0].web_url == ""

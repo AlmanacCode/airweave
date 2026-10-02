@@ -241,11 +241,13 @@ async def test_native_notes_transcript_multirange_exact_content_reads(database, 
     binding = await bind_projection(database, fence, "wispr")
     notes = "Notes: " + "n" * 40000 + "\nUnicode résumé ending."
     transcript = "Speaker: " + "t" * 40000 + "\nFull transcript ending."
+    summary = "Provider Flow Summary: स्वीकृत résumé\n"
     parent, original = meeting("ranged")
     first = original.payload["responses"][0]["response"]
     responses = []
     for offset in (0, 40000):
         body = dict(first)
+        body["summary"] = summary
         for field, value in (("content", notes), ("transcript", transcript)):
             fragment = value[offset : offset + 40000]
             if offset == 0:
@@ -279,7 +281,18 @@ async def test_native_notes_transcript_multirange_exact_content_reads(database, 
 
     async def fixed_chunks(entities, context, runtime):
         return processor._multiply_entities(
-            entities, [[{"text": entity.textual_representation}] for entity in entities], context
+            entities,
+            [
+                [
+                    {
+                        "text": entity.textual_representation,
+                        "start_index": 0,
+                        "end_index": len(entity.textual_representation),
+                    }
+                ]
+                for entity in entities
+            ],
+            context,
         )
 
     processor._chunk_entities = fixed_chunks
@@ -302,7 +315,8 @@ async def test_native_notes_transcript_multirange_exact_content_reads(database, 
         ).payload == original.payload
         listed = await reader.list(db, fence.organization_id, fence.sync_id, work.record.id, 1)
         assert listed.status == "available"
-        assert {part.part_key for part in listed.representations} == {"notes", "transcript"}
+        expected = {"notes": notes, "transcript": transcript, "summary": summary}
+        assert {part.part_key for part in listed.representations} == set(expected)
         for part in listed.representations:
             assert part.kind == "native_text"
             segments, offset = [], 0
@@ -323,7 +337,7 @@ async def test_native_notes_transcript_multirange_exact_content_reads(database, 
                     break
                 assert page.next_offset > offset
                 offset = page.next_offset
-            assert "".join(segments) == (notes if part.part_key == "notes" else transcript)
+            assert "".join(segments) == expected[part.part_key]
             assert not "".join(segments).startswith("# Metadata")
 
 

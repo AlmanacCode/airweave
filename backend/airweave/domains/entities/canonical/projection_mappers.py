@@ -415,10 +415,19 @@ class _TranscriptPage(BaseModel):
 
 
 def _wispr_inputs(record: SourceRecord) -> ProjectionInputs:
-    """Expose native notes/transcript separately through the existing text boundary."""
+    """Keep provider notes, summary and transcript distinct from index metadata."""
     (entity,) = _wispr(record)
     if isinstance(entity, WisprNoteEntity):
-        return ProjectionInputs(parts=(_projection_input(0, entity),))
+        populate_base_fields(entity)
+        return ProjectionInputs(
+            parts=(
+                ProjectionInput(
+                    part=ExtractionPart(part_index=0, key="content", kind="record"),
+                    entity=entity,
+                    native_body=NativeTextBody(text=entity.content, metadata_fields=("content",)),
+                ),
+            )
+        )
     try:
         responses = TypeAdapter(tuple[_TranscriptPage, ...]).validate_python(
             record.payload["responses"]
@@ -433,13 +442,20 @@ def _wispr_inputs(record: SourceRecord) -> ProjectionInputs:
     if any(value != flags[0] for value in flags):
         raise ProjectionMappingError("Wispr transcript availability changed between ranges")
     parts = []
-    for key, text in (("notes", entity.notes), ("transcript", entity.transcript)):
+    for key, text in (
+        ("notes", entity.notes),
+        ("transcript", entity.transcript),
+        ("summary", entity.summary),
+    ):
+        if key == "summary" and not text:
+            continue
         if key == "transcript" and responses[0].response.has_transcript is False:
             if text:
                 raise ProjectionMappingError("Wispr absent transcript has retained text")
             continue
         native = entity.model_copy(
-            deep=True, update={"transcript": ""} if key == "notes" else {"notes": "", "summary": ""}
+            deep=True,
+            update={field: "" for field in ("notes", "transcript", "summary") if field != key},
         )
         populate_base_fields(native)
         parts.append(
@@ -448,11 +464,7 @@ def _wispr_inputs(record: SourceRecord) -> ProjectionInputs:
                 entity=native,
                 native_body=NativeTextBody(
                     text=text,
-                    metadata_fields=(
-                        "notes",
-                        "transcript",
-                        *(() if key == "notes" else ("summary",)),
-                    ),
+                    metadata_fields=("notes", "transcript", "summary"),
                 ),
             )
         )
