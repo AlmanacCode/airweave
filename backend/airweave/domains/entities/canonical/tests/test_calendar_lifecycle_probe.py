@@ -15,6 +15,9 @@ sys.path.insert(0, 'tests/live')
 import conftest
 import httpx
 import provider_lifecycle as lifecycle
+assert not lifecycle.calendar_delta_expected(None)
+assert not lifecycle.calendar_delta_expected({'canonical_cycle': {'phase': 'collecting'}})
+assert lifecycle.calendar_delta_expected({'canonical_cycle': {'phase': 'complete'}})
 from airweave.domains.entities.canonical.tests.test_calendar_recovery import NativeHTTP, event
 from airweave.domains.sources.token_providers.static import StaticTokenProvider
 from airweave.platform.sources.google_calendar import GoogleCalendarSource

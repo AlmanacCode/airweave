@@ -65,3 +65,28 @@ async def test_unbound_legacy_source_cannot_start_or_resume_owned_capture():
                 ScanContinuation(value={}),
                 files=MagicMock(),
             )
+
+
+@pytest.mark.parametrize("created", ["0000-12-31T00:00:00.000Z", "2026-10-02T08:17:12.132Z"])
+def test_occurrence_creation_time_preserves_native_year_zero(created):
+    from airweave.platform.sources.records.google_calendar import record
+
+    payload = {
+        "id": "synthetic-occurrence",
+        "created": created,
+        "updated": "2026-10-02T08:17:12.132Z",
+        "start": {"dateTime": "2026-11-01T09:00:00-08:00"},
+    }
+    captured = record("event_occurrence", payload, "calendar")
+    assert captured.payload == payload
+    assert (captured.source_created_at is None) == created.startswith("0000")
+    assert captured.source_updated_at is not None
+
+
+def test_unknown_invalid_calendar_creation_time_is_not_silently_discarded():
+    from pydantic import ValidationError
+
+    from airweave.platform.sources.records.google_calendar import record
+
+    with pytest.raises(ValidationError):
+        record("event_occurrence", {"id": "synthetic", "created": "invalid"}, "calendar")

@@ -244,6 +244,11 @@ def safe_failure_reason(error):
     return None
 
 
+def calendar_delta_expected(previous):
+    """Loading an unfinished full capture resumes it; only completion starts a delta."""
+    return (previous or {}).get("canonical_cycle", {}).get("phase") == "complete"
+
+
 def validate_checkpoint(name, manifest, counters, saved, previous, loaded, attempt, sequence):
     """Match production cursor/scope capabilities; never manufacture a resume claim."""
     if name == "google_calendar":
@@ -252,7 +257,7 @@ def validate_checkpoint(name, manifest, counters, saved, previous, loaded, attem
         assert cycle["completed_job_id"]
         assert cycle["last_full_capture"] is None and cycle["promoted_checkpoint"] is None
         assert counters["started"] == counters["completed"] == 0
-        assert bool(counters["sync_token_requests"]) == loaded
+        assert bool(counters["sync_token_requests"]) == calendar_delta_expected(previous)
     elif name == "google_drive":
         cycle = saved["canonical_cycle"]
         assert cycle["phase"] == "complete" and cycle["completed_job_id"]
@@ -374,6 +379,14 @@ async def authenticate_retained_source(sessions, binding, organization_id, sync_
     """Source creation already verified its pinned profile; retain that attestation only."""
     if not binding.enabled:
         return
+    identity_fields = {
+        "gmail": ("expected_mailbox", "LIVE_EXPECTED_EMAIL"),
+        "google_calendar": ("expected_primary_calendar_id", "LIVE_CALENDAR_PRIMARY_ID"),
+    }
+    if name not in identity_fields:
+        raise ValueError("Retained source identity qualification is not configured")
+    identity_field, environment_field = identity_fields[name]
+    expected_identity = os.environ[environment_field]
     async with sessions() as db:
         bound = await db.get(SourceConnection, binding.source_connection_id)
         if (
@@ -382,7 +395,7 @@ async def authenticate_retained_source(sessions, binding, organization_id, sync_
             or bound.sync_id != sync_id
             or bound.short_name != name
             or not bound.config_fields
-            or bound.config_fields.get("expected_mailbox") != os.environ["LIVE_EXPECTED_EMAIL"]
+            or bound.config_fields.get(identity_field) != expected_identity
         ):
             raise ValueError("Retained capture source binding does not match")
         bound.is_authenticated = True
@@ -628,7 +641,9 @@ async def child(manifest):
             rows = list((await db.scalars(select(Entity).where(Entity.sync_id == sync_id))).all())
         assert status == "completed"
         validate_checkpoint(name, manifest, counters, saved, previous, loaded, attempt, sequence)
-        await verify_calendar_scopes(sessions, organization_id, sync_id, manifest, saved, loaded)
+        await verify_calendar_scopes(
+            sessions, organization_id, sync_id, manifest, saved, calendar_delta_expected(previous)
+        )
         visible = [r for r in rows if r.deleted_at is None and r.source_payload is not None]
         digest = hashlib.sha256(
             json.dumps(
@@ -663,7 +678,7 @@ async def child(manifest):
             "failed": False,
             "full_scope_completed": name != "wispr"
             and not (name == "gmail" and saved["canonical_cycle"]["mode"] == "changes")
-            and not (is_calendar and loaded),
+            and not (is_calendar and calendar_delta_expected(previous)),
             "counters_complete": True,
             "resumed_saved_page": resume_probe.resumed_saved_page if resume_probe else False,
             "saved_cursor_expired": resume_probe.saved_cursor_expired if resume_probe else False,
@@ -689,7 +704,11 @@ async def child(manifest):
                 "gmail": ("unfiltered_" + saved["canonical_cycle"]["mode"])
                 if manifest.get("gmail_unfiltered")
                 else "filtered_full_reconciliation",
-                "google_calendar": "calendar_incremental" if loaded else "calendar_initial",
+                "google_calendar": "calendar_incremental"
+                if calendar_delta_expected(previous)
+                else "calendar_resumed_full"
+                if loaded
+                else "calendar_initial",
                 "google_drive": "drive_incremental" if loaded else "drive_initial",
                 "slack": "accessible_history_full_reconciliation",
                 "wispr": "exposed_meeting_enumeration_no_deletion_guarantee",

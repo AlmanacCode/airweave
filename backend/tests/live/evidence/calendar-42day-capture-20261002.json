@@ -1,0 +1,35 @@
+{
+  "date": "2026-10-02",
+  "provider": "google_calendar",
+  "scope": "one selected primary calendar; 42 local dates including DST boundary",
+  "start": "2026-09-27T00:00:00-07:00",
+  "end_exclusive": "2026-11-08T00:00:00-08:00",
+  "elapsed_hours": 1009,
+  "stored_records": {
+    "event": 169,
+    "event_occurrence": 107,
+    "calendar": 1
+  },
+  "native_year_zero_created_preserved_with_unknown_normalized_creation": 37,
+  "all_scopes_verified_complete": true,
+  "cycle_phase": "complete",
+  "allocated_postgres_bytes": 3481600,
+  "provider_writes": 0,
+  "paid_model_calls": 0,
+  "index_publication_claimed": false,
+  "fixture_authentication": "native primary ID verified; no product WorkOS identity claim",
+  "recovery": "same corpus retained incomplete event_occurrence scope then completed after timestamp fix",
+  "known_provider_calls": {
+    "first_capture": 4,
+    "date_diagnosis_including_native_identity": 2,
+    "resumed_capture": 3,
+    "composio_binding_metadata": 1
+  },
+  "limitations": [
+    "Capture-only; no semantic index claim",
+    "Initial launcher missing PYTHONPATH stopped before capture; no child request accounting saved for that preflight failure",
+    "Resumed production job completed but old post-run probe assumed every loaded cursor was a delta; verified final SQL with corrected full-cycle scope assertions without recapture",
+    "Actual CLI month-grid qualification pending",
+    "No production or shared corpus mutation"
+  ]
+}

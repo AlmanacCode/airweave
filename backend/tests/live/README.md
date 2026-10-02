@@ -563,3 +563,21 @@ fields are explicitly empty in the saved source ranges; their transcripts contai
 up to six ranges. The 27 CLI commands took 0.486–0.800 seconds each including
 startup. The owner/account binding is synthetic, coverage is the captured subset,
 and no account-wide recall or released-product claim follows from this proof.
+
+### Forty-two local dates and native year-zero creation values (October 2)
+
+`evidence/calendar-42day-capture-20261002.json` records one real selected primary
+calendar, September 27 through November 8 in America/Los_Angeles: 42 local dates,
+1009 elapsed hours across DST. The retained corpus contains one calendar, 169
+master/event records and 107 expanded occurrences; all three capture scopes and
+the durable cycle were independently verified complete. No embeddings ran.
+
+The wider window exposed 37 native occurrences with creation value
+`0000-12-31T00:00:00.000Z`. Capture now retains that exact value in original JSON
+and sets only the normalized creation timestamp to unknown; event start/end and
+update times are unchanged. Other invalid timestamps still fail validation.
+The interrupted occurrence capture resumed in the same private corpus after the
+fix. The original post-run harness incorrectly assumed that loading any cursor
+meant a delta cycle; it now distinguishes resuming incomplete full capture from
+starting a changes pass after a completed cycle. Final SQL verification did not
+recapture the provider. Actual installed-CLI month-grid qualification is separate.

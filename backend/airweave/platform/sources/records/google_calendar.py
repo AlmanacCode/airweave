@@ -68,7 +68,9 @@ def record(
         if deleted
         else None,
         source_created_at=TypeAdapter(AwareDatetime).validate_python(payload["created"])
-        if payload.get("created")
+        # Observed on expanded Google occurrences. Python cannot represent year zero;
+        # keep the exact native value in payload without inventing a creation date.
+        if payload.get("created") not in (None, "", "0000-12-31T00:00:00.000Z")
         else None,
         source_updated_at=TypeAdapter(AwareDatetime).validate_python(payload["updated"])
         if payload.get("updated")
