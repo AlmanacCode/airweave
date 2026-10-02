@@ -1,0 +1,89 @@
+{
+  "capture": {
+    "provider_writes": 0,
+    "whole_history_complete": false,
+    "native_principal_attested": true,
+    "terminal": "completed",
+    "file_records": 3,
+    "original_blobs": 3,
+    "selected_files": 3,
+    "source_checkpoint_unchanged": true,
+    "native_gets": 8,
+    "file_gets": 3,
+    "broker_reads": 1,
+    "bytes_written": 638659,
+    "elapsed_seconds": 8.235
+  },
+  "prior_admission_attempt": {
+    "provider_writes": 0,
+    "whole_history_complete": false,
+    "native_principal_attested": true,
+    "terminal": "CycleConflict",
+    "file_records": 0,
+    "original_blobs": 0,
+    "selected_files": 3,
+    "source_checkpoint_unchanged": true,
+    "native_gets": 2,
+    "file_gets": 0,
+    "broker_reads": 1,
+    "bytes_written": 0,
+    "elapsed_seconds": 3.29
+  },
+  "cumulative_native_gets": 10,
+  "cumulative_broker_reads": 2,
+  "qualification_scope": "Three preselected single-file parents; genuine rootchannel discovery followed by exact-message observations in explicitly nonfinal message-scope pages; child scans use production admission and download path. History cycle intentionally remains incomplete.",
+  "original_bytes_total": 638335,
+  "installed_cli": {
+    "commands": 13,
+    "all_original_payloads_exact": true,
+    "all_download_sizes_sha256_exact": true,
+    "search_files_found": 0,
+    "read_text_returns_empty_choices": 3,
+    "nonempty_content_reads": 0,
+    "product_commit": "1d3b9fd21",
+    "synthetic_product_auth": true
+  },
+  "projection": {
+    "current_files": 2,
+    "zero_chunk_files": 2,
+    "pending_files": 1,
+    "image_reason": "Configured installation lacks image extraction",
+    "pdf_error_class": "ValueError",
+    "searchable_original_text": false
+  },
+  "files": [
+    {
+      "mime": "image/jpeg",
+      "bytes": 108163,
+      "download_exact": true
+    },
+    {
+      "mime": "application/pdf",
+      "bytes": 521573,
+      "download_exact": true
+    },
+    {
+      "mime": "image/png",
+      "bytes": 8599,
+      "download_exact": true
+    }
+  ],
+  "limits": {
+    "continuation_seconds": 180,
+    "native_gets": 15,
+    "per_file_bytes": 1048576,
+    "aggregate_bytes": 3145728
+  },
+  "native_principal_attested": true,
+  "provider_writes": 0,
+  "paid_calls": 0,
+  "files_off_capture_and_index_unchanged": true,
+  "broker_redirect_custody": "unverified upstream broker behavior; caller follows no native redirects",
+  "runtime": {
+    "detached_fixture_ports": [
+      58173,
+      58174
+    ],
+    "not_production_deployment": true
+  }
+}
