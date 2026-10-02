@@ -320,6 +320,65 @@ def test_invalid_selected_field_fails_instead_of_stringifying_json():
         knowledge_details("person", {"emails": [{"unexpected": "value"}]})
 
 
+@pytest.mark.parametrize(
+    "kind,fields,expected",
+    [
+        (
+            "task",
+            {
+                "state": "waiting",
+                "priority": "urgent",
+                "due_at": "2026-10-20T12:00:00Z",
+                "available_on": "2026-10-03",
+                "session": {"id": "OPAQUE_SESSION"},
+            },
+            ("waiting", "urgent", "2026-10-20", "2026-10-03"),
+        ),
+        (
+            "project",
+            {
+                "state": "in_progress",
+                "target_on": "2026-11-01",
+                "people": [{"id": "OPAQUE_PERSON"}],
+            },
+            ("in_progress", "2026-11-01"),
+        ),
+    ],
+)
+async def test_authored_work_projects_original_body_and_selected_details(
+    database, source, kind, fields, expected
+):
+    _, fence = source
+    await bind(database, fence)
+    item = knowledge(type=kind, **fields)
+    record = (await ingest(database, fence, item)).changes[0].record
+    assert record.payload["original"] == item.original
+    async with map_record(record, "almanac", AsyncMock()) as mapped:
+        entity = mapped.parts[0].entity
+        assert entity.native_type == kind
+        assert mapped.parts[0].native_body.text == item.original["body"]
+        assert all(value in entity.details for value in expected)
+        assert "OPAQUE" not in entity.details
+    archived = item.model_copy(
+        update={"original": item.original | {"archived_at": NOW.isoformat()}}
+    )
+    assert excluded_from_search(
+        record.model_copy(update={"payload": archived.model_dump(mode="json")}), "almanac"
+    )
+
+
+@pytest.mark.parametrize(
+    "fields", [{"state": "invented"}, {"state": "open", "due_at": "2026-10-20T12:00:00"}]
+)
+def test_malformed_work_details_fail_closed(fields):
+    from pydantic import ValidationError
+
+    from airweave.domains.native_ingestion.knowledge_fields import knowledge_details
+
+    with pytest.raises(ValidationError):
+        knowledge_details("task", fields)
+
+
 def test_event_and_relationship_values_are_searchable_without_resolving_references():
     from airweave.domains.native_ingestion.knowledge_fields import knowledge_details
 

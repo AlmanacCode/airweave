@@ -1,8 +1,9 @@
-"""Searchable native wiki fields, independent of body text and reference resolution."""
+"""Searchable authored native fields, separate from body and reference resolution."""
 
+from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictStr
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, StrictStr
 
 
 class _Fields(BaseModel):
@@ -93,10 +94,25 @@ class _CreativeWork(_Fields):
     published_on: StrictStr | None = None
 
 
+class _Work(_Fields):
+    state: Literal["open", "in_progress", "waiting", "done", "cancelled"]
+
+
+class _Task(_Work):
+    priority: Literal["low", "normal", "high", "urgent"] | None = None
+    due_on: date | None = None
+    due_at: AwareDatetime | None = None
+    available_on: date | None = None
+
+
+class _Project(_Work):
+    target_on: date | None = None
+
+
 def _text(value: _Fields) -> str:
     """Flatten only the validated allowlist, never arbitrary native payload metadata."""
     lines = []
-    for key, item in value.model_dump(exclude_none=True).items():
+    for key, item in value.model_dump(mode="json", exclude_none=True).items():
         label = key.replace("_", " ")
         if isinstance(item, str):
             lines.append(f"{label}: {item}")
@@ -119,5 +135,7 @@ def knowledge_details(kind: str, original: dict[str, JsonValue]) -> str | None:
         "place": _Place,
         "creative_work": _CreativeWork,
         "event": _Event,
+        "task": _Task,
+        "project": _Project,
     }.get(kind)
     return _text(model.model_validate(original)) or None if model else None

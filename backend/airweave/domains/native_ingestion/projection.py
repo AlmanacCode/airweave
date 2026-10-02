@@ -24,7 +24,17 @@ class _Original(BaseModel):
 
 
 class _Knowledge(_Original):
-    type: Literal["person", "organisation", "place", "event", "creative_work", "topic", "page"]
+    type: Literal[
+        "person",
+        "organisation",
+        "place",
+        "event",
+        "creative_work",
+        "topic",
+        "page",
+        "task",
+        "project",
+    ]
     revision: int = Field(strict=True, ge=1)
     title: str = Field(min_length=1)
     description: str = Field(min_length=1)
