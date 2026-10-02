@@ -34,6 +34,13 @@ from airweave.domains.entities.canonical.query_models import (
     RecordPage,
     SpreadsheetRead,
 )
+from airweave.domains.entities.canonical.slack_models import (
+    SlackChannel,
+    SlackThreadPage,
+    SlackThreadQuery,
+    SlackTimestamp,
+)
+from airweave.domains.entities.canonical.slack_query import CanonicalSlackQuery
 from airweave.domains.entities.canonical.store import CanonicalStoreError
 from airweave.domains.entities.canonical.text_models import TextRead, TextRepresentationList
 from airweave.domains.entities.canonical.wispr_models import (
@@ -131,6 +138,8 @@ async def record_error_response(request: Request, error: CanonicalStoreError) ->
         "calendar_changed_restart": 409,
         "mail_changed_restart": 409,
         "meetings_changed_restart": 409,
+        "slack_thread_changed_restart": 409,
+        "slack_thread_unavailable": 409,
         "calendar_read_incomplete": 409,
         "calendar_range_not_captured": 409,
     }.get(error.code, 400)
@@ -255,6 +264,29 @@ async def read_stored_document(
     )
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
+    return result
+
+
+@router.get("/{sync_id}/slack/threads/{thread_ts}", response_model=SlackThreadPage)
+async def slack_thread(
+    sync_id: UUID,
+    thread_ts: SlackTimestamp,
+    channel: SlackChannel,
+    response: Response,
+    limit: int = Query(default=15, ge=1, le=15),
+    cursor: str | None = Query(default=None, max_length=16384),
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> SlackThreadPage:
+    """Read observed native Slack thread messages; never fetch omitted history."""
+    result = await CanonicalSlackQuery(service.signing_key).thread(
+        db,
+        ctx.organization.id,
+        sync_id,
+        SlackThreadQuery(channel=channel, thread_ts=thread_ts, limit=limit, cursor=cursor),
+    )
+    response.headers["Cache-Control"] = "private, no-store"
     return result
 
 
