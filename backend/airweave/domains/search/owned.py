@@ -8,7 +8,7 @@ from uuid import UUID
 
 from anyio import CapacityLimiter, create_task_group
 from fastapi import HTTPException
-from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 from sqlalchemy import and_, case, func, or_, select, true, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -719,7 +719,18 @@ class OwnedSearchService:
                 publications_match(locators),
             )
         )
-        records = [_EnrichmentRecord.model_validate(row) for row in rows.mappings()]
+        try:
+            records = [_EnrichmentRecord.model_validate(row) for row in rows.mappings()]
+        except ValidationError:
+            raise HTTPException(
+                409,
+                {
+                    "code": "reindex_required",
+                    "message": (
+                        "Selected native snapshots need a fresh native export and re-projection"
+                    ),
+                },
+            ) from None
         by_id = {record.id: record for record in records}
         extraction_rows = await db.execute(
             select(ProjectionGeneration.id, ProjectionGeneration.extraction_coverage).where(

@@ -34,6 +34,7 @@ class SessionVersion(NativeModel):
     kind: Literal["session"] = "session"
     revision: int = Field(strict=True, ge=1)
     content_revision: int = Field(strict=True, ge=0)
+    created_at: AwareDatetime
 
 
 NativeVersion = Annotated[RecordVersion | SessionVersion, Field(discriminator="kind")]

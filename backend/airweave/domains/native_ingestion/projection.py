@@ -119,6 +119,7 @@ def _read(record: SourceRecord) -> tuple[NativeSnapshot, _Knowledge | _Session |
                 snapshot.version.kind != "session"
                 or original.revision != snapshot.version.revision
                 or original.content_revision != snapshot.version.content_revision
+                or original.created_at != snapshot.version.created_at
             ):
                 raise ValueError("Session version differs from original")
         case "message":

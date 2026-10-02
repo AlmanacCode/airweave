@@ -130,7 +130,7 @@ async def test_stale_unchanged_child_does_not_attest_membership_of_newer_parent(
     await bind(database, fence, dataset="sessions")
     parent = snapshot(
         identity=RecordIdentity(record_type="session", native_id="s"),
-        version=SessionVersion(revision=1, content_revision=1),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=1),
     )
     child = snapshot(
         identity=RecordIdentity(record_type="message", native_id="m", container_id="s"),
@@ -138,7 +138,7 @@ async def test_stale_unchanged_child_does_not_attest_membership_of_newer_parent(
         version=parent.version,
     )
     await ingest(database, fence, parent, child)
-    newer = parent.model_copy(update={"version": SessionVersion(revision=1, content_revision=2)})
+    newer = parent.model_copy(update={"version": SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=2)})
     await ingest(database, fence, newer)
     cycle = await begin(database, canonical, fence, sessions=True)
     root = await scan(database, canonical, fence, cycle, CompletedScope(record_type="session"))

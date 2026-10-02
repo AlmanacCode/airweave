@@ -190,7 +190,7 @@ async def test_inventory_reports_parent_epoch_and_withdrawal_without_restoring_c
     parent = snapshot(
         owner_id="owner",
         identity=RecordIdentity(record_type="session", native_id="s"),
-        version=SessionVersion(revision=2, content_revision=7),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=2, content_revision=7),
     )
     child = snapshot(
         owner_id="owner",
@@ -200,6 +200,12 @@ async def test_inventory_reports_parent_epoch_and_withdrawal_without_restoring_c
     )
     await capture(client, base, parent)
     await capture(client, base, child)
+    roots = await client.get(
+        source_path + "/records", params={"owner_id": "owner", "roots_only": True, "limit": 1}
+    )
+    assert roots.status_code == 200 and len(roots.json()["records"]) == 1
+    assert roots.json()["records"][0]["identity"] == parent.identity.model_dump(mode="json")
+    assert not roots.json()["has_more"]
     parent_url = base + f"/records/{await row_id(database, source, 'session')}/access"
     withdrawn = await client.post(
         parent_url, json={"action": "withdraw", "expected_revision": 1, "reason": "scope_removed"}
@@ -222,6 +228,54 @@ async def test_inventory_reports_parent_epoch_and_withdrawal_without_restoring_c
     )
     assert child_state["parent_visibility_epoch"] == 2 and not child_state["available"]
     assert child_state["version"] == parent.version.model_dump(mode="json")
+
+
+async def test_explicit_owner_unavailable_fences_writer_and_denies_retained_reads(
+    database, native_api
+):
+    from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
+
+    client, ctx, source, _ = native_api
+    path = f"/native/sources/{source.source_connection_id}"
+    base = path + "/imports/owner-withdrawal"
+    started = await client.put(base, json={"snapshot_id": "one", "coverage": "bounded"})
+    await capture(client, base, snapshot(owner_id="owner"))
+    record_id = await row_id(database, source, "knowledge")
+    for owner in ("foreign",):
+        assert (
+            await client.post(path + "/unavailable", json={"owner_id": owner})
+        ).status_code == 404
+    ctx.is_api_key_auth = False
+    assert (await client.post(path + "/unavailable", json={"owner_id": "owner"})).status_code == 403
+    ctx.is_api_key_auth = True
+    ctx.organization.id = uuid4()
+    assert (await client.post(path + "/unavailable", json={"owner_id": "owner"})).status_code == 404
+    ctx.organization.id = source.organization_id
+    async with database() as db:
+        epoch = (await db.get(Sync, source.sync_id)).writer_epoch
+    revoked = await client.post(path + "/unavailable", json={"owner_id": "owner"})
+    assert revoked.status_code == 200 and not revoked.json()["available"]
+    async with database() as db:
+        assert (await db.get(Sync, source.sync_id)).writer_epoch == epoch + 1
+        assert (await db.get(SyncJob, started.json()["import_id"])).status == "cancelled"
+        record = await CanonicalQueryStore().read(
+            db, source.organization_id, source.sync_id, record_id
+        )
+        assert record.payload == {} and record.content_access == "unavailable"
+        assert not await CanonicalQueryStore().source_readable(
+            db, source.organization_id, source.sync_id
+        )
+    assert (
+        await client.get(path + "/publication", params={"owner_id": "owner"})
+    ).status_code == 404
+    assert (
+        await client.put(base + "-next", json={"snapshot_id": "next", "coverage": "bounded"})
+    ).status_code == 409
+    ensured = await client.put(
+        "/native/sources",
+        json={"owner_id": "owner", "dataset": "knowledge", "collection": source.collection},
+    )
+    assert ensured.status_code == 200 and not ensured.json()["available"]
 
 
 async def test_new_reads_deny_wrong_owner_org_session_and_source_withdrawal_but_not_pause(

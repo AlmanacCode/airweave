@@ -49,7 +49,7 @@ def knowledge(**changes):
 def session():
     return snapshot(
         identity=RecordIdentity(record_type="session", native_id="s1"),
-        version=SessionVersion(revision=1, content_revision=1),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=1),
         source_created_at=NOW,
         source_updated_at=NOW,
         original={

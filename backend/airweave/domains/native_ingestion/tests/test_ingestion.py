@@ -1,9 +1,10 @@
 """Real transactions prove version admission, rollback and retained access state."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from airweave.domains.entities.canonical.requests import (
@@ -95,16 +96,23 @@ async def test_session_versions_are_partial_order_and_original_payload_retained(
     await bind(database, fence, dataset="sessions")
     item = snapshot(
         identity=RecordIdentity(record_type="session", native_id="session-one"),
-        version=SessionVersion(revision=3, content_revision=7),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=3, content_revision=7),
     )
     await ingest(database, fence, item)
+    with pytest.raises(ValidationError):
+        SessionVersion.model_validate({"kind": "session", "revision": 3, "content_revision": 7})
+    recreated = item.model_copy(
+        update={"version": item.version.model_copy(update={"created_at": NOW + timedelta(days=1)})}
+    )
+    with pytest.raises(NativeAdmissionError, match="incarnation"):
+        await ingest(database, fence, recreated)
     with pytest.raises(NativeAdmissionError, match="incomparable"):
         await ingest(
             database,
             fence,
-            item.model_copy(update={"version": SessionVersion(revision=4, content_revision=6)}),
+            item.model_copy(update={"version": SessionVersion(created_at="2026-10-01T00:00:00Z", revision=4, content_revision=6)}),
         )
-    higher = item.model_copy(update={"version": SessionVersion(revision=3, content_revision=8)})
+    higher = item.model_copy(update={"version": SessionVersion(created_at="2026-10-01T00:00:00Z", revision=3, content_revision=8)})
     result = await ingest(database, fence, higher)
     assert result.changes[0].record.payload["original"] == item.original
     assert result.changes[0].record.payload["representation"] == "snapshot"
@@ -178,7 +186,7 @@ async def test_capture_failure_rolls_back_batch_and_parent_withdrawal_hides_chil
     await bind(database, fence, dataset="sessions")
     parent = snapshot(
         identity=RecordIdentity(record_type="session", native_id="session-one"),
-        version=SessionVersion(revision=1, content_revision=1),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=1),
     )
     missing = RecordIdentity(record_type="session", native_id="missing")
     late_parent = parent.model_copy(update={"identity": missing})
@@ -227,7 +235,7 @@ async def test_capture_failure_rolls_back_batch_and_parent_withdrawal_hides_chil
             )
         )
         assert visible is False
-    higher = child.model_copy(update={"version": SessionVersion(revision=1, content_revision=2)})
+    higher = child.model_copy(update={"version": SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=2)})
     with pytest.raises(CanonicalStoreError):
         await ingest(database, fence, higher)
     rows = await retained(database, fence)
@@ -240,7 +248,7 @@ async def test_late_unseen_message_cannot_join_newer_session(database, source):
     await bind(database, fence, dataset="sessions")
     parent = snapshot(
         identity=RecordIdentity(record_type="session", native_id="session-one"),
-        version=SessionVersion(revision=3, content_revision=10),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=3, content_revision=10),
     )
     await ingest(database, fence, parent)
     child = snapshot(
@@ -248,7 +256,7 @@ async def test_late_unseen_message_cannot_join_newer_session(database, source):
             record_type="message", native_id="late", container_id="session-one"
         ),
         parent=parent.identity,
-        version=SessionVersion(revision=2, content_revision=8),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=2, content_revision=8),
     )
     with pytest.raises(NativeAdmissionError, match="attested native session"):
         await ingest(database, fence, child)
@@ -256,7 +264,7 @@ async def test_late_unseen_message_cannot_join_newer_session(database, source):
     current = child.model_copy(update={"version": parent.version})
     assert (await ingest(database, fence, current)).sequence == 2
     advanced = parent.model_copy(
-        update={"version": SessionVersion(revision=3, content_revision=11)}
+        update={"version": SessionVersion(created_at="2026-10-01T00:00:00Z", revision=3, content_revision=11)}
     )
     assert (await ingest(database, fence, advanced)).sequence == 3
     assert (await ingest(database, fence, current)).unchanged == 1
@@ -274,7 +282,7 @@ async def test_late_unseen_message_cannot_join_newer_session(database, source):
         await ingest(database, fence, stale_delete)
     # A later child version can still be stale relative to the parent.
     newest = advanced.model_copy(
-        update={"version": SessionVersion(revision=3, content_revision=12)}
+        update={"version": SessionVersion(created_at="2026-10-01T00:00:00Z", revision=3, content_revision=12)}
     )
     await ingest(database, fence, newest)
     stale_delete = stale_delete.model_copy(update={"version": advanced.version})
@@ -286,7 +294,7 @@ async def test_late_unseen_message_cannot_join_newer_session(database, source):
     # Parent tombstones permit matching child tombstones, but never child upserts.
     parent_delete = newest.model_copy(
         update={
-            "version": SessionVersion(revision=3, content_revision=13),
+            "version": SessionVersion(created_at="2026-10-01T00:00:00Z", revision=3, content_revision=13),
             "operation": "delete",
             "original": {},
         }

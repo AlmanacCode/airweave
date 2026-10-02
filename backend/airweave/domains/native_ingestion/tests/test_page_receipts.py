@@ -57,7 +57,7 @@ def page_request(native, state):
         item = item.model_copy(
             update={
                 "identity": RecordIdentity(record_type="session", native_id="one"),
-                "version": SessionVersion(revision=1, content_revision=1),
+                "version": SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=1),
             }
         )
     return CommitNativePage(

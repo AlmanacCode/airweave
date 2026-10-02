@@ -17,7 +17,11 @@ from airweave.domains.native_ingestion.publication_models import (
     NativeInventoryPage,
     NativePublication,
 )
-from airweave.domains.native_ingestion.source_models import EnsureNativeSource, NativeSource
+from airweave.domains.native_ingestion.source_models import (
+    EnsureNativeSource,
+    NativeSource,
+    WithdrawNativeSource,
+)
 
 router = TrailingSlashRouter()
 
@@ -67,6 +71,7 @@ async def list_native_inventory(
     owner_id: Annotated[str, Query(min_length=1)],
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
     after: UUID | None = None,
+    roots_only: bool = False,
     db: AsyncSession = Depends(get_db),
     ctx: ApiContext = Depends(backend_actor),
     container: Container = Depends(deps.get_container),
@@ -74,7 +79,27 @@ async def list_native_inventory(
     """Read bounded retained identities/access; never infer upstream absence from this page."""
     try:
         return await container.native_sources.inventory(
-            db, ctx.organization.id, source_id, owner_id, limit=limit, after=after
+            db,
+            ctx.organization.id,
+            source_id,
+            owner_id,
+            limit=limit,
+            after=after,
+            roots_only=roots_only,
         )
     except NativeAdmissionError as error:
         raise HTTPException(409, {"code": error.code, "message": str(error)}) from error
+
+
+@router.post("/{source_id}/unavailable", response_model=NativeSource)
+async def withdraw_native_source(
+    source_id: UUID,
+    request: WithdrawNativeSource,
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(backend_actor),
+    container: Container = Depends(deps.get_container),
+) -> NativeSource:
+    """Attest explicit owner loss without scanning or rewriting retained originals."""
+    return await container.native_sources.withdraw(
+        db, ctx.organization.id, source_id, request.owner_id
+    )

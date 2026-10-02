@@ -100,7 +100,7 @@ async def test_empty_dataset_and_empty_session(native_api):
                 "session",
                 owner_id="owner",
                 identity=RecordIdentity(record_type="session", native_id="session"),
-                version=SessionVersion(revision=1, content_revision=0),
+                version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=0),
             ),
         )
     result = await publish_native(
@@ -125,13 +125,13 @@ async def test_preflight_rejects_mismatched_message_before_http():
     parent = snapshot(
         "session",
         identity=RecordIdentity(record_type="session", native_id="session"),
-        version=SessionVersion(revision=1, content_revision=2),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=2),
     )
     child = snapshot(
         "message",
         identity=RecordIdentity(record_type="message", native_id="message", container_id="session"),
         parent=parent.identity,
-        version=SessionVersion(revision=1, content_revision=1),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=1),
     )
     async with httpx.AsyncClient(
         base_url="http://test/", transport=httpx.MockTransport(response)

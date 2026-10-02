@@ -36,7 +36,7 @@ def session(native_id, revision=1):
         native_id,
         owner_id="owner",
         identity=RecordIdentity(record_type="session", native_id=native_id),
-        version=SessionVersion(revision=revision, content_revision=revision),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=revision, content_revision=revision),
     )
 
 

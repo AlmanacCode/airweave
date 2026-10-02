@@ -27,6 +27,7 @@ from airweave.domains.native_ingestion.tests.test_projection import (
 )
 from airweave.domains.search.types import SearchResults
 from airweave.models.collection import Collection
+from airweave.models.entity import Entity
 from airweave.models.source_connection import SourceConnection
 
 
@@ -51,7 +52,7 @@ async def test_group_after_final_gate_promotes_survivor_and_limits_cards(
     native = withdraw in ("parent", "native_current")
     if native:
         session = native_session()
-        version = SessionVersion(revision=7, content_revision=11)
+        version = SessionVersion(created_at="2026-10-01T00:00:00Z", revision=7, content_revision=11)
         session = session.model_copy(
             update={
                 "version": version,
@@ -161,8 +162,10 @@ async def test_group_after_final_gate_promotes_survivor_and_limits_cards(
                 "kind": "session",
                 "revision": 7,
                 "content_revision": 11,
+                "created_at": "2026-10-01T00:00:00Z",
             }
             assert match["revision"] == 1
+        await _assert_missing_incarnation_denied(database, fence, client, withdraw)
         return
     assert len(items) == 2
     assert all(item["native_version"] is None for item in items)
@@ -182,6 +185,35 @@ def _assert_ungrouped_native_versions(page):
             "kind": "session",
             "revision": 7,
             "content_revision": 11,
+            "created_at": "2026-10-01T00:00:00Z",
         }
         assert candidate["hit"]["group"]["matched_records"] == 1
         assert candidate["hit"]["group"]["additional_matches"] == []
+
+
+async def _assert_missing_incarnation_denied(database, fence, client, withdraw):
+    if withdraw != "native_current":
+        return
+    async with database() as db:
+        rows = (
+            await db.scalars(
+                select(Entity).where(
+                    Entity.sync_id == fence.sync_id,
+                    Entity.source_payload["authority"].astext == "almanac",
+                )
+            )
+        ).all()
+        for row in rows:
+            raw = dict(row.source_payload)
+            raw["version"] = {
+                key: value for key, value in raw["version"].items() if key != "created_at"
+            }
+            row.source_payload = raw
+        await db.commit()
+    invalid = await client.post(
+        "/sync/search/candidates",
+        json={"query": "exact", "sync_ids": [str(fence.sync_id)], "mode": "keyword"},
+    )
+    assert invalid.status_code == 409
+    assert invalid.json()["detail"]["code"] == "reindex_required"
+    assert "Original message" not in invalid.text

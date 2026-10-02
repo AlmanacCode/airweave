@@ -92,6 +92,7 @@ class NativePublicationStore:
         *,
         limit: int,
         after: UUID | None,
+        roots_only: bool = False,
     ) -> NativeInventoryPage:
         """Bounded live keyset including withdrawn rows, for exact upstream existence checks."""
         if not 1 <= limit <= 100:
@@ -157,6 +158,8 @@ class NativePublicationStore:
         )
         if after is not None:
             statement = statement.where(Entity.id > after)
+        if roots_only:
+            statement = statement.where(Entity.parent_record_type.is_(None))
         rows = (await db.execute(statement)).all()
         records = []
         for row in rows[:limit]:

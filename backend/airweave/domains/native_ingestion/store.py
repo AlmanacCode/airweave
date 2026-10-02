@@ -32,6 +32,8 @@ def compare_versions(previous: NativeVersion, incoming: NativeVersion) -> int:
     old = (previous.revision,)
     new = (incoming.revision,)
     if previous.kind == "session" and incoming.kind == "session":
+        if previous.created_at != incoming.created_at:
+            raise NativeAdmissionError("Native session incarnation changed")
         old += (previous.content_revision,)
         new += (incoming.content_revision,)
     lower = any(left < right for left, right in zip(new, old, strict=True))

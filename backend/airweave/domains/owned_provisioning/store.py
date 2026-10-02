@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from airweave.api.context import ApiContext
 from airweave.core.datetime_utils import utc_now_naive
 from airweave.db.unit_of_work import UnitOfWork
+from airweave.domains.entities.canonical.source_lifecycle import stop_source_writer
 from airweave.domains.owned_provisioning.models import EnsureSource, native_principal
 from airweave.domains.source_connections.protocols import SourceConnectionCreateServiceProtocol
 from airweave.domains.sources.protocols import SourceValidationServiceProtocol
@@ -19,7 +20,6 @@ from airweave.models.connection import Connection
 from airweave.models.owned_provisioning import OwnedProvisioning
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
-from airweave.models.sync_job import SyncJob
 from airweave.platform.configs.config import StripeConfig
 from airweave.schemas.source_connection import (
     AuthProviderAuthentication,
@@ -132,28 +132,13 @@ class ProvisioningStore:
                     .execution_options(populate_existing=True)
                 )
                 sync.provisioning_generation = request.generation
-                sync.status = "paused"
-                sync.writer_epoch += 1
-                jobs = (
-                    await db.scalars(
-                        select(SyncJob)
-                        .where(
-                            SyncJob.sync_id == sync.id,
-                            SyncJob.status.in_(("pending", "running", "cancelling")),
-                        )
-                        .with_for_update()
-                    )
-                ).all()
-                row.cancellation_job_ids = list(
-                    dict.fromkeys([*row.cancellation_job_ids, *(str(job.id) for job in jobs)])
-                )
-                for job in jobs:
-                    job.status = "cancelled"
                 source = await db.get(SourceConnection, row.source_connection_id)
-                # Pausing execution retains previously attested read authority.
-                # Reconfiguration and withdrawal clear availability; a pause
-                # must never turn an unavailable source into an available one.
-                source.is_authenticated = source.is_authenticated and request.state == "paused"
+                jobs = await stop_source_writer(
+                    db, sync, source, retain_read_authority=request.state == "paused"
+                )
+                row.cancellation_job_ids = list(
+                    dict.fromkeys([*row.cancellation_job_ids, *(str(job) for job in jobs)])
+                )
             row.generation = request.generation
             row.request_payload = payload
             row.request_hash = fingerprint

@@ -356,6 +356,7 @@ async def test_pause_resume_preserves_identity_source_and_cleanup(database, setu
     ctx, service, request, account, lifecycle, schedules, workflows = setup
     async with database() as db:
         first = await service.ensure(db, ctx, account, request)
+        epoch = (await db.get(Sync, first.sync_id)).writer_epoch
     async with database() as db:
         paused = await service.ensure(db, ctx, account, EnsureSource(generation=2, state="paused"))
         assert paused.state == "paused"
@@ -366,6 +367,7 @@ async def test_pause_resume_preserves_identity_source_and_cleanup(database, setu
         )
         sync = await db.get(Sync, first.sync_id)
         assert sync.status == "paused" and sync.provisioning_generation == 2
+        assert sync.writer_epoch == epoch + 1
         assert (await db.get(SourceConnection, first.source_connection_id)).is_authenticated
         with pytest.raises(HTTPException):
             await service.jobs.create(db, schemas.SyncJobCreate(sync_id=first.sync_id), ctx)

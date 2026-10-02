@@ -122,7 +122,7 @@ async def test_parent_restore_requires_fresh_child_attestation_and_active_import
     parent = snapshot(
         owner_id="owner",
         identity=RecordIdentity(record_type="session", native_id="s"),
-        version=SessionVersion(revision=1, content_revision=1),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=1),
     )
     child = snapshot(
         owner_id="owner",
@@ -164,7 +164,7 @@ async def test_parent_restore_requires_fresh_child_attestation_and_active_import
     # The request prepared before revocation must not cross the parent epoch change.
     assert (await client.post(child_url, json=child_renew)).status_code == 409
     parent_new = parent.model_copy(
-        update={"version": SessionVersion(revision=2, content_revision=1)}
+        update={"version": SessionVersion(created_at="2026-10-01T00:00:00Z", revision=2, content_revision=1)}
     )
     parent_update = await client.post(
         parent_url,

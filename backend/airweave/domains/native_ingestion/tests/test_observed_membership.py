@@ -117,7 +117,7 @@ async def test_only_observed_unchanged_parent_requires_transcript_and_empty_impo
         snapshot(
             name,
             identity=RecordIdentity(record_type="session", native_id=name),
-            version=SessionVersion(revision=1, content_revision=1),
+            version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=1),
         )
         for name in ("first", "second")
     )

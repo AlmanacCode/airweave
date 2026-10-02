@@ -46,3 +46,9 @@ class NativeSource(NativeModel):
     binding: NativeSourceBinding
     collection: str
     available: bool
+
+
+class WithdrawNativeSource(NativeModel):
+    """Backend attests explicit owner loss; there is deliberately no implicit renewal."""
+
+    owner_id: str = Field(min_length=1)

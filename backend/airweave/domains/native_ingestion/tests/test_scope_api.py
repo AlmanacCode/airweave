@@ -109,7 +109,7 @@ async def test_sessions_http_parent_and_child_scopes_reused_by_new_import(databa
     parent = snapshot(
         owner_id="owner",
         identity=RecordIdentity(record_type="session", native_id="s"),
-        version=SessionVersion(revision=1, content_revision=1),
+        version=SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=1),
     )
     child = snapshot(
         owner_id="owner",
