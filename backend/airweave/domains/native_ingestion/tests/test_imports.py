@@ -1,6 +1,8 @@
 """Real PostgreSQL import request recovery, concurrent creation and rollback."""
 
 import asyncio
+import hashlib
+import json
 from uuid import uuid4
 
 import pytest
@@ -17,6 +19,7 @@ from airweave.domains.native_ingestion.source_store import NativeSourceStore
 from airweave.models.collection import Collection
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
+from airweave.models.sync_cursor import SyncCursor
 from airweave.models.sync_job import SyncJob
 from airweave.models.vector_db_deployment_metadata import VectorDbDeploymentMetadata
 
@@ -139,6 +142,64 @@ async def test_cycle_failure_rolls_back_job_and_fence(database, native, monkeypa
                 db, uuid4(), native.source_connection_id, "request-one"
             )
         assert error.value.status_code == 404
+
+
+async def test_transcript_coverage_is_sessions_only_and_part_of_retry_identity(database, native):
+    request = StartNativeImport(
+        snapshot_id="snapshot-one", coverage="bounded", transcript_coverage="complete"
+    )
+    if native.binding.dataset == "knowledge":
+        with pytest.raises(NativeAdmissionError, match="requires a sessions source"):
+            await start(database, native, request=request)
+        async with database() as db:
+            assert (await db.get(Sync, native.sync_id)).writer_epoch == 0
+            assert (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(SyncJob)
+                    .where(SyncJob.sync_id == native.sync_id)
+                )
+                == 0
+            )
+        return
+
+    initial = await start(database, native)
+    assert initial.request.transcript_coverage == "bounded"
+    with pytest.raises(NativeAdmissionError, match="conflicting intent"):
+        await start(database, native, request=request)
+    assert await start(database, native) == initial
+
+
+@pytest.mark.parametrize("native", ["sessions"], indirect=True)
+async def test_legacy_import_without_transcript_coverage_resumes_without_changing_plan(
+    database, native
+):
+    initial = await start(database, native)
+    async with database() as db:
+        job = await db.get(SyncJob, initial.import_id)
+        request = dict(job.sync_metadata["request"])
+        request.pop("transcript_coverage")
+        job.sync_metadata = {**job.sync_metadata, "request": request}
+        cursor = await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == native.sync_id))
+        cycle = cursor.cursor_data["canonical_cycle"]
+        plan = dict(cycle["source_plan"])
+        plan.pop("transcript_coverage")
+        fingerprint = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
+        legacy_cycle = {
+            **cycle,
+            "source_plan": plan,
+            "configuration": {**cycle["configuration"], "fingerprint": fingerprint},
+        }
+        cursor.cursor_data = {**cursor.cursor_data, "canonical_cycle": legacy_cycle}
+        await db.commit()
+
+    assert await start(database, native) == initial
+    async with database() as db:
+        cursor = await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == native.sync_id))
+        assert cursor.cursor_data["canonical_cycle"] == legacy_cycle
+        assert (await db.get(Sync, native.sync_id)).writer_epoch == 1
+        job = await db.get(SyncJob, initial.import_id)
+        assert "transcript_coverage" not in job.sync_metadata["request"]
 
 
 async def test_legacy_cancellation_uses_actual_native_sync_identity(database, native, source):

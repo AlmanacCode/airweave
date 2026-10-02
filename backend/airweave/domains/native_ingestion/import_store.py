@@ -102,6 +102,8 @@ class NativeImportStore:
     ) -> NativeImportState:
         """Recover exact requests, otherwise create one fenced snapshot import."""
         bound = await self.sources.require(db, organization_id, source_id)
+        if request.transcript_coverage == "complete" and bound.binding.dataset != "sessions":
+            raise NativeAdmissionError("Complete transcript coverage requires a sessions source")
         job_id = native_import_id(source_id, request_key)
         job = await db.scalar(select(SyncJob).where(SyncJob.id == job_id).with_for_update())
         if job is not None:
@@ -140,11 +142,10 @@ class NativeImportStore:
             if bound.binding.dataset == "knowledge"
             else {"session": (None,), "message": ("session",)}
         )
-        policy = "exhaustive" if request.coverage == "complete" else "discovery_only"
         configuration = CycleConfiguration(
             fingerprint=fingerprint,
             parents=parents,
-            completion_policies={kind: policy for kind in parents},
+            completion_policies={kind: request.completion_policy(kind) for kind in parents},
             membership="observed" if request.coverage == "bounded" else "retained",
         )
         previous = cycle_state(await cursor_row(db, fence))

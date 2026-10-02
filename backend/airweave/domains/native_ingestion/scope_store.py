@@ -92,9 +92,7 @@ class NativeScopeStore:
             raise NativeAdmissionError("Scope is unavailable or superseded for this import")
         state = (await self.scans._state(db, row)).model_copy(
             update={
-                "completion_policy": "exhaustive"
-                if imported.request.coverage == "complete"
-                else "discovery_only"
+                "completion_policy": imported.request.completion_policy(request.scope.record_type)
             }
         )
         return scope_state(state)

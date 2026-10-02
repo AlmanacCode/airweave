@@ -6,15 +6,28 @@ from uuid import UUID
 from pydantic import AwareDatetime, Field, model_validator
 
 from airweave.core.shared_models import SyncJobStatus
+from airweave.domains.entities.canonical.coverage_models import CompletionPolicy
 from airweave.domains.entities.canonical.requests import WriterFence
 from airweave.domains.native_ingestion.models import NativeModel
 
 
 class StartNativeImport(NativeModel):
-    """Publisher attestation; bounded imports never authorize absence deletion."""
+    """Publisher attestation; bounded roots do not authorize root absence deletion."""
 
     snapshot_id: str = Field(min_length=1, max_length=256)
     coverage: Literal["bounded", "complete"]
+    transcript_coverage: Literal["bounded", "complete"] = Field(
+        default="bounded",
+        description="Complete message enumeration for each selected session; sessions only",
+    )
+
+    def completion_policy(self, record_type: str) -> CompletionPolicy:
+        """Complete transcripts own only children of the selected session roots."""
+        if self.coverage == "complete" or (
+            record_type == "message" and self.transcript_coverage == "complete"
+        ):
+            return "exhaustive"
+        return "discovery_only"
 
 
 class NativeImportSummary(NativeModel):
