@@ -12,7 +12,8 @@ from airweave.domains.entities.canonical.projection_models import ProjectionLoca
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.tests.helpers import publish_prepared
 from airweave.domains.entities.canonical.tests.test_search_visibility import hit
-from airweave.domains.native_ingestion.tests.test_ingestion import bind, ingest, snapshot
+from airweave.domains.native_ingestion.tests.test_ingestion import bind, ingest
+from airweave.domains.native_ingestion.tests.test_projection import knowledge
 from airweave.domains.search.canonical_visibility import visible_results
 from airweave.domains.search.owned import OwnedSearchService
 from airweave.domains.search.owned_models import OwnedSearchRequest
@@ -25,7 +26,7 @@ async def test_native_search_requires_current_publication_and_source_access(data
     """Index transport is synthetic; capture, scope checks and publication are real SQL."""
     _, fence = source
     await bind(database, fence)
-    await ingest(database, fence, snapshot())
+    await ingest(database, fence, knowledge())
     async with database() as db:
         collection = await db.scalar(
             select(Collection)

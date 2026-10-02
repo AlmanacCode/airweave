@@ -17,6 +17,13 @@ from airweave.domains.entities.canonical.tests.test_owned_search import (  # noq
     indexed,
 )
 from airweave.domains.entities.canonical.tests.test_search_visibility import hit
+from airweave.domains.native_ingestion.tests.test_ingestion import ingest
+from airweave.domains.native_ingestion.tests.test_projection import (
+    message as native_message,
+)
+from airweave.domains.native_ingestion.tests.test_projection import (
+    session as native_session,
+)
 from airweave.domains.search.types import SearchResults
 from airweave.models.collection import Collection
 from airweave.models.source_connection import SourceConnection
@@ -41,27 +48,33 @@ async def test_group_after_final_gate_promotes_survivor_and_limits_cards(
         for i in range(4)
     ]
     if withdraw == "parent":
-        parent = RecordIdentity(record_type="session", native_id="session")
-        await capture(database, capture_service, fence, observation(identity=parent))
-        messages = [
-            message.model_copy(
+        session = native_session()
+        parent = session.identity
+        original = native_message("Original message")
+        native_messages = [
+            original.model_copy(
                 update={
-                    "identity": message.identity.model_copy(
-                        update={"container_id": parent.native_id}
+                    "identity": RecordIdentity(
+                        record_type="message", native_id=f"m{i}", container_id=parent.native_id
                     ),
-                    "parent": parent,
+                    "original": original.original | {"id": f"m{i}", "ordinal": i},
                 }
             )
-            for message in messages
+            for i in range(4)
         ]
         async with database() as db:
             await db.execute(
                 update(SourceConnection)
                 .where(SourceConnection.id == connection.id)
-                .values(short_name="almanac")
+                .values(
+                    short_name="almanac",
+                    config_fields={"owner_id": "owner-one", "dataset": "sessions"},
+                )
             )
             await db.commit()
-    await capture(database, capture_service, fence, *messages)
+        await ingest(database, fence, session, *native_messages)
+    else:
+        await capture(database, capture_service, fence, *messages)
     store = CanonicalProjectionStore()
     async with database() as db:
         collection_id = await db.scalar(
