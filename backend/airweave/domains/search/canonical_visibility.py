@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
 from airweave.domains.entities.canonical.projection_store import publications_match
+from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.source import indexed_record_types
 from airweave.domains.search.types.results import SearchResult
 from airweave.domains.sources.protocols import SourceRegistryProtocol
@@ -31,6 +32,7 @@ async def visible_results(
         select(SourceConnection).where(
             SourceConnection.organization_id == organization_id,
             SourceConnection.is_authenticated.is_(True),
+            source_is_readable(SourceConnection.organization_id, SourceConnection.sync_id),
             SourceConnection.readable_collection_id == collection,
         )
     )

@@ -13,7 +13,7 @@ from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.canonical.requests import BlobReference, CaptureBatch, RecordIdentity
 from airweave.domains.entities.canonical.store import CanonicalRecordStore, CanonicalStoreError
-from airweave.domains.entities.canonical.tests.helpers import observation
+from airweave.domains.entities.canonical.tests.helpers import bind_projection, observation
 
 
 def query_app(database, context):
@@ -36,6 +36,7 @@ def query_app(database, context):
 
 async def test_http_read_list_changes_and_cross_tenant_denial(database, source):
     capture, fence = source
+    await bind_projection(database, fence)
     async with database() as db:
         result = await capture.capture(
             db, CaptureBatch(fence=fence, records=(observation("one"), observation("two")))
@@ -77,6 +78,7 @@ async def test_http_change_continuation_redacts_withdrawn_snapshots_and_rejects_
     database, source
 ):
     capture, fence = source
+    await bind_projection(database, fence)
     parent_identity = RecordIdentity(record_type="calendar", native_id="cal")
     parent = observation(identity=parent_identity)
     child = observation(

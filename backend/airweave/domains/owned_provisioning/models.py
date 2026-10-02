@@ -153,7 +153,7 @@ class EnsureSource(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     generation: int = Field(ge=1, strict=True)
-    state: Literal["active", "paused", "disconnected"]
+    state: Literal["active", "paused", "unavailable", "disconnected"]
     source: ManagedSource | None = None
 
     @model_validator(mode="after")
@@ -174,7 +174,7 @@ class ProvisionedSource(BaseModel):
     organization_id: UUID
     generation: int
     observed_generation: int
-    state: Literal["pending", "ready", "paused", "disconnected"]
+    state: Literal["pending", "ready", "paused", "unavailable", "disconnected"]
     source_connection_id: UUID | None
     sync_id: UUID | None
     expected_identity: str | None

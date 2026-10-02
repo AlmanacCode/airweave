@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.projection_models import canonical_projection_workflow_id
+from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.search_metadata import SEARCH_METADATA_PIPELINE_VERSION
 from airweave.models.collection import Collection
 from airweave.models.entity import Entity
@@ -68,6 +69,7 @@ async def plan_reprojection(
                 SourceConnection.organization_id == organization_id,
                 SourceConnection.sync_id == sync_id,
                 SourceConnection.is_authenticated.is_(True),
+                source_is_readable(SourceConnection.organization_id, SourceConnection.sync_id),
             )
         )
     ).one_or_none()

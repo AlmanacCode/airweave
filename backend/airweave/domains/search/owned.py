@@ -18,6 +18,7 @@ from airweave.domains.entities.canonical.coverage import capture_coverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
 from airweave.domains.entities.canonical.projection_store import publications_match
+from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.entities.canonical.search_metadata import (
     SEARCH_METADATA_PIPELINE_VERSION,
@@ -429,6 +430,9 @@ class OwnedSearchService:
                     .where(
                         SourceConnection.organization_id == ctx.organization.id,
                         SourceConnection.is_authenticated.is_(True),
+                        source_is_readable(
+                            SourceConnection.organization_id, SourceConnection.sync_id
+                        ),
                         SourceConnection.sync_id.in_(request.sync_ids),
                     )
                 )
@@ -639,6 +643,9 @@ class OwnedSearchService:
                         SourceConnection.sync_id == Sync.id,
                         SourceConnection.organization_id == ctx.organization.id,
                         SourceConnection.is_authenticated.is_(True),
+                        source_is_readable(
+                            SourceConnection.organization_id, SourceConnection.sync_id
+                        ),
                     ),
                 )
                 .join(

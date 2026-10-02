@@ -287,3 +287,44 @@ async def test_abandoned_generation_text_is_in_bounded_repeatable_gc(database, p
             await p.storage.delete_file(key)
         await gc.acknowledge(db, repeated, now=now + timedelta(hours=1))
     assert await p.storage.read_file(p.blob.key) == p.raw
+
+
+async def test_source_withdrawal_during_retained_text_io_denies_text(database, publication):
+    """Source revocation fences derived text even when publication and bytes remain."""
+    from airweave.domains.entities.canonical.query import RecordNotFound
+    from airweave.models.source_connection import SourceConnection
+
+    p = publication
+    assert await p.projector.project_one(p.work, "google_drive", p.destination, MagicMock())
+    async with database() as db:
+        descriptor = (
+            await p.reader.list(db, p.fence.organization_id, p.fence.sync_id, p.work.record.id, 1)
+        ).representations[0]
+    read_file = p.storage.read_file
+
+    async def withdraw_after_storage(path, **kwargs):
+        content = await read_file(path, **kwargs)
+        async with database() as db:
+            await db.execute(
+                update(SourceConnection)
+                .where(SourceConnection.sync_id == p.fence.sync_id)
+                .values(is_authenticated=False)
+            )
+            await db.commit()
+        return content
+
+    p.storage.read_file = withdraw_after_storage
+    async with database() as db:
+        with pytest.raises(RecordNotFound):
+            await p.reader.read(
+                db,
+                p.fence.organization_id,
+                p.fence.sync_id,
+                p.work.record.id,
+                1,
+                descriptor.generation,
+                descriptor.id,
+            )
+    async with database() as db:
+        with pytest.raises(RecordNotFound):
+            await p.reader.list(db, p.fence.organization_id, p.fence.sync_id, p.work.record.id, 1)

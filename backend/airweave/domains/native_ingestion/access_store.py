@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.requests import CaptureBatch, CaptureRecord
 from airweave.domains.entities.canonical.store import content_is_available, source_record
 from airweave.domains.native_ingestion.access_models import (
@@ -18,7 +19,6 @@ from airweave.domains.native_ingestion.import_store import NativeImportStore
 from airweave.domains.native_ingestion.models import IngestNativeBatch
 from airweave.domains.native_ingestion.store import NativeIngestionStore
 from airweave.models.entity import Entity
-from airweave.models.sync import SyncStatus
 
 
 class NativeAccessStore:
@@ -74,16 +74,17 @@ class NativeAccessStore:
         bound, _, _ = await self.imports.load(db, organization_id, source_id, request_key)
         row = await self._record(db, organization_id, bound.sync.id, record_id)
         record = source_record(row)
-        available = await db.scalar(select(content_is_available()).where(Entity.id == row.id))
+        available = await db.scalar(
+            select(
+                content_is_available() & source_is_readable(organization_id, bound.sync.id)
+            ).where(Entity.id == row.id)
+        )
         return NativeRecordAccess(
             record_id=row.id,
             identity=record.identity,
             revision=row.record_revision,
             parent_visibility_epoch=await self._parent_epoch(db, row),
-            available=bool(available)
-            and row.deleted_at is None
-            and bound.source.is_authenticated
-            and bound.sync.status == SyncStatus.ACTIVE,
+            available=bool(available) and row.deleted_at is None,
             removal_reason=row.removal_reason,
         )
 

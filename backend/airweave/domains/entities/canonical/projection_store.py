@@ -20,6 +20,7 @@ from airweave.domains.entities.canonical.projection_models import (
     projection_document_locator,
 )
 from airweave.domains.entities.canonical.projection_policy import excluded_from_search
+from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.store import content_is_available, source_record
 from airweave.domains.entities.canonical.text_artifacts import text_manifest
 from airweave.domains.entities.canonical.text_models import TextArtifact
@@ -59,6 +60,7 @@ def publications_match(locators: Iterable[ProjectionLocator]):
         Entity.indexed_pipeline_version == Sync.index_pipeline_version,
         Entity.deleted_at.is_(None),
         content_is_available(),
+        source_is_readable(Entity.organization_id, Entity.sync_id),
         exists(
             select(ProjectionGeneration.id)
             .correlate(Entity)
@@ -123,6 +125,7 @@ class CanonicalProjectionStore:
                     SourceConnection.organization_id == organization_id,
                     SourceConnection.sync_id == sync_id,
                     SourceConnection.is_authenticated.is_(True),
+                    source_is_readable(SourceConnection.organization_id, SourceConnection.sync_id),
                 )
                 .limit(2)
             )
@@ -207,6 +210,7 @@ class CanonicalProjectionStore:
             )
             .where(
                 SourceConnection.is_authenticated.is_(True),
+                source_is_readable(SourceConnection.organization_id, SourceConnection.sync_id),
                 SourceConnection.sync_id == Sync.id,
                 SourceConnection.organization_id == Sync.organization_id,
                 SourceConnection.short_name.in_(source_names),
@@ -449,6 +453,7 @@ async def current_extraction(
             Entity.indexed_pipeline_version == Sync.index_pipeline_version,
             Entity.deleted_at.is_(None),
             content_is_available(),
+            source_is_readable(organization_id, sync_id),
         )
     )
     return ExtractionCoverage.model_validate(raw) if raw is not None else None

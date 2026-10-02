@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api.context import ApiContext
+from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.search.adapters.vector_db.exceptions import VectorDBError
 from airweave.domains.search.adapters.vector_db.protocol import VectorDBProtocol
 from airweave.domains.search.canonical_visibility import visible_results
@@ -106,6 +107,7 @@ class VisibleVectorDB:
                     SourceConnection.organization_id == self._ctx.organization.id,
                     SourceConnection.readable_collection_id == self._readable_id,
                     SourceConnection.is_authenticated.is_(True),
+                    source_is_readable(SourceConnection.organization_id, SourceConnection.sync_id),
                     SourceConnection.sync_id.is_not(None),
                 )
             )

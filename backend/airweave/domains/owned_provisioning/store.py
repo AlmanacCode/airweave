@@ -150,7 +150,10 @@ class ProvisioningStore:
                 for job in jobs:
                     job.status = "cancelled"
                 source = await db.get(SourceConnection, row.source_connection_id)
-                source.is_authenticated = False
+                # Pausing execution retains previously attested read authority.
+                # Reconfiguration and withdrawal clear availability; a pause
+                # must never turn an unavailable source into an available one.
+                source.is_authenticated = source.is_authenticated and request.state == "paused"
             row.generation = request.generation
             row.request_payload = payload
             row.request_hash = fingerprint

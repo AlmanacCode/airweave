@@ -20,6 +20,7 @@ from airweave.domains.entities.canonical.calendar_query import (
 )
 from airweave.domains.entities.canonical.requests import CaptureBatch
 from airweave.domains.entities.canonical.store import CanonicalStoreError
+from airweave.domains.entities.canonical.tests.helpers import bind_projection
 from airweave.models import SyncCursor
 from airweave.models.source_connection import SourceConnection
 from airweave.platform.sources.records.google_calendar import record
@@ -36,6 +37,7 @@ def window():
 
 async def seed(database, source):
     capture, fence = source
+    await bind_projection(database, fence)
     parent = record("calendar", {"id": "cal", "timeZone": "America/Los_Angeles"})
     events = [
         {"id": "all-day", "start": {"date": "2026-03-08"}, "end": {"date": "2026-03-09"}},
@@ -260,6 +262,7 @@ async def test_empty_selection_reconciles_partial_parent_without_saved_cursor(da
     from airweave.platform.configs.config import GoogleCalendarConfig
 
     capture, fence = source
+    await bind_projection(database, fence)
     parent = record("calendar", {"id": "partial", "timeZone": "UTC"})
     child = record("event", {"id": "old", "status": "confirmed"}, "partial").model_copy(
         update={"parent": parent.identity}
@@ -289,6 +292,7 @@ async def test_missing_selected_calendar_revokes_partial_parent_without_cursor(d
     from airweave.platform.configs.config import GoogleCalendarConfig
 
     capture, fence = source
+    await bind_projection(database, fence)
     parent = record("calendar", {"id": "missing", "timeZone": "UTC"})
     child = record("event", {"id": "retained", "status": "confirmed"}, "missing").model_copy(
         update={"parent": parent.identity}

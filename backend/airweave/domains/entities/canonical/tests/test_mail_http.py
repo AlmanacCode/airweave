@@ -18,7 +18,7 @@ from airweave.domains.entities.canonical.query import CanonicalQueryService, Inv
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.canonical.requests import BlobReference, CaptureBatch, RecordIdentity
 from airweave.domains.entities.canonical.store import CanonicalRecordStore, CanonicalStoreError
-from airweave.domains.entities.canonical.tests.helpers import observation
+from airweave.domains.entities.canonical.tests.helpers import bind_projection, observation
 from airweave.domains.storage.exceptions import StorageConnectionError, StorageNotFoundError
 from airweave.models import Sync, SyncJob
 
@@ -39,6 +39,7 @@ def service():
 
 async def test_thread_chronology_ties_unknown_dates_and_scope(database, source):
     capture, fence = source
+    await bind_projection(database, fence)
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     other_sync, other_job = uuid4(), uuid4()
     async with database() as db:
@@ -69,6 +70,7 @@ async def test_thread_chronology_ties_unknown_dates_and_scope(database, source):
                 ),
             ),
         )
+    await bind_projection(database, other_fence)
     query = service()
     rows, cursor = [], None
     async with database() as db:
@@ -107,6 +109,7 @@ async def test_thread_chronology_ties_unknown_dates_and_scope(database, source):
 
 async def test_http_blob_scope_revision_missing_corrupt_and_revoke_during_io(database, source):
     capture, fence = source
+    await bind_projection(database, fence)
     content = b"synthetic MIME body"
     digest = hashlib.sha256(content).hexdigest()
     ref = BlobReference(

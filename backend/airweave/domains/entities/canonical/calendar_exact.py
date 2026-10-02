@@ -12,6 +12,7 @@ from airweave.domains.entities.canonical.calendar import is_cancelled_recurring_
 from airweave.domains.entities.canonical.calendar_query import CalendarChanged
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query import RecordNotFound
+from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.entities.canonical.store import (
     CanonicalStoreError,
@@ -107,7 +108,9 @@ async def read_event(
 ) -> SourceRecord:
     """Use the existing compound identity index and current calendar visibility."""
     scope = select(Sync.observed_change_sequence).where(
-        Sync.organization_id == organization_id, Sync.id == sync_id
+        Sync.organization_id == organization_id,
+        Sync.id == sync_id,
+        source_is_readable(organization_id, sync_id),
     )
     sequence = await db.scalar(scope)
     parent = await db.scalar(
@@ -119,6 +122,7 @@ async def read_event(
             Entity.record_revision > 0,
             Entity.deleted_at.is_(None),
             content_is_available(),
+            source_is_readable(organization_id, sync_id),
         )
     )
     if sequence is None or parent is None:

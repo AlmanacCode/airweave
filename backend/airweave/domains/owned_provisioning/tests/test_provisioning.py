@@ -366,6 +366,7 @@ async def test_pause_resume_preserves_identity_source_and_cleanup(database, setu
         )
         sync = await db.get(Sync, first.sync_id)
         assert sync.status == "paused" and sync.provisioning_generation == 2
+        assert (await db.get(SourceConnection, first.source_connection_id)).is_authenticated
         with pytest.raises(HTTPException):
             await service.jobs.create(db, schemas.SyncJobCreate(sync_id=first.sync_id), ctx)
     workflows.cancel_sync_job_workflow.assert_awaited_once()
@@ -393,6 +394,27 @@ async def test_pause_resume_preserves_identity_source_and_cleanup(database, setu
     async with database() as db:
         with pytest.raises(HTTPException, match="Connect a new account after disconnect"):
             await service.ensure(db, ctx, account, request.model_copy(update={"generation": 5}))
+
+
+async def test_pause_never_renews_unavailable_source(database, setup):
+    """Capture control is not new provider-access evidence."""
+    from sqlalchemy import update
+
+    ctx, service, request, account, lifecycle, schedules, workflows = setup
+    async with database() as db:
+        first = await service.ensure(db, ctx, account, request)
+    async with database() as db:
+        await db.execute(
+            update(SourceConnection)
+            .where(SourceConnection.id == first.source_connection_id)
+            .values(is_authenticated=False)
+        )
+        await db.commit()
+    async with database() as db:
+        paused = await service.ensure(db, ctx, account, EnsureSource(generation=2, state="paused"))
+        assert paused.state == "paused"
+        assert not (await db.get(SourceConnection, first.source_connection_id)).is_authenticated
+    lifecycle.create.assert_awaited_once()
 
 
 async def test_initial_pause_can_activate_but_initial_disconnect_is_terminal(database, setup):
@@ -997,3 +1019,43 @@ def test_notion_provisioning_requires_native_uuid_pair(workspace, bot):
             user_id="owner",
             cron="0 * * * *",
         )
+
+
+async def test_unavailable_withdraws_reads_and_recovers_only_after_verification(database, setup):
+    from airweave.domains.entities.canonical.read_authority import source_is_readable
+
+    ctx, service, request, account, lifecycle, schedules, _ = setup
+    async with database() as db:
+        first = await service.ensure(db, ctx, account, request)
+    async with database() as db:
+        unavailable = await service.ensure(
+            db, ctx, account, EnsureSource(generation=2, state="unavailable")
+        )
+        assert unavailable.state == "unavailable"
+        assert unavailable.sync_id == first.sync_id
+        assert unavailable.source_connection_id == first.source_connection_id
+        assert not (await db.get(SourceConnection, first.source_connection_id)).is_authenticated
+        assert not await db.scalar(select(source_is_readable(ctx.organization.id, first.sync_id)))
+        with pytest.raises(HTTPException):
+            await service.jobs.create(db, schemas.SyncJobCreate(sync_id=first.sync_id), ctx)
+    lifecycle.create.assert_awaited_once()
+    # A credential retry never makes content readable before native validation.
+    lifecycle.create.side_effect = RuntimeError("Verification unavailable")
+    async with database() as db:
+        with pytest.raises(RuntimeError, match="Verification unavailable"):
+            await service.ensure(db, ctx, account, request.model_copy(update={"generation": 3}))
+    async with database() as db:
+        assert not await db.scalar(select(source_is_readable(ctx.organization.id, first.sync_id)))
+        assert (await service.get(db, ctx, account)).state == "pending"
+    lifecycle.create.side_effect = None
+    async with database() as db:
+        recovered = await service.ensure(
+            db, ctx, account, request.model_copy(update={"generation": 3})
+        )
+        assert recovered.state == "ready"
+        assert recovered.sync_id == first.sync_id
+        assert recovered.source_connection_id == first.source_connection_id
+        assert await db.scalar(select(source_is_readable(ctx.organization.id, first.sync_id)))
+        assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 1
+    assert lifecycle.create.await_count == 3
+    assert schedules.delete_all_schedules_for_sync.await_count >= 2

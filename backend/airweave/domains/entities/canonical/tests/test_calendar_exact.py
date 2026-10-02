@@ -7,6 +7,7 @@ import pytest
 from airweave.domains.entities.canonical.calendar_exact import CalendarReadIncomplete, read_event
 from airweave.domains.entities.canonical.query import RecordNotFound
 from airweave.domains.entities.canonical.requests import CaptureBatch
+from airweave.domains.entities.canonical.tests.helpers import bind_projection
 from airweave.platform.sources.records.google_calendar import record
 
 
@@ -19,6 +20,7 @@ async def seed(
     expanded_updated="2026-09-02T00:00:00Z",
 ):
     capture, fence = source
+    await bind_projection(database, fence)
     parent = record("calendar", {"id": "cal"})
 
     def item(kind, status, updated):
@@ -105,6 +107,7 @@ async def test_missing_native_versions_fail_closed(database, source):
 
 async def test_cancelled_recurring_tombstone_keeps_only_exclusion_identity(database, source):
     capture, fence = source
+    await bind_projection(database, fence)
     parent = record("calendar", {"id": "cal"})
     exclusion = record(
         "event_occurrence",
@@ -193,6 +196,7 @@ async def test_same_cancelled_exception_raw_state_beats_duplicate_tombstone(data
     from airweave.domains.entities.canonical.calendar_exact import choose
 
     capture, fence = source
+    await bind_projection(database, fence)
     parent = record("calendar", {"id": "cal"})
     payload = {
         "id": "exception",

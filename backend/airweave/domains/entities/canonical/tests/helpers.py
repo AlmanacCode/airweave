@@ -61,6 +61,8 @@ async def bind_projection(database, fence, source_name="gmail", collection_id=No
     """Create the real authenticated source/collection required for synthetic projection."""
     from uuid import uuid4
 
+    from sqlalchemy import select
+
     from airweave.domains.entities.canonical.projection_models import ProjectionBinding
     from airweave.models.collection import Collection
     from airweave.models.source_connection import SourceConnection
@@ -70,11 +72,13 @@ async def bind_projection(database, fence, source_name="gmail", collection_id=No
     readable_id = str(collection_id)
     source_id = uuid4()
     async with database() as db:
-        deployment = VectorDbDeploymentMetadata(
-            dense_embedder="test", embedding_dimensions=3, sparse_embedder="test"
-        )
-        db.add(deployment)
-        await db.flush()
+        deployment = await db.scalar(select(VectorDbDeploymentMetadata))
+        if deployment is None:
+            deployment = VectorDbDeploymentMetadata(
+                dense_embedder="test", embedding_dimensions=3, sparse_embedder="test"
+            )
+            db.add(deployment)
+            await db.flush()
         db.add(
             Collection(
                 id=collection_id,

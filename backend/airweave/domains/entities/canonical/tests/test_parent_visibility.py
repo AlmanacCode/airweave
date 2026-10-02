@@ -6,7 +6,7 @@ from sqlalchemy import select
 from airweave.domains.entities.canonical.query_models import RecordFilters
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.canonical.requests import BlobReference, RecordIdentity
-from airweave.domains.entities.canonical.tests.helpers import capture, observation
+from airweave.domains.entities.canonical.tests.helpers import bind_projection, capture, observation
 from airweave.models import Entity, EntityChange
 
 pytestmark = pytest.mark.integration
@@ -14,6 +14,7 @@ pytestmark = pytest.mark.integration
 
 async def test_parent_deletion_hides_content_before_sweep_and_replay_recovers(database, source):
     service, fence = source
+    await bind_projection(database, fence)
     parent_id = RecordIdentity(record_type="calendar", native_id="cal")
     parent = observation(identity=parent_id)
     child = observation(
@@ -65,6 +66,7 @@ async def test_parent_deletion_hides_content_before_sweep_and_replay_recovers(da
 @pytest.mark.parametrize("reason", ["access_revoked", "scope_removed"])
 async def test_revoked_root_tombstones_redact_retained_payload(database, source, reason):
     service, fence = source
+    await bind_projection(database, fence)
     record = observation(kind="delete", removal_reason=reason)
     result = await capture(database, service, fence, record)
     async with database() as db:

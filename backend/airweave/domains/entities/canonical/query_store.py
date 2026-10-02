@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query_models import RecordFilters
+from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.entities.canonical.store import (
     SourceNotFound,
@@ -22,6 +23,29 @@ from airweave.models.sync import Sync
 
 class CanonicalQueryStore:
     """No provider or index calls; reads only committed canonical rows."""
+
+    async def source_readable(self, db: AsyncSession, organization_id: UUID, sync_id: UUID) -> bool:
+        """One batched operation-level check, never a separate check for each hit."""
+        return bool(await db.scalar(select(source_is_readable(organization_id, sync_id))))
+
+    async def read(
+        self, db: AsyncSession, organization_id: UUID, sync_id: UUID, record_id: UUID
+    ) -> SourceRecord | None:
+        """Read citation identity while gating content against current source authority."""
+        row = (
+            await db.execute(
+                select(
+                    Entity,
+                    content_is_available() & source_is_readable(organization_id, sync_id),
+                ).where(
+                    Entity.id == record_id,
+                    Entity.organization_id == organization_id,
+                    Entity.sync_id == sync_id,
+                    Entity.record_revision > 0,
+                )
+            )
+        ).one_or_none()
+        return with_content_access(source_record(row[0]), bool(row[1])) if row else None
 
     async def captured_counts(
         self,
@@ -38,6 +62,7 @@ class CanonicalQueryStore:
                 Entity.record_revision > 0,
                 Entity.deleted_at.is_(None),
                 content_is_available(),
+                source_is_readable(organization_id, sync_id),
             )
             .group_by(Entity.entity_definition_short_name)
         )
@@ -56,15 +81,20 @@ class CanonicalQueryStore:
     ) -> tuple[SourceRecord, ...]:
         """Fetch one extra row so continuation does not require a count query."""
         scope = await db.scalar(
-            select(Sync.id).where(Sync.id == sync_id, Sync.organization_id == organization_id)
+            select(Sync.id).where(
+                Sync.id == sync_id,
+                Sync.organization_id == organization_id,
+                source_is_readable(organization_id, sync_id),
+            )
         )
         if scope is None:
-            raise SourceNotFound("Source does not exist in this organization")
+            raise SourceNotFound("Source is unavailable in this organization")
         statement = select(Entity).where(
             Entity.organization_id == organization_id,
             Entity.sync_id == sync_id,
             Entity.record_revision > 0,
             parent_is_visible(),
+            source_is_readable(organization_id, sync_id),
         )
         if filters.parent_record_id is not None and parent is None:
             raise ValueError("Parent filter requires an authorized parent identity")
@@ -105,10 +135,14 @@ class CanonicalQueryStore:
     ) -> tuple[SourceRecord, ...]:
         """Use native Gmail thread identity, keeping mailbox capture containers unchanged."""
         scope = await db.scalar(
-            select(Sync.id).where(Sync.id == sync_id, Sync.organization_id == organization_id)
+            select(Sync.id).where(
+                Sync.id == sync_id,
+                Sync.organization_id == organization_id,
+                source_is_readable(organization_id, sync_id),
+            )
         )
         if scope is None:
-            raise SourceNotFound("Source does not exist in this organization")
+            raise SourceNotFound("Source is unavailable in this organization")
         statement = select(Entity).where(
             Entity.organization_id == organization_id,
             Entity.sync_id == sync_id,
@@ -116,6 +150,7 @@ class CanonicalQueryStore:
             Entity.record_revision > 0,
             Entity.deleted_at.is_(None),
             content_is_available(),
+            source_is_readable(organization_id, sync_id),
             Entity.source_payload.op("->>")(literal_column("'threadId'")) == thread_id,
         )
         if after_id is not None:

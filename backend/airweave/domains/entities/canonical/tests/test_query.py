@@ -9,7 +9,7 @@ from airweave.domains.entities.canonical.query_models import RecordFilters, Reco
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.canonical.requests import CaptureBatch
 from airweave.domains.entities.canonical.store import CanonicalRecordStore, SourceNotFound
-from airweave.domains.entities.canonical.tests.helpers import observation
+from airweave.domains.entities.canonical.tests.helpers import bind_projection, observation
 
 
 def query_service():
@@ -20,6 +20,7 @@ def query_service():
 
 async def test_list_filters_and_cursor_scope(database, source):
     capture, fence = source
+    await bind_projection(database, fence)
     async with database() as db:
         await capture.capture(
             db,
@@ -68,6 +69,7 @@ async def test_list_filters_and_cursor_scope(database, source):
 
 async def test_change_window_continues_then_polls_new_commits(database, source):
     capture, fence = source
+    await bind_projection(database, fence)
     service = query_service()
     async with database() as db:
         await capture.capture(
@@ -96,6 +98,7 @@ async def test_change_window_continues_then_polls_new_commits(database, source):
 
 async def test_deleted_record_is_readable_but_not_in_active_list(database, source):
     capture, fence = source
+    await bind_projection(database, fence)
     service = query_service()
     async with database() as db:
         result = await capture.capture(
@@ -128,6 +131,7 @@ async def test_parent_filter_is_exact_visible_and_bound_to_continuation(database
     from airweave.domains.entities.canonical.tests.helpers import capture as store
 
     capture, fence = source
+    await bind_projection(database, fence)
     parent = observation(
         identity=RecordIdentity(record_type="message", native_id="parent", container_id="C1")
     ).model_copy(

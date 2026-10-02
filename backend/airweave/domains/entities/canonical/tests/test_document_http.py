@@ -17,7 +17,7 @@ from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.canonical.requests import BlobReference, RecordIdentity
 from airweave.domains.entities.canonical.store import CanonicalRecordStore, CanonicalStoreError
-from airweave.domains.entities.canonical.tests.helpers import capture, observation
+from airweave.domains.entities.canonical.tests.helpers import bind_projection, capture, observation
 from airweave.domains.storage.exceptions import StorageNotFoundError
 
 
@@ -131,6 +131,7 @@ async def test_document_read_authorization_integrity_and_native_contract(
     database, source, variant, status, code
 ):
     service, fence = source
+    await bind_projection(database, fence)
     root, document_record, contents, document = document_capture(fence.sync_id, variant)
     saved = await capture(database, service, fence, root, document_record)
     record_id = saved.changes[-1].record.id

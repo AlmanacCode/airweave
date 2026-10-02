@@ -19,7 +19,7 @@ from airweave.core.datetime_utils import utc_now_naive
 from airweave.db.session import get_db
 from airweave.domains.entities.canonical.requests import CaptureBatch
 from airweave.domains.entities.canonical.store import CanonicalStoreError
-from airweave.domains.entities.canonical.tests.helpers import observation
+from airweave.domains.entities.canonical.tests.helpers import bind_projection, observation
 from airweave.models import Organization
 from airweave.models.api_key import APIKey
 
@@ -37,6 +37,7 @@ async def test_persisted_keys_scope_expiry_and_revocation_over_http(database, so
         SimpleNamespace(context_cache=cache, rate_limiter=NullRateLimiter()),
     )
     capture, fence = source
+    await bind_projection(database, fence)
     other_org = uuid4()
     owner_key, foreign_key = uuid4().hex, uuid4().hex
     async with database() as db:

@@ -282,6 +282,7 @@ async def database(request):
             await connection.run_sync(migrate, "0010_owned_provisioning.py")
             await connection.run_sync(migrate, "0011_retained_projection_text.py")
             await connection.run_sync(migrate, "0012_scan_parent_verification.py")
+            await connection.run_sync(migrate, "0013_source_unavailability.py")
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()

@@ -20,7 +20,12 @@ from airweave.domains.entities.canonical.query_models import (
     SpreadsheetRead,
 )
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
-from airweave.domains.entities.canonical.store import CanonicalRecordStore, CanonicalStoreError
+from airweave.domains.entities.canonical.store import (
+    CanonicalRecordStore,
+    CanonicalStoreError,
+    SourceNotFound,
+    with_content_access,
+)
 from airweave.domains.entities.canonical.workspace_docs import read_document
 from airweave.domains.entities.canonical.workspace_sheets import read_spreadsheet
 from airweave.domains.storage.exceptions import StorageException
@@ -109,7 +114,7 @@ class CanonicalQueryService:
         self, db: AsyncSession, organization_id: UUID, sync_id: UUID, record_id: UUID
     ) -> SourceRecord:
         """Return exact current state, including an explicit tombstone if deleted."""
-        record = await self.records.read(db, organization_id, sync_id, record_id)
+        record = await self.queries.read(db, organization_id, sync_id, record_id)
         if record is None:
             raise RecordNotFound("Record not found in this source")
         return record
@@ -152,6 +157,8 @@ class CanonicalQueryService:
                 )
             )
         coverage = await capture_coverage(db, organization_id, (sync_id,))
+        if not await self.queries.source_readable(db, organization_id, sync_id):
+            raise SourceNotFound("Source is unavailable in this organization")
         return RecordPage(
             records=page, next_cursor=next_cursor, has_more=more, capture=coverage.get(sync_id)
         )
@@ -179,6 +186,17 @@ class CanonicalQueryService:
             limit=limit,
             high_watermark=position.high_watermark,
         )
+        if not await self.queries.source_readable(db, organization_id, sync_id):
+            page = page.model_copy(
+                update={
+                    "changes": tuple(
+                        change.model_copy(
+                            update={"record": with_content_access(change.record, False)}
+                        )
+                        for change in page.changes
+                    )
+                }
+            )
         next_cursor = self._encode(
             RecordCursor(
                 mode="changes",
@@ -245,6 +263,8 @@ class CanonicalQueryService:
                     after_id=last.id,
                 )
             )
+        if not await self.queries.source_readable(db, organization_id, sync_id):
+            raise SourceNotFound("Source is unavailable in this organization")
         return MailThreadPage(
             thread_id=thread_id, messages=messages, next_cursor=next_cursor, has_more=more
         )

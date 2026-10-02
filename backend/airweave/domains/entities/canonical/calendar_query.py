@@ -15,6 +15,7 @@ from airweave.domains.entities.canonical.calendar import CalendarScopeContext
 from airweave.domains.entities.canonical.cycle_models import CYCLE_KEY, CaptureCycle
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query import InvalidRecordCursor, RecordNotFound
+from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.scope_execution import ScopeExecution
 from airweave.domains.entities.canonical.store import (
     CanonicalStoreError,
@@ -157,6 +158,7 @@ class CalendarRangeService:
                 Entity.native_id == calendar_id,
                 Entity.deleted_at.is_(None),
                 content_is_available(),
+                source_is_readable(organization_id, sync_id),
             )
         )
         if calendar is None:
@@ -173,7 +175,11 @@ class CalendarRangeService:
             select(Sync).where(Sync.id == sync_id, Sync.organization_id == organization_id)
         )
         latest_calendar = await db.scalar(
-            select(Entity).where(Entity.id == calendar_record_id, content_is_available())
+            select(Entity).where(
+                Entity.id == calendar_record_id,
+                content_is_available(),
+                source_is_readable(organization_id, sync_id),
+            )
         )
         if latest is None or latest_calendar is None or latest.observed_change_sequence != sequence:
             raise CalendarChanged("Calendar changed while reading; restart range query")
@@ -290,6 +296,7 @@ class CalendarRangeService:
             Entity.container_id == calendar_id,
             Entity.deleted_at.is_(None),
             content_is_available(),
+            source_is_readable(organization_id, sync_id),
         )
         budget = (
             select(
