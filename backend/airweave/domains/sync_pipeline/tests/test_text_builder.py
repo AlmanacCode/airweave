@@ -98,6 +98,19 @@ class TestConvertSubBatch:
         assert "Hello world content" in entity.textual_representation
 
     @pytest.mark.asyncio
+    async def test_known_empty_conversion_retains_metadata_and_exact_body_boundary(self):
+        builder = TextualRepresentationBuilder(converter_registry=MagicMock())
+        converter = FakeConverter(results={"/path": ""})
+        entity = _make_entity()
+        boundaries = {}
+        failures = await builder._convert_sub_batch(
+            converter, [(entity, "/path")], FakeSyncContext(), boundaries
+        )
+        assert failures == []
+        assert "**Source**: test" in entity.textual_representation
+        assert entity.textual_representation[boundaries[entity.entity_id] :] == ""
+
+    @pytest.mark.asyncio
     async def test_no_content_returns_entity_as_failure(self):
         """Conversion returning None for a key → entity listed as failure."""
         builder = TextualRepresentationBuilder(converter_registry=MagicMock())

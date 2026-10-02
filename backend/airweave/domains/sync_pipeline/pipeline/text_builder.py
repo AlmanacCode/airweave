@@ -443,7 +443,7 @@ class TextualRepresentationBuilder:
             for entity, key in sub_batch:
                 text_content = results.get(key)
 
-                if not text_content:
+                if text_content is None:
                     sync_context.logger.warning(
                         f"Conversion returned no content for "
                         f"{entity.__class__.__name__}[{entity.entity_id}] "

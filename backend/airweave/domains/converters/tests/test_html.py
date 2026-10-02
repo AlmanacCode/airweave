@@ -20,7 +20,6 @@ def temp_dir():
 
 
 class TestHtmlConverterEncodingValidation:
-
     @pytest.mark.asyncio
     async def test_convert_clean_html(self, converter, temp_dir):
         file_path = os.path.join(temp_dir, "clean.html")
@@ -44,15 +43,16 @@ class TestHtmlConverterEncodingValidation:
         assert "test paragraph" in result[file_path]
 
     @pytest.mark.asyncio
-    async def test_convert_empty_html(self, converter, temp_dir):
+    @pytest.mark.parametrize("content", ["", "  ", "<html><body></body></html>"])
+    async def test_convert_empty_html(self, converter, temp_dir, content):
         file_path = os.path.join(temp_dir, "empty.html")
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write("")
+            f.write(content)
 
         result = await converter.convert_batch([file_path])
 
         assert file_path in result
-        assert result[file_path] is None
+        assert result[file_path] == ""
 
     @pytest.mark.asyncio
     async def test_convert_batch_multiple_html_files(self, converter, temp_dir):

@@ -619,3 +619,21 @@ PostgreSQL tables/indexes/TOAST totalled 25,239,552 bytes including failed-attem
 history; filesystem storage was 7,558,909 bytes including 5,671,657 copied original
 blob bytes. Published prepared-body payload was 1,465,083 bytes. These measurements
 are distinct and must not be extrapolated to whole-mailbox or delta-sync costs.
+
+
+### Known-empty Gmail bodies: completed pending drain
+
+The [empty-body follow-up](evidence/gmail-empty-body-projection-20261002.json)
+keeps failed/unavailable HTML conversion distinct from successful conversion with
+no visible text. Metadata stays searchable; the retained content boundary excludes
+that metadata from email body reads. Independent review verified this boundary.
+The actual Temporal workflow drained only the remaining three records in 2.115
+seconds: all 456 records are now published as 968 documents, with zero pending
+conversion failures. Three real retained reads returned empty text, zero content
+characters and no continuation; SQL prepared bodies were empty strings, not NULL.
+Original payload/revision/blob-reference digests remained unchanged. Three local
+dense calls and three Vespa feeds ran; no provider or paid model calls occurred.
+The final operator stdout serialization failed after durable evidence was saved;
+this is a reporting defect, not a workflow failure. No recapture or repeated
+projection was performed to fix reporting. Production worker activation and
+capture child-workflow dispatch remain unqualified.

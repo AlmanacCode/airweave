@@ -12,7 +12,7 @@ from airweave.domains.sync_pipeline.exceptions import EntityProcessingError
 class HtmlConverter(BaseTextConverter):
     """Converts HTML files to markdown text using html-to-markdown."""
 
-    async def convert_batch(self, file_paths: List[str]) -> Dict[str, str]:
+    async def convert_batch(self, file_paths: List[str]) -> Dict[str, str | None]:
         """Convert HTML files to markdown text."""
         try:
             from html_to_markdown import convert
@@ -37,7 +37,7 @@ class HtmlConverter(BaseTextConverter):
                             raw_bytes = f.read()
 
                         if not raw_bytes:
-                            return None
+                            return ""
 
                         try:
                             html_content = raw_bytes.decode("utf-8")
@@ -51,15 +51,15 @@ class HtmlConverter(BaseTextConverter):
                                 )
 
                         if not html_content.strip():
-                            return None
+                            return ""
 
                         markdown = convert(html_content)
 
-                        return markdown.strip() if markdown else None
+                        return markdown.strip() if markdown else ""
 
                     text = await run_in_thread_pool(_convert)
 
-                    if text:
+                    if text is not None:
                         results[path] = text
                         logger.debug(f"Converted HTML file: {path} ({len(text)} characters)")
                     else:
@@ -72,7 +72,7 @@ class HtmlConverter(BaseTextConverter):
 
         await asyncio.gather(*[_convert_one(p) for p in file_paths], return_exceptions=True)
 
-        successful = sum(1 for r in results.values() if r)
+        successful = sum(1 for r in results.values() if r is not None)
         logger.info(f"HTML conversion complete: {successful}/{len(file_paths)} files successful")
 
         return results

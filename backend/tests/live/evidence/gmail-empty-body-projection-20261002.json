@@ -1,0 +1,61 @@
+{
+  "real_temporal_workflow": true,
+  "real_activity_and_projector": true,
+  "real_gmail_registry_class": true,
+  "terminal": {
+    "status": "completed"
+  },
+  "workflow_seconds": 2.115,
+  "total_seconds": 2.95,
+  "records": 456,
+  "published_records": 456,
+  "published_chunks": "968",
+  "failed_records": 0,
+  "projection_error_classes": {},
+  "indexing": {
+    "metadata_missing": 0,
+    "text_ready": 456,
+    "text_partial": 0,
+    "text_unavailable": 0
+  },
+  "activity_page_count": 1,
+  "activity_pages": [
+    {
+      "has_more": false,
+      "published": 3,
+      "superseded": 0,
+      "failed": 0
+    }
+  ],
+  "documents_prepared": 3,
+  "document_payload_bytes": 47975,
+  "derived_text_bytes_written_including_retries": 1136,
+  "network": {
+    "local_dense_requests": 3,
+    "vespa_requests": 3,
+    "forbidden_requests": 0
+  },
+  "provider_calls": 0,
+  "paid_model_calls": 0,
+  "originals_unchanged": true,
+  "source_capture_preserved": true,
+  "shared_vespa_schema_redeployed": false,
+  "resumed_existing_clone": true,
+  "chunk_model_resolution": "same cached minishlab/potion-base-8M weights via explicit local snapshot URL",
+  "runtime_caps": {
+    "seconds": 900,
+    "derived_text_bytes": 67108864,
+    "documents": 5000
+  },
+  "automatic_capture_child_workflow_dispatch_qualified": false,
+  "known_empty_content_reads": {
+    "records": 3,
+    "mail_body_text_empty": true,
+    "content_characters_zero": true,
+    "read_text_empty": true,
+    "next_offset_null": true,
+    "metadata_remains_indexed": true,
+    "provider_calls": 0
+  },
+  "reporter_exit": "Final stdout Decimal serialization failed after evidence was saved; workflow completed and separate retained reads passed."
+}
