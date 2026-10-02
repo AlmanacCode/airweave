@@ -37,7 +37,11 @@ def _require_single_frame(path: Path) -> None:
 
 
 def extract(path: Path, tessdata: Path, languages: str) -> bytes:
-    """Return complete UTF-8 text or fail; partial results are never published."""
+    """Preserve native text and OCR images; fail rather than publish a truncated result.
+
+    Locked PyMuPDF 1.26.7 appends image OCR after native text, without restoring
+    reading order or recognizing illegible/vector text. Originals remain authoritative.
+    """
     import pymupdf
 
     if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
@@ -54,7 +58,7 @@ def extract(path: Path, tessdata: Path, languages: str) -> bytes:
         output = bytearray()
         for page in document:
             textpage = page.get_textpage_ocr(
-                language=languages, dpi=DPI, full=True, tessdata=str(tessdata)
+                language=languages, dpi=DPI, full=False, tessdata=str(tessdata)
             )
             text = page.get_text("text", textpage=textpage).strip().encode("utf-8")
             separator = b"\n\n" if output and text else b""

@@ -1,0 +1,195 @@
+{
+  "status": "real_local_native_preservation_qualified_for_one_pdf",
+  "models": {
+    "repository": "https://github.com/tesseract-ocr/tessdata_fast",
+    "commit": "87416418657359cb625c412a48b6e1d6d41c29bd",
+    "license": "Apache-2.0",
+    "downloaded_bytes": 5247197,
+    "files": [
+      {
+        "name": "eng.traineddata",
+        "source": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/eng.traineddata",
+        "bytes": 4113088,
+        "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+      },
+      {
+        "name": "hin.traineddata",
+        "source": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/hin.traineddata",
+        "bytes": 1122751,
+        "sha256": "4c73ffc59d497c186b19d1e90f5d721d678ea6b2e277b719bee4e2af12271825"
+      },
+      {
+        "name": "LICENSE",
+        "source": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/LICENSE",
+        "bytes": 11358,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      }
+    ]
+  },
+  "private_worker_candidate": {
+    "original_sha256": "dc5a4c47500c4370448b5349a5049dfae8a1a86860878172ff7bb50bcc6440f2",
+    "candidate_sha256": "4b0b6f7feeebd3a62d7a485791a7071d55e361f91146556a68cb9953594faa45",
+    "sole_functional_change": "get_textpage_ocr(full=True) -> full=False"
+  },
+  "baseline_full_ocr": {
+    "input_bytes": 2545037,
+    "pages": 14,
+    "pages_needing_ocr": 5,
+    "native_text_characters": 8291,
+    "native_accepted_text_characters": 7683,
+    "languages": [
+      "eng",
+      "hin"
+    ],
+    "seconds": 9.664,
+    "output_available": true,
+    "output_characters": 10110,
+    "native_token_occurrences": 1491,
+    "native_token_occurrences_found_in_ocr": 1203,
+    "native_token_occurrence_recall": 0.8068,
+    "native_nonempty_pages_exact_normalized_contained": 1,
+    "native_nonempty_pages": 14,
+    "original_blob_copy_hash_unchanged": true,
+    "forbidden_http_attempts": 0,
+    "provider_calls": 0,
+    "paid_calls": 0,
+    "existing_timeout_seconds": 120,
+    "retained_index_or_body_state_mutated": false,
+    "accuracy_scope": "native text token preservation only; OCR-only image text has no independent ground truth"
+  },
+  "candidate_partial_ocr": {
+    "sole_functional_change": "private worker full=True -> full=False",
+    "worker_original_unchanged": true,
+    "installed_pymupdf": "1.26.7",
+    "languages": [
+      "eng",
+      "hin"
+    ],
+    "cases": [
+      {
+        "case": "short-cover-native-body.pdf",
+        "seconds": 0.091,
+        "output_available": true,
+        "output_characters": 200,
+        "input_sha256_unchanged": true,
+        "known_expected_exact_normalized": [
+          true,
+          true
+        ],
+        "native_token_occurrences": 32,
+        "native_token_occurrences_found": 32,
+        "native_nonempty_pages": 2,
+        "native_nonempty_pages_exact_normalized_contained": 2
+      },
+      {
+        "case": "bilingual.png",
+        "seconds": 0.222,
+        "output_available": true,
+        "output_characters": 56,
+        "input_sha256_unchanged": true,
+        "known_expected_exact_normalized": [
+          true,
+          false,
+          false
+        ],
+        "native_token_occurrences": 0,
+        "native_token_occurrences_found": 0,
+        "native_nonempty_pages": 0,
+        "native_nonempty_pages_exact_normalized_contained": 0
+      },
+      {
+        "case": "retained-representative.private.pdf",
+        "seconds": 3.174,
+        "output_available": true,
+        "output_characters": 9192,
+        "input_sha256_unchanged": true,
+        "known_expected_exact_normalized": null,
+        "native_token_occurrences": 1491,
+        "native_token_occurrences_found": 1491,
+        "native_nonempty_pages": 14,
+        "native_nonempty_pages_exact_normalized_contained": 14
+      }
+    ],
+    "external_http_attempts": 0,
+    "provider_calls": 0,
+    "paid_model_calls": 0,
+    "index_or_canonical_state_mutated": false,
+    "reading_order": "partial OCR text appends after native text; not original reading order",
+    "partial_ocr_scope": "installed1.26.7 images only; vector/illegible native areas not independently recovered",
+    "accuracy": "image-only text has no independent ground truth except the known synthetic fixture"
+  },
+  "synthetic_baseline": {
+    "existing_local_ocr_provider": true,
+    "languages": [
+      "eng",
+      "hin"
+    ],
+    "synthetic_known_text": [
+      {
+        "case": "short-cover-native-body.pdf",
+        "seconds": 0.206,
+        "output_available": true,
+        "characters": 200,
+        "expected_exact_normalized": [
+          true,
+          true
+        ],
+        "native_english_text_layer_preserved_exactly": true,
+        "output_sha256": "61c0468c7eec3ac7a9e0baa9869b80f655ce71826b52c68cf655507132ccb605"
+      },
+      {
+        "case": "bilingual.png",
+        "seconds": 0.184,
+        "output_available": true,
+        "characters": 56,
+        "expected_exact_normalized": [
+          true,
+          false,
+          false
+        ],
+        "native_english_text_layer_preserved_exactly": null,
+        "output_sha256": "930dab9b9ecfb2953971be5ea08b655a75e1e6cb9873401e3facb4d0f540e36f"
+      }
+    ],
+    "native_pdf_pages": 2,
+    "native_pdf_pages_needing_ocr": 1,
+    "external_http_attempts": 0,
+    "paid_calls": 0,
+    "provider_calls": 0,
+    "rasterization": "existing adapter full=True; native text is OCRed again rather than merged unchanged",
+    "hindi_metrics": [
+      {
+        "expected_unicode_codepoints": 11,
+        "edit_distance_including_word_spaces": 1,
+        "exact_codepoint_sequence_ignoring_spaces": true,
+        "expected_words": 2,
+        "observed_words": 1
+      },
+      {
+        "expected_unicode_codepoints": 16,
+        "edit_distance_including_word_spaces": 3,
+        "exact_codepoint_sequence_ignoring_spaces": true,
+        "expected_words": 4,
+        "observed_words": 1
+      }
+    ],
+    "renderer": "native macOS AppKit + installed Kohinoor Devanagari, visually inspected, no replacement boxes",
+    "fixture_setup_failures_before_adapter_invocation": 2,
+    "fixture_config_followup": "reuse existing backend/conftest.py synthetic defaults"
+  },
+  "remaining_scope": {
+    "bulk_pending_retry_not_run": true,
+    "previously_published_records": 2018,
+    "pending_records": 16,
+    "mapped_extensions": {
+      ".html": 16,
+      ".pdf": 21,
+      ".gif": 1
+    },
+    "new_jpeg_or_png_parts_in_pending_scope": 0,
+    "broader_image_admission_policy_or_reprojection_not_qualified": true,
+    "retained_image_only_ocr_accuracy_not_independently_judged": true,
+    "hindi_word_boundaries_not_preserved_in_known_fixture": true,
+    "original_representations_remain_authoritative": true
+  }
+}

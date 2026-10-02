@@ -118,7 +118,7 @@ def test_multiframe_images_are_not_silently_truncated(tmp_path, models):
 
 def test_output_limit_rejects_whole_result(tmp_path, models, monkeypatch):
     def synthetic_ocr(page, *, full, dpi, **kwargs):
-        assert full is True and dpi == 150
+        assert full is False and dpi == 150
         return page.get_textpage()
 
     monkeypatch.setattr(pymupdf.Page, "get_textpage_ocr", synthetic_ocr)
@@ -151,6 +151,30 @@ async def test_real_local_ocr_with_explicit_models(tmp_path):
     assert "LOCAL OCR ORIGINAL 12345" in result[str(path)]
     assert "LOCAL OCR ORIGINAL 12345" in result[str(image_path)]
     assert "LOCAL OCR ORIGINAL 12345" in result[str(tiff_path)]
+
+
+async def test_real_local_ocr_preserves_native_text_alongside_image(tmp_path):
+    directory = os.environ.get("LOCAL_OCR_TEST_TESSDATA")
+    if not directory:
+        pytest.skip("Set LOCAL_OCR_TEST_TESSDATA to explicitly qualify real local OCR")
+    with pymupdf.open() as image_source:
+        page = image_source.new_page(width=400, height=100)
+        page.insert_text((20, 55), "IMAGE OCR ORIGINAL 54321", fontsize=20)
+        raster = page.get_pixmap(matrix=pymupdf.Matrix(2, 2)).tobytes("png")
+    path = tmp_path / "native-and-image.pdf"
+    with pymupdf.open() as document:
+        page = document.new_page(width=500, height=350)
+        page.insert_text(
+            (30, 35),
+            "Native provenance v1.2: a_0/O-1; xYz_987 & (retain punctuation).",
+            fontsize=8,
+        )
+        page.insert_image(pymupdf.Rect(30, 90, 470, 200), stream=raster)
+        native = page.get_text().strip()
+        document.save(path)
+    result = (await LocalOcrProvider(directory).convert_batch([str(path)]))[str(path)]
+    assert native in result
+    assert "IMAGE OCR ORIGINAL 54321" in result
 
 
 async def test_failed_file_does_not_discard_other_results(models, tmp_path, monkeypatch):
