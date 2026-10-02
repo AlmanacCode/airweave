@@ -112,6 +112,20 @@ async def test_group_after_final_gate_promotes_survivor_and_limits_cards(
     vector.seed_results(SearchResults(results=candidates))
     service = client._transport.app.dependency_overrides[deps.get_container]().owned_search
     service._tokenizer = type("Tokenizer", (), {"count_tokens": lambda self, text: len(text)})()
+    if withdraw == "native_current":
+        response = await client.post(
+            "/sync/search/candidates",
+            json={
+                "query": "exact",
+                "sync_ids": [str(fence.sync_id)],
+                "mode": "keyword",
+                "limit": 2,
+            },
+        )
+        assert response.status_code == 200, response.text
+        page = response.json()
+        assert len(page["candidates"]) == 2 and page["shortlist_truncated"]
+        _assert_ungrouped_native_versions(page)
 
     async def rerank(query, documents, top_n):
         if withdraw is True or withdraw == "parent":
@@ -160,3 +174,14 @@ async def test_group_after_final_gate_promotes_survivor_and_limits_cards(
     assert first["group"]["native_id"] == "shared"
     assert items[1]["group"]["native_id"] == "other"
     assert all(m["identity"]["native_id"] != "m0" for m in first["group"]["additional_matches"])
+
+
+def _assert_ungrouped_native_versions(page):
+    for candidate in page["candidates"]:
+        assert candidate["hit"]["native_version"] == {
+            "kind": "session",
+            "revision": 7,
+            "content_revision": 11,
+        }
+        assert candidate["hit"]["group"]["matched_records"] == 1
+        assert candidate["hit"]["group"]["additional_matches"] == []

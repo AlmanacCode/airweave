@@ -7,6 +7,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 from airweave.domains.entities.canonical.coverage_models import CaptureCoverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
+from airweave.domains.entities.canonical.projection_models import ProjectionLocator
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.native_ingestion.models import NativeVersion
 from airweave.domains.search.retrieval_strategy import RetrievalStrategy
@@ -123,3 +124,39 @@ class OwnedSearchResponse(BaseModel):
     excluded_candidates: int
     postfilter_excluded: int
     retrieval_incomplete: bool
+
+
+class OwnedCandidate(BaseModel):
+    """Internal candidate for current product authorization before model disclosure."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    hit: OwnedSearchHit
+    projection: ProjectionLocator
+    retrieval_score: float = Field(gt=0, allow_inf_nan=False)
+    text: str = Field(max_length=32000)
+    text_truncated: bool
+
+    @model_validator(mode="after")
+    def exact_publication(self):
+        """Capture identity must refer to the same exact published record."""
+        if (
+            self.hit.record_id != self.projection.record_id
+            or self.hit.revision != self.projection.revision
+        ):
+            raise ValueError("Candidate identity differs from projection")
+        return self
+
+
+class OwnedCandidatesResponse(BaseModel):
+    """Ungrouped retrieval shortlist; native authority still belongs to Almanac."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    candidates: tuple[OwnedCandidate, ...] = Field(max_length=200)
+    sources: tuple[OwnedSearchCoverage, ...]
+    candidate_window_full: bool
+    engine_partial: bool
+    excluded_candidates: int = Field(ge=0)
+    postfilter_excluded: int = Field(ge=0)
+    shortlist_truncated: bool
+    authority: Literal["canonical_snapshot"] = "canonical_snapshot"
+    order: Literal["retrieval_rank"] = "retrieval_rank"

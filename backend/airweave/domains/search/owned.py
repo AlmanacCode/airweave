@@ -29,6 +29,8 @@ from airweave.domains.entities.canonical.source import indexed_record_types
 from airweave.domains.entities.canonical.store import content_is_available
 from airweave.domains.native_ingestion.models import NativeVersion
 from airweave.domains.search.owned_models import (
+    OwnedCandidate,
+    OwnedCandidatesResponse,
     OwnedRanking,
     OwnedSearchCoverage,
     OwnedSearchGroup,
@@ -96,6 +98,12 @@ class _CollectionResult(BaseModel):
     window_full: bool
 
 
+class _RetrievedSearch(_CollectionResult):
+    """One retrieval's detached candidates and original source scope."""
+
+    scopes: dict[UUID, _SourceScope]
+
+
 class OwnedSearchService:
     """Canonical retrieval and optional shared ranking, without source provider calls."""
 
@@ -113,12 +121,12 @@ class OwnedSearchService:
         self._reranker = reranker
         self._tokenizer = tokenizer
 
-    async def search(
+    async def _retrieve(
         self,
         sessions: async_sessionmaker[AsyncSession],
         ctx: ApiContext,
         request: OwnedSearchRequest,
-    ) -> OwnedSearchResponse:
+    ) -> _RetrievedSearch:
         """Resolve exact authorized scopes before any embedding/index request."""
         async with sessions() as db:
             scopes, groups = await self._resolve_scopes(db, ctx, request)
@@ -133,7 +141,6 @@ class OwnedSearchService:
                     "message": "Selected sources need canonical search metadata re-projection",
                 },
             )
-        scope_snapshot = self._scope_identity(scopes)
         hits, scores, matched_text, exclusions, postfiltered = {}, {}, {}, 0, 0
         engine_partial, full = False, False
         plan = SearchPlan(
@@ -193,6 +200,71 @@ class OwnedSearchService:
             scores.update(outcome.scores)
             matched_text.update(outcome.text)
             postfiltered += outcome.postfiltered
+        return _RetrievedSearch(
+            hits=hits,
+            scores=scores,
+            text=matched_text,
+            excluded=exclusions,
+            postfiltered=postfiltered,
+            engine_partial=engine_partial,
+            window_full=full,
+            scopes=scopes,
+        )
+
+    async def candidates(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        ctx: ApiContext,
+        request: OwnedSearchRequest,
+    ) -> OwnedCandidatesResponse:
+        """Return one bounded shortlist for product authority checks, without reranking."""
+        found = await self._retrieve(sessions, ctx, request)
+        scope_snapshot = self._scope_identity(found.scopes)
+        async with sessions() as db:
+            sources = await self._coverage(db, ctx, request)
+            fresh_scopes, _ = await self._resolve_scopes(db, ctx, request)
+            if self._scope_identity(fresh_scopes) != scope_snapshot:
+                raise HTTPException(404, "Requested indexed sources changed during retrieval")
+            eligible = await self._final_publications(
+                db, ctx, request, found.scores, scope_snapshot
+            )
+        ordered = sorted(
+            found.hits.keys() & eligible, key=lambda key: (-found.scores[key][0], str(key))
+        )
+        # Keep original matched text separate from presentation snippets. The
+        # product may discard candidates before any external model sees them.
+        candidates = tuple(
+            OwnedCandidate(
+                hit=found.hits[key],
+                projection=found.scores[key][1],
+                retrieval_score=found.scores[key][0],
+                text=found.text[key][:32000],
+                text_truncated=len(found.text[key]) > 32000,
+            )
+            for key in ordered[: request.limit]
+        )
+        return OwnedCandidatesResponse(
+            candidates=candidates,
+            sources=sources,
+            candidate_window_full=found.window_full,
+            engine_partial=found.engine_partial,
+            excluded_candidates=found.excluded + len(found.hits.keys() - eligible),
+            postfilter_excluded=found.postfiltered,
+            shortlist_truncated=len(ordered) > request.limit,
+        )
+
+    async def search(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        ctx: ApiContext,
+        request: OwnedSearchRequest,
+    ) -> OwnedSearchResponse:
+        """Retrieve and rank provider content within the owned canonical authority."""
+        found = await self._retrieve(sessions, ctx, request)
+        scope_snapshot = self._scope_identity(found.scopes)
+        hits, scores, matched_text = found.hits, found.scores, found.text
+        exclusions, postfiltered = found.excluded, found.postfiltered
+        engine_partial, full = found.engine_partial, found.window_full
         # Revalidate the whole union before any remote text disclosure: earlier
         # collections may have changed while later collections were retrieved.
         async with sessions() as db:

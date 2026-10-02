@@ -28,6 +28,20 @@ qualification, not a measured production latency improvement.
 
 ## Topology and limits
 
+`POST /sync/search/candidates` reuses the same request filters, retrieval, canonical
+publication gates and disconnect cancellation, but never invokes the reranker.
+It returns individual record candidates before conversation grouping, respecting
+the requested limit (maximum 200). Each includes the exact projection locator,
+retrieval score, native snapshot version when present, presentation excerpts, and
+matched text capped at 32,000 characters with explicit truncation. This bounds the
+internal HTTP transfer; the existing reranker's token limit remains separate.
+
+This endpoint is for Almanac's server to validate current native DB ownership and
+versions before model disclosure. `authority=canonical_snapshot` deliberately
+does not certify current wiki/session authority. Product validation and shared
+reranking of the eligible mixed shortlist are still required integration work.
+No candidate cache, second index lookup or durable search session is introduced.
+
 Almanac's server-owned `CaptureTarget` chooses organization and collection for each
 owner/provider/project. Provisioning does not require an organization or collection
 per provider. Sources may share a collection, or use several collections in the

@@ -752,3 +752,57 @@ async def test_collection_retrieval_overlaps_with_bounded_independent_sessions(
     assert len({id(session) for session in sessions_seen}) == 7
     assert embeddings_seen[0] is not None
     assert all(value is embeddings_seen[0] for value in embeddings_seen)
+
+
+@pytest.mark.parametrize("changed", [False, True])
+async def test_candidate_http_never_reranks_and_preserves_exact_bounded_text(
+    database, source, indexed, http_search, changed
+):
+    fence, locator, _ = indexed
+    client, vector, _, executor, _ = http_search
+    original = hit(fence, locator.encode())
+    original.textual_representation = "Original matching body " + "x" * 40000
+    vector.seed_results(SearchResults(results=[original]))
+    service = client._transport.app.dependency_overrides[deps.get_container]().owned_search
+    service._reranker = SimpleNamespace(
+        rerank=AsyncMock(
+            side_effect=AssertionError("Candidates must not reach an external reranker")
+        )
+    )
+    service._tokenizer = SimpleNamespace(count_tokens=lambda text: len(text))
+    execute = executor.execute
+    requests = 0
+
+    async def retrieve(**kwargs):
+        nonlocal requests
+        requests += 1
+        result = await execute(**kwargs)
+        if changed:
+            await capture(database, source[0], fence, observation(payload={"changed": True}))
+        return result
+
+    executor.execute = retrieve
+    response = await client.post(
+        "/sync/search/candidates",
+        json={
+            "query": "budget",
+            "sync_ids": [str(fence.sync_id)],
+            "mode": "keyword",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert requests == 1
+    service._reranker.rerank.assert_not_awaited()
+    body = response.json()
+    assert body["authority"] == "canonical_snapshot"
+    assert body["order"] == "retrieval_rank"
+    if changed:
+        assert body["candidates"] == []
+        assert "Original matching body" not in response.text
+    else:
+        (candidate,) = body["candidates"]
+        assert candidate["projection"] == locator.model_dump(mode="json")
+        assert candidate["hit"]["record_id"] == str(locator.record_id)
+        assert candidate["text"] == original.textual_representation[:32000]
+        assert candidate["text_truncated"] is True
+        assert candidate["hit"]["excerpts"][0] == original.textual_representation[:2000]

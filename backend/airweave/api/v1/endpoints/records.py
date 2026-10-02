@@ -1,6 +1,6 @@
 """Internal service API for committed source records; provider APIs are never read here."""
 
-from asyncio import FIRST_COMPLETED, create_task, gather, wait
+from asyncio import FIRST_COMPLETED, Task, create_task, gather, wait
 from typing import Literal
 from uuid import UUID
 
@@ -41,7 +41,11 @@ from airweave.domains.entities.canonical.wispr_models import (
     MeetingPage,
 )
 from airweave.domains.entities.canonical.wispr_query import CanonicalWisprQuery
-from airweave.domains.search.owned_models import OwnedSearchRequest, OwnedSearchResponse
+from airweave.domains.search.owned_models import (
+    OwnedCandidatesResponse,
+    OwnedSearchRequest,
+    OwnedSearchResponse,
+)
 from airweave.platform.sources.records.sheets_manifest import GridBounds
 
 router = TrailingSlashRouter()
@@ -63,6 +67,24 @@ async def search_records(
 ) -> OwnedSearchResponse:
     """Retrieve bounded indexed originals; no provider requests or agent execution."""
     work = create_task(container.owned_search.search(sessions, ctx, request))
+    return await _await_search(work, http_request)
+
+
+@router.post("/search/candidates", response_model=OwnedCandidatesResponse)
+async def search_candidates(
+    request: OwnedSearchRequest,
+    http_request: Request,
+    sessions: async_sessionmaker[AsyncSession] = Depends(deps.get_search_session_factory),
+    ctx: ApiContext = Depends(deps.get_owned_search_context),
+    container: Container = Depends(deps.get_container),
+) -> OwnedCandidatesResponse:
+    """Internal unranked candidates; the caller must check native Almanac authority."""
+    work = create_task(container.owned_search.candidates(sessions, ctx, request))
+    return await _await_search(work, http_request)
+
+
+async def _await_search[T](work: Task[T], http_request: Request) -> T:
+    """Cancel either retrieval path when its caller disconnects."""
     disconnected = create_task(_search_disconnected(http_request))
     try:
         done, _ = await wait((work, disconnected), return_when=FIRST_COMPLETED)
