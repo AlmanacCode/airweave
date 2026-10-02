@@ -7,7 +7,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from airweave.api import deps
 from airweave.api.v1.endpoints.native_sources import router
@@ -58,7 +58,13 @@ async def test_concurrent_same_identity_and_immutable_collection(database, nativ
     assert all(result == results[0] for result in results)
     async with database() as db:
         assert await db.scalar(select(func.count()).select_from(Sync)) == 1
+        assert await db.scalar(select(Sync.index_pipeline_version)) == 3
+        await db.execute(update(Sync).values(index_pipeline_version=2))
+        await db.commit()
         assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 1
+    await ensure(database, service, org, request)
+    async with database() as db:
+        assert await db.scalar(select(Sync.index_pipeline_version)) == 2  # Never upgrade existing.
     with pytest.raises(HTTPException) as conflict:
         await ensure(database, service, org, request.model_copy(update={"collection": "two"}))
     assert conflict.value.status_code == 409

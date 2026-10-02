@@ -37,6 +37,17 @@ async def test_exact_kind_reprojection_prefilter_and_sql_guard(database, indexed
         "native_types": ["person"],
     }
     response = await client.post("/sync/search/candidates", json=request)
+    assert response.status_code == 200, response.text
+    assert response.json()["candidates"] == []  # Provider v2 needs no native upgrade.
+    vector._calls.clear()
+    async with database() as db:
+        await db.execute(
+            update(SourceConnection)
+            .where(SourceConnection.id == connection.id)
+            .values(short_name="almanac")
+        )
+        await db.commit()
+    response = await client.post("/sync/search/candidates", json=request)
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "reindex_required"
     assert not vector._calls

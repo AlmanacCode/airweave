@@ -134,13 +134,14 @@ class OwnedSearchService:
         """Resolve exact authorized scopes before any embedding/index request."""
         async with sessions() as db:
             scopes, groups = await self._resolve_scopes(db, ctx, request)
-        required_version = (
-            NATIVE_TYPE_PIPELINE_VERSION
-            if request.native_types
-            else SEARCH_METADATA_PIPELINE_VERSION
-        )
         if self._filtered(request) and any(
-            scope.index_pipeline_version < required_version for scope in scopes.values()
+            scope.index_pipeline_version
+            < (
+                NATIVE_TYPE_PIPELINE_VERSION
+                if request.native_types and scope.short_name == "almanac"
+                else SEARCH_METADATA_PIPELINE_VERSION
+            )
+            for scope in scopes.values()
         ):
             raise HTTPException(
                 409,

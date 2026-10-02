@@ -47,3 +47,13 @@ as the capture factory. Legacy sources retain their existing initial version.
 The version is an internal repository argument, not a client-controlled SyncCreate
 field; existing syncs are never upgraded implicitly. Sync service tests verify
 legacy, Gmail and Slack creation paths; this does not prove hosted provisioning.
+
+## Native type facet (pipeline 3)
+
+New sources created by `NativeSourceStore.ensure` start at pipeline 3. Existing
+native sources retain their version, including repeat ensure calls. After deploying
+compatible schema/API/workers, upgrade an existing native sync with the same
+operator procedure, for example `--expect 2 --target 3` (or its actual current
+version). Native `native_types` filtering requires version 3 only for Almanac
+scopes; provider scopes retain their pipeline-2 date/type requirement. Reprojection
+uses retained originals and does not fetch provider data again.

@@ -314,9 +314,10 @@ retrieval window. Empty means unrestricted. Provider records have no native type
 The canonical SQL enrichment independently checks the retained original's type.
 
 Vespa stores this as `airweave_system_metadata_native_type`, an attribute stamped
-from the retained native original. Exact-native-type requests require pipeline 3;
-older selected scopes return `reindex_required`, rather than an incorrect empty
-result. Existing canonical type/date filters still require pipeline 2. Deployment
+from the retained native original. Exact-native-type requests require pipeline 3 for Almanac scopes;
+older selected native scopes return `reindex_required`, rather than an incorrect empty
+result. New native sources start at pipeline 3; existing sources never upgrade implicitly.
+Provider scopes and existing canonical type/date filters still require pipeline 2. Deployment
 must install the new Vespa schema and reproject native originals at pipeline 3;
 no upstream recapture is needed. That deployment/reprojection is not performed by
 these changes.

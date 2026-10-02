@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from airweave.domains.entities.canonical.search_metadata import NATIVE_TYPE_PIPELINE_VERSION
 from airweave.domains.native_ingestion.models import NativeSourceBinding
 from airweave.domains.native_ingestion.source_models import (
     EnsureNativeSource,
@@ -66,6 +67,7 @@ class NativeSourceStore:
                 name=f"Almanac {binding.dataset}",
                 status="ACTIVE",
                 sync_type="full",
+                index_pipeline_version=NATIVE_TYPE_PIPELINE_VERSION,
             )
             .on_conflict_do_nothing(index_elements=[Sync.id])
             .returning(Sync.id)
