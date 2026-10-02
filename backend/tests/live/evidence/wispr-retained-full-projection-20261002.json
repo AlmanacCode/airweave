@@ -1,0 +1,82 @@
+{
+  "terminal": "completed",
+  "elapsed_seconds": 341.289,
+  "workflow_started": true,
+  "resumed_exact_existing_clone": true,
+  "prior_derived_payload_bytes": 241352806,
+  "cumulative_derived_payload_bytes": 355698167,
+  "counts": {
+    "derived_bytes": 5193519,
+    "document_bytes": 109151842,
+    "documents": 650,
+    "local_dense_requests": 655,
+    "vespa_requests": 650,
+    "forbidden_requests": 0
+  },
+  "runtime_commit": "f6c89e446365629b075a30e791c39edfdf63c602",
+  "capture_complete": false,
+  "supported_discovery_cycle_complete": true,
+  "native_principal_attested": false,
+  "raw_editor_audio_qualified": false,
+  "paid_calls": 0,
+  "provider_calls": 0,
+  "limits": {
+    "seconds": 600,
+    "aggregate_derived_bytes": 536870912,
+    "free_floor": 2147483648
+  },
+  "cleanup_verified": false,
+  "policy_exclusions": 282,
+  "policy_exclusion_basis": "260 meeting listings and22 scratchpad listings are relation/discovery records with intentional zero-document publication",
+  "original_checkpoint_and_payload_unchanged": true,
+  "prior_392_publications_unchanged": true,
+  "clone_checkpoint_and_payload_unchanged": true,
+  "per_kind": [
+    {
+      "entity_definition_short_name": "meeting",
+      "records": 260,
+      "current_publications": 260,
+      "zero_chunk_publications": 0,
+      "failures": 0
+    },
+    {
+      "entity_definition_short_name": "meeting_listing",
+      "records": 260,
+      "current_publications": 260,
+      "zero_chunk_publications": 260,
+      "failures": 0
+    },
+    {
+      "entity_definition_short_name": "scratchpad_note",
+      "records": 22,
+      "current_publications": 22,
+      "zero_chunk_publications": 0,
+      "failures": 0
+    },
+    {
+      "entity_definition_short_name": "scratchpad_listing",
+      "records": 22,
+      "current_publications": 22,
+      "zero_chunk_publications": 22,
+      "failures": 0
+    }
+  ],
+  "extraction": {
+    "complete": 282
+  },
+  "content_records": 282,
+  "listing_records": 282,
+  "installed_cli": {
+    "calls": 26,
+    "latest5_unchanged": true,
+    "known_cases": 3,
+    "keyword_hits": 2,
+    "hybrid_hits": 2,
+    "full_transcript_hash_verified": 2,
+    "scratchpad_original_and_index_view_verified": true,
+    "provider_summary_content_selector_missing": true,
+    "scratchpad_requires_index_view": true
+  },
+  "initial_pass_seconds": 600.836,
+  "frozen_proof_does_not_include_later_mapper_fix": true
+}
