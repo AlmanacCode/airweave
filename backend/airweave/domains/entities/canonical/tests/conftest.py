@@ -285,6 +285,7 @@ async def database(request):
             await connection.run_sync(migrate, "0013_source_unavailability.py")
             await connection.run_sync(migrate, "0014_retained_gmail_query.py")
             await connection.run_sync(migrate, "0015_retained_wispr_meetings.py")
+            await connection.run_sync(migrate, "0016_owned_personal_tenants.py")
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()

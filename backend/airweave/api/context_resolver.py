@@ -172,6 +172,19 @@ class ContextResolver:
             api_key_obj = await self._api_keys.get_by_key(db, key=api_key)
             org_id = api_key_obj.organization_id
 
+            if org_id == settings.OWNED_TENANT_CONTROL_ORGANIZATION_ID:
+                # Every key in the dedicated empty control org has this restriction,
+                # including a key removed from the enrollment allowlist during rotation.
+                # Endpoint identity covers mounts/prefixes and both slash variants,
+                # without suffix matching or trusting any caller header/path segment.
+                from airweave.api.v1.endpoints.owned_tenants import ensure_owned_tenant
+
+                if (
+                    request.method != "POST"
+                    or request.scope.get("endpoint") is not ensure_owned_tenant
+                ):
+                    raise HTTPException(403, "Owned tenant control key is restricted to enrollment")
+
             client_ip = _extract_client_ip(request)
             audit_logger = logger.with_context(event_type="api_key_usage")
             audit_logger.info(

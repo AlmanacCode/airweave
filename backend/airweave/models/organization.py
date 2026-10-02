@@ -28,6 +28,10 @@ class Organization(Base):
     # Organization metadata for storing onboarding and other flexible data
     org_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default={})
 
+    # WorkOS personal subject assigned only at enrollment; immutable in SQL.
+    # Legacy organizations stay unbound: no inference from names or metadata.
+    owned_owner_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+
     # Many-to-many relationship with users
     user_organizations: Mapped[List["UserOrganization"]] = relationship(
         "UserOrganization",

@@ -18,6 +18,7 @@ from airweave.api.v1.endpoints import (
     native_sources,
     organizations,
     owned_provisioning,
+    owned_tenants,
     records,
     search,
     search_legacy,
@@ -74,3 +75,4 @@ api_router.include_router(calendar_records.router, prefix="/sync", tags=["record
 api_router.include_router(
     owned_provisioning.router, prefix="/owned-sources", tags=["owned-sources"]
 )
+api_router.include_router(owned_tenants.router, prefix="/owned-tenants", tags=["owned-tenants"])

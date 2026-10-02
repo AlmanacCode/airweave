@@ -4,6 +4,7 @@ Wraps environment variables and provides defaults.
 """
 
 from typing import Optional
+from uuid import UUID
 
 from pydantic import PostgresDsn, TypeAdapter, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -110,6 +111,9 @@ class Settings(BaseSettings):
     FIRST_SUPERUSER_NAME: str = "Admin"
 
     AUTH_MODE: AuthMode = AuthMode.API_KEY
+    # Existing org-scoped key auth; only the enrollment endpoint accepts this pair.
+    OWNED_TENANT_CONTROL_ORGANIZATION_ID: UUID | None = None
+    OWNED_TENANT_CONTROL_API_KEY_IDS: tuple[UUID, ...] = ()
     AUTH_ENABLED: Optional[bool] = None  # Deprecated migration input; use AUTH_MODE.
     AUTH0_DOMAIN: Optional[str] = None
     AUTH0_AUDIENCE: Optional[str] = None
