@@ -332,3 +332,19 @@ Vespa gate now proves native-type filtering in keyword, semantic and hybrid mode
 including missing-attribute and other-collection exclusions. It uses fixed vectors
 and synthetic text, so it proves filter execution rather than relevance. The
 retained demo index was not redeployed. See [sanitized engine evidence](native-type-vespa-20261002.json).
+
+## Runtime-role qualification — 2026-10-02
+
+The existing persisted API-key HTTP test now uses a separately created disposable
+PostgreSQL runtime role: NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE, with
+schema USAGE and table DML/sequence privileges only. It proves runtime CREATE TABLE
+is denied, capture succeeds, and real persisted-key list/read/change routes enforce
+organization scope, missing/invalid keys, expiry and revocation. Actual SQL and
+credential decryption/context resolution run; Redis caching and rate limiting are
+substituted. The role and grants are removed after the test.
+
+The focused test passed against local PostgreSQL in 2.83 seconds. This is not RLS:
+organization separation still depends on service authorization and scoped queries.
+It also does not qualify hosted WorkOS, production role installation, concurrent
+search/reranking, blobs, or a complete two-user product deployment. Those are
+separate launch gates. No shared fixture/production roles were changed.

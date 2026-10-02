@@ -5,10 +5,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, update
+from sqlalchemy import delete, text, update
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from airweave.adapters.rate_limiter.null import NullRateLimiter
 from airweave.api.v1.endpoints.records import record_error_response, router
@@ -24,7 +27,65 @@ from airweave.models import Organization
 from airweave.models.api_key import APIKey
 
 
-async def test_persisted_keys_scope_expiry_and_revocation_over_http(database, source, monkeypatch):
+@pytest.fixture
+async def runtime_database(database):
+    """Keep migration privileges out of the HTTP runtime in this disposable schema."""
+    import os
+    import re
+
+    role = "canonical_runtime_" + uuid4().hex
+    async with database() as db:
+        schema = await db.scalar(text("SELECT current_schema()"))
+        assert re.fullmatch(r"canonical_test_[a-f0-9]{32}", schema)
+        await db.execute(
+            text(f'CREATE ROLE "{role}" NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE')
+        )
+        await db.execute(text(f'GRANT USAGE ON SCHEMA "{schema}" TO "{role}"'))
+        await db.execute(
+            text(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES "
+                f'IN SCHEMA "{schema}" TO "{role}"'
+            )
+        )
+        await db.execute(
+            text(f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA "{schema}" TO "{role}"')
+        )
+        await db.commit()
+    engine = create_async_engine(
+        os.environ["CANONICAL_TEST_DATABASE_URL"],
+        connect_args={"server_settings": {"search_path": schema, "role": role}},
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            actual = (
+                await db.execute(
+                    text(
+                        "SELECT rolname, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole "
+                        "FROM pg_roles WHERE rolname=current_user"
+                    )
+                )
+            ).one()
+            assert tuple(actual) == (role, False, False, False, False)
+            with pytest.raises(DBAPIError, match="permission denied"):
+                await db.execute(text("CREATE TABLE forbidden_runtime_ddl (id integer)"))
+            await db.rollback()
+        yield sessions
+    finally:
+        await engine.dispose()
+        async with database() as db:
+            await db.execute(text(f'REVOKE ALL ON ALL TABLES IN SCHEMA "{schema}" FROM "{role}"'))
+            await db.execute(
+                text(f'REVOKE ALL ON ALL SEQUENCES IN SCHEMA "{schema}" FROM "{role}"')
+            )
+            await db.execute(text(f'REVOKE ALL ON SCHEMA "{schema}" FROM "{role}"'))
+            await db.execute(text(f'DROP ROLE "{role}"'))
+            await db.commit()
+
+
+async def test_persisted_keys_scope_expiry_and_revocation_over_http(
+    database, runtime_database, source, monkeypatch
+):
     """Only Redis cache/rate limiting are substituted; auth and SQL stay real."""
     monkeypatch.setattr(settings, "AUTH_MODE", AuthMode.API_KEY)
     monkeypatch.setattr(settings, "ENCRYPTION_KEY", Fernet.generate_key().decode())
@@ -55,13 +116,15 @@ async def test_persisted_keys_scope_expiry_and_revocation_over_http(database, so
         ]
         db.add_all(keys)
         await db.commit()
+        # Capture also runs under the same restricted runtime privileges.
+    async with runtime_database() as db:
         result = await capture.capture(db, CaptureBatch(fence=fence, records=(observation("one"),)))
     app = FastAPI()
     app.include_router(router, prefix="/sync")
     app.add_exception_handler(CanonicalStoreError, record_error_response)
 
     async def session():
-        async with database() as db:
+        async with runtime_database() as db:
             yield db
 
     app.dependency_overrides[get_db] = session
