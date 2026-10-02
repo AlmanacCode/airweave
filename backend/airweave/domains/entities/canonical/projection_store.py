@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
+from airweave.domains.entities.canonical.mail_body import PreparedMailBody
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionBinding,
     ProjectionDocument,
@@ -277,6 +278,74 @@ class CanonicalProjectionStore:
             return None
         return entity
 
+    async def prepare_mail_body(
+        self, db: AsyncSession, work: ProjectionWork, generation: UUID, body: PreparedMailBody
+    ) -> bool:
+        """Designate validated converter text before embedding; index manifest seals later."""
+        async with UnitOfWork(db):
+            if await self._current(db, work) is None:
+                return False
+            prior = await db.get(ProjectionGeneration, generation)
+            if prior is not None:
+                if (
+                    prior.mail_body_text != body.text
+                    or prior.mail_body_status != body.status
+                    or prior.record_id != work.record.id
+                    or prior.revision != work.record.revision
+                    or prior.pipeline_version != work.pipeline_version
+                    or prior.organization_id != work.organization_id
+                    or prior.sync_id != work.record.sync_id
+                    or prior.collection_id != work.binding.collection_id
+                ):
+                    raise ValueError("Prepared mail body is immutable")
+                return prior.retired_at is None
+            db.add(
+                ProjectionGeneration(
+                    id=generation,
+                    organization_id=work.organization_id,
+                    sync_id=work.record.sync_id,
+                    collection_id=work.binding.collection_id,
+                    record_id=work.record.id,
+                    revision=work.record.revision,
+                    pipeline_version=work.pipeline_version,
+                    documents=None,
+                    mail_body_text=body.text,
+                    mail_body_status=body.status,
+                    next_gc_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                )
+            )
+            sync = await db.get(Sync, work.record.sync_id)
+            sync.mail_text_sequence += 1
+            await db.flush()
+            return True
+
+    @staticmethod
+    async def _seal_mail_attempt(
+        db: AsyncSession,
+        prior: ProjectionGeneration,
+        work: ProjectionWork,
+        collection_id: UUID,
+        manifest: list[dict],
+        extraction: dict | None,
+        text_descriptors: list[dict] | None,
+    ) -> bool:
+        """Transition a prepared body to its one immutable pre-feed index manifest."""
+        if (
+            prior.retired_at is not None
+            or prior.record_id != work.record.id
+            or prior.revision != work.record.revision
+            or prior.pipeline_version != work.pipeline_version
+            or prior.organization_id != work.organization_id
+            or prior.sync_id != work.record.sync_id
+            or prior.collection_id != collection_id
+        ):
+            return False
+        prior.documents = manifest
+        prior.extraction_coverage = extraction
+        prior.text_representations = text_descriptors
+        await db.flush()
+        return True
+
     async def prepare(
         self,
         db: AsyncSession,
@@ -324,6 +393,10 @@ class CanonicalProjectionStore:
                 return False
             prior = await db.get(ProjectionGeneration, generation)
             if prior is not None:
+                if prior.documents is None:
+                    return await self._seal_mail_attempt(
+                        db, prior, work, collection_id, manifest, extraction, text_descriptors
+                    )
                 if (
                     prior.documents != manifest
                     or prior.extraction_coverage != extraction
@@ -390,6 +463,7 @@ class CanonicalProjectionStore:
                 or attempt.record_id != work.record.id
                 or attempt.revision != work.record.revision
                 or attempt.pipeline_version != work.pipeline_version
+                or attempt.documents is None
                 or len(attempt.documents) != chunk_count
             ):
                 return False
@@ -411,7 +485,8 @@ class CanonicalProjectionStore:
             if work.previous_generation is not None:
                 previous = await db.get(ProjectionGeneration, work.previous_generation)
                 if previous is not None:
-                    previous.retired_at = datetime.now(timezone.utc)
+                    if previous.mail_body_text is None:
+                        previous.retired_at = datetime.now(timezone.utc)
                     previous.next_gc_at = datetime.now(timezone.utc)
             entity.indexed_revision = work.record.revision
             entity.indexed_pipeline_version = work.pipeline_version

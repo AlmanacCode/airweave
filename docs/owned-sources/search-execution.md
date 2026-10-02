@@ -184,3 +184,48 @@ during retrieval reject the response; existing later-collection record mutation
 checks still prevent returning an earlier stale hit. Search/embedding transports are
 fakes in these tests. This is a pool-ownership/correctness proof, not a measured
 latency gain or a claim that the local browser runtime has been activated.
+
+## Deterministic retained Gmail inventory
+
+`GET /sync/{sync_id}/mail/messages` is a canonical SQL query, separate from ranked
+`/sync/search`. It accepts literal `query`, repeated exact `from_addresses` and
+`to_addresses`, aware half-open `after`/`before`, `folder`, `unread`, `limit` (1–100)
+and a signed `cursor`. Addresses are RFC-parsed and casefolded; OR applies within
+each address facet, AND across facets. Dots and plus suffixes retain their meaning.
+Dates use native Gmail `internalDate`, checked against canonical `source_created_at`.
+The provider Date header is not a range authority.
+
+The existing Entity row holds revision-bound, version-one parsed Gmail metadata.
+Capture derives it in the same transaction as the original; migration 0014 uses
+the frozen version-one parser to backfill bounded pages. Malformed, missing or
+inconsistent facts remain unknown. Discovery selects metadata columns only, without
+native payloads, body decoding, provider requests or per-hit blob reads.
+
+The existing projection worker prepares one immutable, full converter body fact on
+ProjectionGeneration before embeddings. It excludes generated headers and attachment
+content. `documents=NULL` marks this prepared-body-only stage; the complete index
+manifest seals once before remote feed. NULL can never publish an index generation.
+Literal body search selects the latest validated fact for the current canonical
+revision and explicit current pipeline, regardless of embedding/feed success.
+Failed attempts without a prepared body cannot hide earlier valid text. Existing GC
+keeps the designated eligible body and reclaims superseded attempts. Sync's derived
+`mail_text_sequence` advances with designation/retirement under the existing Sync
+lock; no new worker, store or source authority exists.
+
+Pages return lean message previews and explicit retained-only capture/indexing evidence.
+Metadata gaps are source-wide because their filter membership is unknown; text-ready,
+partial and unavailable counts cover the metadata-filtered candidate inventory.
+Bodies never appear in discovery. Keyset order is native time plus canonical ID.
+Signed cursors bind organization/source/normalized filters, canonical sequence and
+pipeline; text queries also bind the prepared-text sequence. Changes require a
+restart. Source withdrawal is checked again before returning each page.
+
+| Native capability/resource | Product name | Access operation | Stored representation | Sync/change guarantee | Proof | Gap |
+| --- | --- | --- | --- | --- | --- | --- |
+| Gmail messages | Retained email inventory | `/mail/messages` | Original canonical payload plus typed revision-bound metadata | Capture sequence fences traversal; half-open native dates | Synthetic real SQL/HTTP enumeration of 257 matches over seven pages | Retained inventory is not proof of full mailbox capture |
+| Gmail message body | Literal retained email search | Same endpoint with `query` | Immutable full converter body on existing projection generation | Revision/pipeline/source gates plus derived text sequence | Actual MIME/HTML builder remains searchable after forced embedding failure | Missing or partial originals are explicit text gaps; attachment content excluded |
+| Gmail native thread | Retained email read | `/mail/threads/{thread_id}` | Original messages and revision-bound original blobs | Existing live traversal plus current source/record gates | Existing thread/blob HTTP tests | Native draft IDs and mutations remain separate; no complete-thread claim |
+
+Local verification exercises synthetic SQL/HTTP, not a connected provider or deployed
+service. The version-one decoder is intentionally frozen: incompatible rederivation
+requires a new version and explicit migration rather than changing old backfill code.

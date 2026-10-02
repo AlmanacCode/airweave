@@ -46,6 +46,8 @@ class Sync(OrganizationBase, UserMixin):
         BigInteger, default=0, server_default="0"
     )
 
+    mail_text_sequence: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+
     observed_change_sequence: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     writer_epoch: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     writer_job_id: Mapped[Optional[UUID]] = mapped_column(nullable=True)

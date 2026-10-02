@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import AwareDatetime, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from airweave.api import deps
@@ -14,6 +15,12 @@ from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
 from airweave.db.session import get_db
 from airweave.domains.entities.canonical.calendar_query import CalendarRangeNotCaptured
+from airweave.domains.entities.canonical.mail_models import (
+    MailFilters,
+    MailMessagePage,
+    MailMessageQuery,
+)
+from airweave.domains.entities.canonical.mail_query import CanonicalMailQuery
 from airweave.domains.entities.canonical.projection_store import current_extraction
 from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.query_models import (
@@ -78,6 +85,7 @@ async def record_error_response(request: Request, error: CanonicalStoreError) ->
         "text_unavailable": 409,
         "document_incomplete": 409,
         "calendar_changed_restart": 409,
+        "mail_changed_restart": 409,
         "calendar_read_incomplete": 409,
         "calendar_range_not_captured": 409,
     }.get(error.code, 400)
@@ -203,6 +211,43 @@ async def read_stored_document(
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return result
+
+
+@router.get("/{sync_id}/mail/messages", response_model=MailMessagePage)
+async def mail_messages(
+    sync_id: UUID,
+    query: str = Query(default="", max_length=4096),
+    from_addresses: list[str] = Query(default=[]),
+    to_addresses: list[str] = Query(default=[]),
+    after: AwareDatetime | None = None,
+    before: AwareDatetime | None = None,
+    folder: Literal["inbox", "sent", "trash", "spam", "drafts"] | None = None,
+    unread: bool | None = None,
+    limit: int = Query(default=100, ge=1, le=100),
+    cursor: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> MailMessagePage:
+    """Enumerate retained Gmail metadata; literal body search never contacts the provider."""
+    try:
+        filters = MailFilters(
+            query=query,
+            from_addresses=tuple(from_addresses),
+            to_addresses=tuple(to_addresses),
+            after=after,
+            before=before,
+            folder=folder,
+            unread=unread,
+        )
+    except ValidationError:
+        raise HTTPException(422, "Invalid retained mail filters") from None
+    return await CanonicalMailQuery(service.signing_key).messages(
+        db,
+        ctx.organization.id,
+        sync_id,
+        MailMessageQuery(filters=filters, limit=limit, cursor=cursor),
+    )
 
 
 @router.get("/{sync_id}/mail/threads/{thread_id}", response_model=MailThreadPage)

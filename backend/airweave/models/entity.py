@@ -59,6 +59,8 @@ class Entity(OrganizationBase):
     visibility_epoch: Mapped[int] = mapped_column(BigInteger, default=1, server_default="1")
     parent_visibility_epoch: Mapped[Optional[int]] = mapped_column(BigInteger)
     source_payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    gmail_metadata: Mapped[Optional[dict]] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    gmail_metadata_revision: Mapped[Optional[int]] = mapped_column(BigInteger)
     payload_schema_version: Mapped[int] = mapped_column(default=1, server_default="1")
     record_revision: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     capture_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)

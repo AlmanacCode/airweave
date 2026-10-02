@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
 
+from airweave.domains.entities.canonical.coverage_models import CaptureCoverage
 from airweave.domains.entities.canonical.models import IndexedRecordRead as IndexedRecordRead
 from airweave.domains.entities.canonical.models import ObservedChange, SourceRecord
 from airweave.domains.entities.canonical.models import RecordPage as RecordPage
@@ -105,6 +106,7 @@ class MailThreadPage(BaseModel):
         "source_created_at_asc_nulls_last_id_asc"
     )
     coverage: Literal["stored_messages_only"] = "stored_messages_only"
+    capture: CaptureCoverage | None = None
 
 
 class MailThreadCursor(BaseModel):

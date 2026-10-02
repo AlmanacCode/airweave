@@ -12,6 +12,7 @@ from airweave.domains.entities.canonical.extraction_models import (
     ExtractionCoverage,
     ExtractionOutcome,
 )
+from airweave.domains.entities.canonical.mail_body import prepared_mail_body
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_inputs import ProjectionInputs
 from airweave.domains.entities.canonical.projection_models import (
@@ -25,9 +26,11 @@ from airweave.domains.entities.canonical.projection_store import CanonicalProjec
 from airweave.domains.entities.canonical.search_metadata import stamp_search_metadata
 from airweave.domains.entities.canonical.text_artifacts import prepare_text
 from airweave.domains.storage.protocols import StorageBackend
+from airweave.domains.sync_pipeline.pipeline.text_models import BuiltText
 from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
 from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
 from airweave.platform.destinations.vespa.destination import VespaDestination
+from airweave.platform.destinations.vespa.types import VespaDocument
 from airweave.platform.entities._base import AirweaveSystemMetadata, BaseEntity
 
 
@@ -63,6 +66,20 @@ def _stamp_chunks(chunks: Iterable[BaseEntity], record: SourceRecord) -> None:
         stamp_search_metadata(chunk.airweave_system_metadata, record)
 
 
+def _scope_manifest(
+    prepared: dict[str, list[VespaDocument]], sync_id: UUID, collection_id: UUID
+) -> tuple[ProjectionDocument, ...]:
+    """Make the durable manifest match exact scoped remote document identities."""
+    for group in prepared.values():
+        for document in group:
+            document.id = scope_projection_document_id(sync_id, collection_id, document.id)
+    return tuple(
+        ProjectionDocument(schema_name=document.schema_name, document_id=document.id)
+        for group in prepared.values()
+        for document in group
+    )
+
+
 class CanonicalProjector:
     """Read snapshot, compute outside transaction, then atomically publish generation."""
 
@@ -90,6 +107,18 @@ class CanonicalProjector:
             return False
         async with self._sessions() as db:
             return await self._store.admit(db, work)
+
+    async def _prepare_mail_text(
+        self, work: ProjectionWork, source_name: str, generation: UUID, built: tuple[BuiltText, ...]
+    ) -> bool:
+        """Prepare body facts without making embedding or remote feed a read prerequisite."""
+        if source_name != "gmail" or work.record.identity.record_type != "message":
+            return True
+        body = prepared_mail_body(built, generation, work.record.completeness)
+        if body is None:
+            return True
+        async with self._sessions() as db:
+            return await self._store.prepare_mail_body(db, work, generation, body)
 
     async def project_one(
         self,
@@ -132,6 +161,10 @@ class CanonicalProjector:
                     selected, context, runtime, native_bodies=native_bodies
                 )
                 artifacts = prepare_text(built.representations, generation)
+                if not await self._prepare_mail_text(
+                    work, source_name, generation, built.representations
+                ):
+                    return False
                 chunks = await self._processor.process_built_text(
                     built.entities,
                     context,
@@ -141,16 +174,7 @@ class CanonicalProjector:
                 )
                 _stamp_chunks(chunks, work.record)
                 prepared = destination.prepare_documents(chunks)
-                for group in prepared.values():
-                    for document in group:
-                        document.id = scope_projection_document_id(
-                            work.record.sync_id, destination.collection_id, document.id
-                        )
-                manifest = tuple(
-                    ProjectionDocument(schema_name=doc.schema_name, document_id=doc.id)
-                    for group in prepared.values()
-                    for doc in group
-                )
+                manifest = _scope_manifest(prepared, work.record.sync_id, destination.collection_id)
                 async with self._sessions() as db:
                     if not await self._store.prepare(
                         db,

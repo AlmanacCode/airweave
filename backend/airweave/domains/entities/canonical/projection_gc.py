@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
+from airweave.domains.entities.canonical.mail_body import current_mail_body
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionCleanupPage,
     ProjectionDocument,
@@ -49,7 +50,12 @@ class ProjectionGCStore:
             initial = await db.get(ProjectionGeneration, generation)
             if initial is None:
                 return None
-            await db.scalar(select(Sync.id).where(Sync.id == initial.sync_id).with_for_update())
+            sync = await db.scalar(
+                select(Sync)
+                .where(Sync.id == initial.sync_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
             row = await db.scalar(
                 select(ProjectionGeneration)
                 .where(
@@ -67,11 +73,41 @@ class ProjectionGCStore:
                     Entity.organization_id == row.organization_id,
                 )
             )
+            if current is not None and row.mail_body_text is not None and sync is not None:
+                designated = await db.scalar(
+                    select(
+                        current_mail_body()
+                        .with_only_columns(ProjectionGeneration.id)
+                        .scalar_subquery()
+                    )
+                    .select_from(Entity)
+                    .join(Sync, Sync.id == Entity.sync_id)
+                    .where(Entity.id == current.id)
+                )
+                available = await db.scalar(
+                    select(content_is_available()).where(Entity.id == current.id)
+                )
+                if designated == generation and current.deleted_at is None and available:
+                    row.next_gc_at = now + timedelta(days=1)
+                    return None
+                if designated == generation and row.retired_at is None:
+                    sync.mail_text_sequence += 1
             if current is not None and current.indexed_generation == generation:
                 available = await db.scalar(
                     select(content_is_available()).where(Entity.id == current.id)
                 )
-                if not row.documents or (current.deleted_at is None and available):
+                if not row.documents or (
+                    current.deleted_at is None
+                    and available
+                    and (
+                        row.mail_body_text is None
+                        or (
+                            row.revision == current.record_revision
+                            and sync is not None
+                            and row.pipeline_version == sync.index_pipeline_version
+                        )
+                    )
+                ):
                     row.next_gc_at = now + timedelta(days=1)
                     return None
                 # Capture and parent transitions share the Sync lock. Clear publication
@@ -90,8 +126,8 @@ class ProjectionGCStore:
                 TextArtifact.model_validate(item) for item in (row.text_representations or [])
             )
             start, end = row.delete_cursor, row.delete_cursor + limit
-            artifact_start = max(0, start - len(row.documents))
-            artifact_end = max(0, end - len(row.documents))
+            artifact_start = max(0, start - len(row.documents or []))
+            artifact_end = max(0, end - len(row.documents or []))
             return ProjectionCleanupPage(
                 generation=generation,
                 attempt=row.gc_attempt,
@@ -102,7 +138,7 @@ class ProjectionGCStore:
                 ),
                 documents=tuple(
                     ProjectionDocument.model_validate(item)
-                    for item in row.documents[row.delete_cursor : row.delete_cursor + limit]
+                    for item in (row.documents or [])[row.delete_cursor : row.delete_cursor + limit]
                 ),
             )
 
@@ -138,7 +174,7 @@ class ProjectionGCStore:
                 return
             row.gc_error = None
             row.delete_cursor += len(page.documents) + len(page.artifact_keys)
-            if row.delete_cursor >= len(row.documents) + len(row.text_representations or []):
+            if row.delete_cursor >= len(row.documents or []) + len(row.text_representations or []):
                 row.delete_cursor = 0
                 row.gc_passes += 1
                 row.last_gc_at = now

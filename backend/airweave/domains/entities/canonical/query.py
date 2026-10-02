@@ -263,10 +263,15 @@ class CanonicalQueryService:
                     after_id=last.id,
                 )
             )
+        coverage = await capture_coverage(db, organization_id, (sync_id,))
         if not await self.queries.source_readable(db, organization_id, sync_id):
             raise SourceNotFound("Source is unavailable in this organization")
         return MailThreadPage(
-            thread_id=thread_id, messages=messages, next_cursor=next_cursor, has_more=more
+            thread_id=thread_id,
+            messages=messages,
+            next_cursor=next_cursor,
+            has_more=more,
+            capture=coverage.get(sync_id),
         )
 
     async def document(
