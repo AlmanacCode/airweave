@@ -2,10 +2,25 @@
 
 import os
 import tempfile
+from unittest.mock import AsyncMock
 
 import pytest
 
 from airweave.domains.converters._base import HybridDocumentConverter
+from airweave.domains.converters.pdf import PdfConverter
+from airweave.domains.sync_pipeline.exceptions import SyncFailureError
+
+
+async def test_infrastructure_failure_does_not_become_unavailable_conversion(tmp_path):
+    """A missing parser dependency cannot be relabeled a failed content part."""
+    path = tmp_path / "input.pdf"
+    path.write_bytes(b"synthetic PDF bytes")
+    fallback = AsyncMock()
+    converter = PdfConverter(ocr_provider=fallback)
+    converter._try_extract = AsyncMock(side_effect=SyncFailureError("Parser unavailable"))
+    with pytest.raises(SyncFailureError, match="Parser unavailable"):
+        await converter.convert_batch([str(path)])
+    fallback.convert_batch.assert_not_awaited()
 
 
 @pytest.fixture

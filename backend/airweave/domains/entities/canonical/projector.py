@@ -19,6 +19,7 @@ from airweave.domains.entities.canonical.projection_models import (
     ProjectionBatchResult,
     ProjectionDocument,
     ProjectionLocator,
+    ProjectionResult,
     ProjectionWork,
     scope_projection_document_id,
 )
@@ -26,7 +27,7 @@ from airweave.domains.entities.canonical.projection_store import CanonicalProjec
 from airweave.domains.entities.canonical.search_metadata import stamp_search_metadata
 from airweave.domains.entities.canonical.text_artifacts import prepare_text
 from airweave.domains.storage.protocols import StorageBackend
-from airweave.domains.sync_pipeline.pipeline.text_models import BuiltText
+from airweave.domains.sync_pipeline.pipeline.text_models import BuiltText, BuiltTextBatch
 from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
 from airweave.domains.sync_pipeline.processors.entity_fields import populate_base_fields
 from airweave.platform.destinations.vespa.destination import VespaDestination
@@ -42,12 +43,17 @@ class ProjectionContext:
     source_short_name: str
 
 
-class StrictProjectionTracker:
-    """A replay publication cannot silently omit failed conversion inputs."""
+@dataclass
+class ProjectionConversionTracker:
+    """Conversion failures must be accounted for, never silently dropped."""
+
+    allow_failures: bool = False
+    failed_count: int = 0
 
     async def record_skipped(self, count: int) -> None:
         """Fail publication when an existing converter tries to skip required input."""
-        if count:
+        self.failed_count += count
+        if count and not self.allow_failures:
             raise ValueError("Required projection input could not be converted")
 
 
@@ -55,7 +61,7 @@ class StrictProjectionTracker:
 class ProjectionRuntime:
     """Only processing diagnostics are required; source runtime is not recreated."""
 
-    entity_tracker: StrictProjectionTracker
+    entity_tracker: ProjectionConversionTracker
 
 
 def _stamp_chunks(chunks: Iterable[BaseEntity], record: SourceRecord) -> None:
@@ -116,7 +122,7 @@ class CanonicalProjector:
             return True
         body = prepared_mail_body(built, generation, work.record.completeness)
         if body is None:
-            return True
+            raise ValueError("Gmail projection did not convert its required body")
         async with self._sessions() as db:
             return await self._store.prepare_mail_body(db, work, generation, body)
 
@@ -126,13 +132,13 @@ class CanonicalProjector:
         source_name: str,
         destination: VespaDestination,
         logger: ContextualLogger,
-    ) -> bool:
+    ) -> ProjectionResult:
         """Never feed native capture JSON; mapper emits explicit safe projection entities."""
         from airweave.domains.entities.canonical.projection_mappers import map_record
         from airweave.domains.entities.canonical.projection_policy import excluded_from_search
 
         if not await self._admit(work, source_name, destination):
-            return False
+            return ProjectionResult()
 
         generation = uuid4()
         chunks = []
@@ -148,7 +154,7 @@ class CanonicalProjector:
                     mapped, work, source_name, generation, self._processor.supports_file_extension
                 )
                 context = ProjectionContext(logger, source_name)
-                runtime = ProjectionRuntime(StrictProjectionTracker())
+                runtime = ProjectionRuntime(ProjectionConversionTracker())
                 selected_ids = {entity.entity_id for entity in selected}
                 native_bodies = {
                     item.entity.entity_id: item.native_body
@@ -157,20 +163,28 @@ class CanonicalProjector:
                     and item.entity is not None
                     and item.entity.entity_id in selected_ids
                 }
-                built = await self._processor.build_text(
-                    selected, context, runtime, native_bodies=native_bodies
-                )
+                if source_name == "gmail" and work.record.identity.record_type == "message":
+                    outcome = await self._build_gmail_text(
+                        selected, coverage, context, work, generation
+                    )
+                    if outcome is None:
+                        return ProjectionResult()
+                    built, coverage = outcome
+                else:
+                    built = await self._processor.build_text(
+                        selected, context, runtime, native_bodies=native_bodies
+                    )
                 artifacts = prepare_text(built.representations, generation)
-                if not await self._prepare_mail_text(
-                    work, source_name, generation, built.representations
-                ):
-                    return False
                 chunks = await self._processor.process_built_text(
                     built.entities,
                     context,
                     runtime,
                     strict=True,
-                    expected_ids={entity.entity_id for entity in selected},
+                    expected_ids=(
+                        {entity.entity_id for entity in built.entities}
+                        if source_name == "gmail" and work.record.identity.record_type == "message"
+                        else selected_ids
+                    ),
                 )
                 _stamp_chunks(chunks, work.record)
                 prepared = destination.prepare_documents(chunks)
@@ -185,7 +199,7 @@ class CanonicalProjector:
                         coverage=coverage,
                         text_representations=tuple(item for item, _ in artifacts),
                     ):
-                        return False
+                        return ProjectionResult()
                 for artifact, content in artifacts:
                     await self._storage.write_file(
                         artifact.storage_key(work.record.sync_id, generation), content
@@ -202,9 +216,61 @@ class CanonicalProjector:
                     coverage=coverage,
                     text_representations=(),
                 ):
-                    return False
+                    return ProjectionResult()
         async with self._sessions() as db:
-            return await self._store.publish(db, work, generation, len(chunks))
+            published = await self._store.publish(db, work, generation, len(chunks))
+        return ProjectionResult(
+            published=published,
+            conversion_failed=published and any(p.outcome == "failed" for p in coverage.parts),
+        )
+
+    async def _build_gmail_text(
+        self,
+        selected: list[BaseEntity],
+        coverage: ExtractionCoverage,
+        context: ProjectionContext,
+        work: ProjectionWork,
+        generation: UUID,
+    ) -> tuple[BuiltTextBatch, ExtractionCoverage] | None:
+        """Prepare a complete body before bounded, independently failing attachments."""
+        body = [e for e in selected if _part_index(e.entity_id) == 0]
+        files = [e for e in selected if _part_index(e.entity_id) != 0]
+        if len(body) != 1 or coverage.parts[0].kind != "body":
+            raise ValueError("Gmail projection requires exactly one body at part zero")
+        body_ids = {e.entity_id for e in body}
+        body_tracker = ProjectionConversionTracker()
+        body_text = await self._processor.build_text(
+            body, context, ProjectionRuntime(body_tracker), strict_conversion=True
+        )
+        _check_converted_parts(body_ids, body_text, body_tracker)
+        if not await self._prepare_mail_text(work, "gmail", generation, body_text.representations):
+            return None
+        file_ids = {e.entity_id for e in files}
+        file_tracker = ProjectionConversionTracker(allow_failures=True)
+        file_text = await self._processor.build_text(
+            files, context, ProjectionRuntime(file_tracker), strict_conversion=True
+        )
+        _check_converted_parts(file_ids, file_text, file_tracker)
+        failed_parts = {_part_index(identity) for identity in file_text.failed_entity_ids}
+        parts = []
+        for part in coverage.parts:
+            if part.part_index in failed_parts:
+                if part.kind != "file" or part.outcome != "indexed":
+                    raise ValueError("Only captured selected attachments may fail conversion")
+                part = ExtractionOutcome(
+                    **part.model_dump(exclude={"outcome", "reason"}),
+                    outcome="failed",
+                    reason="conversion_failed",
+                )
+            parts.append(part)
+        return (
+            BuiltTextBatch(
+                entities=body_text.entities + file_text.entities,
+                representations=body_text.representations + file_text.representations,
+                failed_entity_ids=file_text.failed_entity_ids,
+            ),
+            ExtractionCoverage(parts=tuple(parts)),
+        )
 
     async def batch(
         self,
@@ -231,10 +297,12 @@ class CanonicalProjector:
         published = superseded = failed = 0
         for work in pending[:limit]:
             try:
-                if await self.project_one(work, source_name, destination, logger):
+                result = await self.project_one(work, source_name, destination, logger)
+                if result.published:
                     published += 1
                 else:
                     superseded += 1
+                failed += int(result.conversion_failed)
             except Exception as error:
                 failed += 1
                 async with self._sessions() as db:
@@ -251,6 +319,33 @@ class CanonicalProjector:
             superseded=superseded,
             failed=failed,
         )
+
+
+def _check_converted_parts(
+    expected: set[str], built: BuiltTextBatch, tracker: ProjectionConversionTracker
+) -> None:
+    """A converter's explicit failures explain every omission; unknown losses fail closed."""
+    entities = [e.entity_id for e in built.entities]
+    representations = [item.entity_id for item in built.representations]
+    failed = built.failed_entity_ids
+    if (
+        len(set(entities)) != len(entities)
+        or len(set(representations)) != len(representations)
+        or len(set(failed)) != len(failed)
+        or set(entities) != set(representations)
+        or set(entities) & set(failed)
+        or set(entities) | set(failed) != expected
+        or len(failed) != tracker.failed_count
+    ):
+        raise ValueError("Projection conversion did not account for its exact selected parts")
+
+
+def _part_index(identity: str) -> int:
+    """Only generated canonical identities may account for conversion outcomes."""
+    locator = ProjectionLocator.parse(identity)
+    if locator is None:
+        raise ValueError("Projection conversion lost its canonical part identity")
+    return locator.part_index
 
 
 def _select_inputs(

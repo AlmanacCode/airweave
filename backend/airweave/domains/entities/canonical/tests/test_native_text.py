@@ -125,9 +125,9 @@ async def test_slack_native_retained_read_matches_text_used_for_index(
         work = (await CanonicalProjectionStore().pending(db, fence.organization_id, fence.sync_id))[
             0
         ]
-    assert await projection.project_one(
-        work, "slack", destination(binding.collection_id), MagicMock()
-    )
+    assert (
+        await projection.project_one(work, "slack", destination(binding.collection_id), MagicMock())
+    ).published
     reader = CanonicalTextReader(
         CanonicalQueryService(CanonicalRecordStore(), CanonicalQueryStore(), "key"),
         storage,

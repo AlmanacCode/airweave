@@ -79,10 +79,15 @@ class ChunkEmbedProcessor:
         runtime: "ProcessingRuntime",
         *,
         native_bodies: dict[str, NativeTextBody] | None = None,
+        strict_conversion: bool = False,
     ) -> BuiltTextBatch:
         """Convert once, exposing the complete pre-chunk representation for retention."""
         return await self._text_builder.build_with_text(
-            entities, sync_context, runtime, native_bodies=native_bodies
+            entities,
+            sync_context,
+            runtime,
+            native_bodies=native_bodies,
+            strict_conversion=strict_conversion,
         )
 
     async def process_built_text(

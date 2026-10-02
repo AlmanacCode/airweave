@@ -9,7 +9,10 @@ import pytest
 from airweave.domains.converters.html import HtmlConverter
 from airweave.domains.entities.canonical.outlook_calendar_projection import map_outlook_calendar
 from airweave.domains.entities.canonical.projection_models import ProjectionBinding, ProjectionWork
-from airweave.domains.entities.canonical.projector import StrictProjectionTracker, _select_inputs
+from airweave.domains.entities.canonical.projector import (
+    ProjectionConversionTracker,
+    _select_inputs,
+)
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.entities.canonical.tests.test_outlook_projection import source
 from airweave.domains.sync_pipeline.pipeline.text_builder import TextualRepresentationBuilder
@@ -91,7 +94,7 @@ async def build(record, tmp_path):
     batch = await TextualRepresentationBuilder(registry).build_with_text(
         selected,
         SimpleNamespace(source_short_name="outlook_calendar", logger=MagicMock()),
-        SimpleNamespace(entity_tracker=StrictProjectionTracker()),
+        SimpleNamespace(entity_tracker=ProjectionConversionTracker()),
         native_bodies={
             item.entity.entity_id: item.native_body
             for item in mapped.parts
@@ -195,11 +198,14 @@ async def test_identity_parent_and_unsupported_completeness_fail_before_projecti
         await map_outlook_calendar(event(None).model_copy(update=changes), tmp_path)
 
 
-async def test_empty_html_does_not_publish_fabricated_native_body(tmp_path):
-    # The shared converter cannot produce retained content for empty HTML.
-    # Preserve its fail-closed behavior instead of declaring generated text to be the body.
-    with pytest.raises(ValueError, match="Required projection input could not be converted"):
-        await build(event({"contentType": "html", "content": ""}), tmp_path)
+async def test_empty_html_has_a_present_empty_content_boundary(tmp_path):
+    # Committed3b3ec41 made successful empty HTML distinct from unavailable conversion.
+    _, _, batch = await build(event({"contentType": "html", "content": ""}), tmp_path)
+    representation = batch.representations[0]
+    assert representation.kind == "extracted_text"
+    assert representation.content_start is not None
+    assert representation.text[representation.content_start :] == ""
+    assert not batch.failed_entity_ids
 
 
 @pytest.mark.parametrize(

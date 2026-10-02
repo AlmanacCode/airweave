@@ -241,7 +241,7 @@ inconsistent facts remain unknown. Discovery selects metadata columns only, with
 native payloads, body decoding, provider requests or per-hit blob reads.
 
 The existing projection worker prepares one immutable, full converter body fact on
-ProjectionGeneration before embeddings. It excludes generated headers and attachment
+ProjectionGeneration before attachment conversion or embeddings. It excludes generated headers and attachment
 content. `documents=NULL` marks this prepared-body-only stage; the complete index
 manifest seals once before remote feed. NULL can never publish an index generation.
 Literal query matches parsed sender/To names and mailboxes, subject, and prepared body.
@@ -265,7 +265,7 @@ restart. Source withdrawal is checked again before returning each page.
 | Native capability/resource | Product name | Access operation | Stored representation | Sync/change guarantee | Proof | Gap |
 | --- | --- | --- | --- | --- | --- | --- |
 | Gmail messages | Retained email inventory | `/mail/messages` | Original canonical payload plus typed revision-bound metadata | Capture sequence fences traversal; half-open native dates | Synthetic real SQL/HTTP enumeration of 257 matches over seven pages | Retained inventory is not proof of full mailbox capture |
-| Gmail message body | Literal retained email search | Same endpoint with `query` | Immutable full converter body on existing projection generation | Revision/pipeline/source gates plus derived text sequence | Actual MIME/HTML builder remains searchable after forced embedding failure | Missing or partial originals are explicit text gaps; attachment content excluded |
+| Gmail message body | Literal retained email search | Same endpoint with `query` | Immutable full converter body on existing projection generation | Revision/pipeline/source gates plus derived text sequence | Actual MIME/HTML builder remains searchable while attachment conversion is blocked and after forced embedding failure | Missing or partial originals are explicit text gaps; attachment content excluded |
 | Gmail native thread | Retained email read | `/mail/threads/{thread_id}` | Original messages and revision-bound original blobs | Existing live traversal plus current source/record gates | Existing thread/blob HTTP tests | Native draft IDs and mutations remain separate; no complete-thread claim |
 
 Local verification exercises synthetic SQL/HTTP, not a connected provider or deployed

@@ -135,7 +135,9 @@ async def test_pdf_full_content_read_is_single_conversion_and_published_with_ind
             assert listed.status == "unavailable"  # bytes exist but publication has not happened
 
     p.destination.feed_prepared.side_effect = feed
-    assert await p.projector.project_one(p.work, "google_drive", p.destination, MagicMock())
+    assert (
+        await p.projector.project_one(p.work, "google_drive", p.destination, MagicMock())
+    ).published
     p.converter.convert_batch.assert_awaited_once()
     app = FastAPI()
     app.include_router(router, prefix="/sync")
@@ -188,7 +190,9 @@ async def test_blob_corruption_and_midread_revision_change_fail_closed(database,
     from airweave.domains.entities.canonical.query import BlobUnavailable, StaleRecordRevision
 
     p = publication
-    assert await p.projector.project_one(p.work, "google_drive", p.destination, MagicMock())
+    assert (
+        await p.projector.project_one(p.work, "google_drive", p.destination, MagicMock())
+    ).published
     async with database() as db:
         descriptor = (
             await p.reader.list(db, p.fence.organization_id, p.fence.sync_id, p.work.record.id, 1)
@@ -295,7 +299,9 @@ async def test_source_withdrawal_during_retained_text_io_denies_text(database, p
     from airweave.models.source_connection import SourceConnection
 
     p = publication
-    assert await p.projector.project_one(p.work, "google_drive", p.destination, MagicMock())
+    assert (
+        await p.projector.project_one(p.work, "google_drive", p.destination, MagicMock())
+    ).published
     async with database() as db:
         descriptor = (
             await p.reader.list(db, p.fence.organization_id, p.fence.sync_id, p.work.record.id, 1)

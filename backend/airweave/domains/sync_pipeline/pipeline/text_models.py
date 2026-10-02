@@ -31,3 +31,4 @@ class BuiltTextBatch(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     entities: list[BaseEntity]
     representations: tuple[BuiltText, ...]
+    failed_entity_ids: tuple[str, ...] = ()

@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 from airweave.core.logging import logger
 from airweave.domains.ocr.protocols import OcrProvider
+from airweave.domains.sync_pipeline.exceptions import SyncFailureError
 
 
 class BaseTextConverter(ABC):
@@ -112,6 +113,8 @@ class HybridDocumentConverter(BaseTextConverter):
                     else:
                         logger.debug(f"{name}: text extraction insufficient, needs OCR")
                         needs_ocr.append(path)
+            except SyncFailureError:
+                raise
             except Exception as exc:
                 logger.warning(f"{name}: extraction error ({exc}), needs OCR")
                 text_content = self._try_read_as_text(path)

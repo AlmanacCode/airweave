@@ -83,7 +83,7 @@ async def test_excluded_originals_publish_zero_documents(database, source, kind)
     processor, storage = MagicMock(), MagicMock()
     destination = MagicMock(collection_id=work.binding.collection_id)
     projector = CanonicalProjector(store, database, processor, storage)
-    assert await projector.project_one(work, provider, destination, MagicMock())
+    assert (await projector.project_one(work, provider, destination, MagicMock())).published
     processor.build_text.assert_not_called()
     destination.feed_prepared.assert_not_called()
     reader = CanonicalQueryService(CanonicalRecordStore(), CanonicalQueryStore(), "test")

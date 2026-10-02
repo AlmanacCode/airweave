@@ -50,5 +50,11 @@ extractable PDF. The worker adapter does not retain bounded failure reasons, so
 timeout versus worker failure is unknown. The other parent has a four-page PDF
 with vector drawings but no images or native text; the locked images-only partial
 OCR cannot recover its text. All four PDFs are valid, unencrypted, within input/page/
-render bounds, and match captured hashes. Both parent bodies remain blocked by
-the existing strict conversion contract. No further OCR retry was performed.
+render bounds, and match captured hashes. At that runtime commit both parent bodies remained blocked by
+the strict conversion contract. No further OCR retry was performed.
+
+Current Gmail projection now prepares the validated body before attachments and
+publishes successful content with explicit failed attachment coverage. See
+[retained representations](../../docs/owned-sources/representations.md#gmail-size-metadata-and-configured-extraction-coverage).
+The frozen repair evidence above still describes runtime `2f254b8`; the retained
+corpus was not reprocessed as part of this implementation.

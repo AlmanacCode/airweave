@@ -75,7 +75,7 @@ async def test_stale_work_is_denied_before_mapper_storage_or_processor(
     processor, storage = MagicMock(), AsyncMock()
     destination = MagicMock(collection_id=binding.collection_id, feed_prepared=AsyncMock())
     project = CanonicalProjector(store, database, processor, storage)
-    assert not await project.project_one(work, "gmail", destination, MagicMock())
+    assert not (await project.project_one(work, "gmail", destination, MagicMock())).published
     mapper.assert_not_called()
     assert not processor.mock_calls and not storage.mock_calls
     destination.feed_prepared.assert_not_awaited()
@@ -115,9 +115,9 @@ async def test_wrong_destination_rejected_before_processing_and_manifest(databas
         work = (await store.pending(db, fence.organization_id, fence.sync_id))[0]
     processor = MagicMock()
     project = CanonicalProjector(store, database, processor, AsyncMock())
-    assert not await project.project_one(
-        work, "gmail", MagicMock(collection_id=uuid4()), MagicMock()
-    )
+    assert not (
+        await project.project_one(work, "gmail", MagicMock(collection_id=uuid4()), MagicMock())
+    ).published
     assert not processor.mock_calls
     async with database() as db:
         with pytest.raises(ValueError, match="destination"):

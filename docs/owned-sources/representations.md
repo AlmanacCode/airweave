@@ -79,7 +79,7 @@ both healthy 200 and unavailable 503. No private provider calls or deployment ra
 | Native capability/resource | Product name | Access operation | Stored representation | Sync/change guarantee | Proof | Gap |
 | --- | --- | --- | --- | --- | --- | --- |
 | Inline MIME body / external body bytes | Email text | Retained record projection | Native JSON unchanged; external blob verified against canonical actual byte size and SHA256 | Projection does not refetch or modify capture | Synthetic declared-size discrepancy succeeds; invalid base64 and corrupt canonical bytes still fail | Live retained inline bodies showed native size one byte smaller than decoded data; no upstream cause established |
-| Inline images and attachments | Email extraction parts | Configured converter registry | Available body text plus explicit unsupported part coverage when converter absent | Reprojection follows existing pipeline-version lifecycle | Real SQL partial publication without OCR; configured converter failure still blocks publication | Adding OCR requires pipeline-version change to retry prior unsupported parts; no image understanding claim |
+| Inline images and attachments | Email extraction parts | Configured converter registry | Available body text plus explicit unsupported part coverage when converter absent | Reprojection follows existing pipeline-version lifecycle | Real SQL partial publication without OCR and explicit failed attachment coverage with body retained | Adding OCR requires pipeline-version change to retry prior unsupported parts; no image understanding claim |
 
 Google documents MIME `size` as byte count, but it is provider metadata rather
 than our storage-integrity checksum. Projection preserves the reported value
@@ -88,10 +88,26 @@ additional provider-size equality requirement. External attachment acquisition
 keeps its existing checks; this change does not claim that path was requalified.
 [Native MessagePartBody contract](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages.attachments#MessagePartBody).
 
-Unsupported means no configured converter for that part. It does not turn an
-installed converter's failure into success: malformed PDFs, OCR errors, and
-other attempted-conversion failures still leave publication pending. Scanned
-PDFs with a configured PDF converter but no OCR fallback remain in that category.
+Unsupported means no configured converter for that part. For Gmail, an explicitly
+unavailable attachment conversion records `failed` / `conversion_failed`, while
+successfully converted body and attachment parts publish as partial extraction.
+Failed parts have no text artifacts or searchable documents. Body preparation
+happens before attachment conversion: retained email read and literal body query
+already work while an attachment is blocked. Derived `--text` reads still require
+sealed, published artifact descriptors and checksum verification.
+
+The existing Entity projection-error marker keeps failed partial generations
+eligible for explicit bounded retries. Automatic recovery skips these known
+failures; it does not repeatedly process an expensive PDF. A retry cannot remove
+previously indexed parts at the same canonical revision/pipeline, and unexpected
+converter exceptions or missing result identities abort publication. Successful
+recovery replaces the immutable generation and clears its retry marker. Original
+bytes/capture completeness do not change. Strict non-Gmail conversion behavior is
+preserved in this slice. There is no new table, worker, queue or projection endpoint.
+Synthetic real SQL/HTTP tests cover early body availability, partial derived reads,
+recovery, downgrade rejection, omitted converter identities and source withdrawal
+during feed. The retained full corpus remains unchanged pending a separately
+approved bounded retry; these tests do not claim its two gaps are repaired.
 
 ### Drive originals omitted during capture
 

@@ -29,8 +29,10 @@ class ExtractionPart(BaseModel):
 class ExtractionOutcome(ExtractionPart):
     """Indexed means every required chunk for this part was successfully published."""
 
-    outcome: Literal["indexed", "unsupported", "unavailable_original"]
-    reason: Literal["unsupported_format", "original_not_captured"] | None = None
+    outcome: Literal["indexed", "unsupported", "unavailable_original", "failed"]
+    reason: Literal["unsupported_format", "original_not_captured", "conversion_failed"] | None = (
+        None
+    )
 
     @model_validator(mode="after")
     def reason_matches(self):
@@ -39,6 +41,7 @@ class ExtractionOutcome(ExtractionPart):
             "indexed": None,
             "unsupported": "unsupported_format",
             "unavailable_original": "original_not_captured",
+            "failed": "conversion_failed",
         }
         if self.reason != expected[self.outcome]:
             raise ValueError("Extraction outcome requires its exact bounded reason")

@@ -59,7 +59,9 @@ async def test_cancelled_exception_read_project_reinstate_and_revoke(database, s
     destination.collection_id = binding.collection_id
     destination.feed_prepared = AsyncMock()
     projector = CanonicalProjector(projections, database, processor, AsyncMock())
-    assert await projector.project_one(work, "google_calendar", destination, MagicMock())
+    assert (
+        await projector.project_one(work, "google_calendar", destination, MagicMock())
+    ).published
     processor.build_text.assert_not_awaited()
     destination.feed_prepared.assert_not_awaited()
     async with database() as db:
@@ -184,7 +186,9 @@ async def test_operational_occurrences_publish_zero_documents_without_retry(data
     destination.collection_id = binding.collection_id
     destination.feed_prepared = AsyncMock()
     projector = CanonicalProjector(projections, database, processor, AsyncMock())
-    assert await projector.project_one(work, "google_calendar", destination, MagicMock())
+    assert (
+        await projector.project_one(work, "google_calendar", destination, MagicMock())
+    ).published
     processor.build_text.assert_not_awaited()
     destination.feed_prepared.assert_not_awaited()
     async with database() as db:

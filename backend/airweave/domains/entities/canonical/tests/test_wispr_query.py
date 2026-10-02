@@ -291,7 +291,7 @@ async def test_native_notes_transcript_multirange_exact_content_reads(database, 
         ]
     }
     projector = CanonicalProjector(store, database, processor, storage)
-    assert await projector.project_one(work, "wispr", destination, MagicMock())
+    assert (await projector.project_one(work, "wispr", destination, MagicMock())).published
     records = CanonicalQueryService(
         CanonicalRecordStore(), CanonicalQueryStore(), "meeting-test-key"
     )

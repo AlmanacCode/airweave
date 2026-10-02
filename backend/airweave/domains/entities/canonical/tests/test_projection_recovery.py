@@ -5,7 +5,10 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from airweave.domains.entities.canonical.projection_models import ProjectionBatchResult
+from airweave.domains.entities.canonical.projection_models import (
+    ProjectionBatchResult,
+    ProjectionResult,
+)
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.projector import CanonicalProjector
 from airweave.domains.entities.canonical.tests.helpers import bind_projection, capture, observation
@@ -147,7 +150,7 @@ async def test_recovery_execution_skips_failed_until_original_changes(database, 
         assert not await store.pending(db, fence.organization_id, fence.sync_id, skip_failed=True)
     # Isolate only the expensive external projection; exercise the actual batch selector.
     projector = CanonicalProjector(store, database, None, None)
-    projector.project_one = AsyncMock(return_value=True)
+    projector.project_one = AsyncMock(return_value=ProjectionResult(published=True))
     logger = AsyncMock()
     assert (
         await projector.batch(

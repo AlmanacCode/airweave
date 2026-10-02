@@ -932,6 +932,8 @@ class OwnedSearchService:
             {"parts": [{"outcome": "unsupported"}]}
         ) | ProjectionGeneration.extraction_coverage.contains(
             {"parts": [{"outcome": "unavailable_original"}]}
+        ) | ProjectionGeneration.extraction_coverage.contains(
+            {"parts": [{"outcome": "failed"}]}
         )
         rows = await db.execute(
             select(

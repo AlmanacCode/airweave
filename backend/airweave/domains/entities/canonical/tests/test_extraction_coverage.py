@@ -195,7 +195,15 @@ async def test_supported_attachment_conversion_failure_and_feed_failure_stay_pen
     assert (
         await project.batch(fence.organization_id, fence.sync_id, "gmail", target, logger)
     ).failed == 1
-    target.feed_prepared.assert_not_awaited()
+    target.feed_prepared.assert_awaited_once()
+    async with database() as db:
+        partial = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
+        coverage = await current_extraction(
+            db, fence.organization_id, fence.sync_id, partial.id, partial.record_revision
+        )
+        assert [p.outcome for p in coverage.parts] == ["indexed", "failed"]
+        assert coverage.parts[1].reason == "conversion_failed"
+        assert partial.projection_error == "conversion_failed"
     await capture(
         database, service, fence, original(part(b"video", mime="video/mp4", filename="clip.mp4"))
     )
@@ -205,7 +213,7 @@ async def test_supported_attachment_conversion_failure_and_feed_failure_stay_pen
     ).failed == 1
     async with database() as db:
         row = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
-        assert row.indexed_generation is None
+        assert row.indexed_revision != row.record_revision
         assert (
             await current_extraction(
                 db, fence.organization_id, fence.sync_id, row.id, row.record_revision
@@ -356,7 +364,7 @@ async def test_coverage_manifest_is_exact_immutable_and_capture_fences_publicati
         )
 
 
-async def test_inline_image_without_ocr_keeps_body_partial_but_converter_failure_is_fatal(
+async def test_inline_image_without_ocr_and_configured_conversion_failure_are_distinct(
     database, source, tmp_path
 ):
     service, fence = source
@@ -395,16 +403,15 @@ async def test_inline_image_without_ocr_keeps_body_partial_but_converter_failure
     )
     target.feed_prepared.reset_mock()
     failed = await configured.batch(fence.organization_id, fence.sync_id, "gmail", target, logger)
-    assert failed.failed == 1 and failed.published == 0
+    assert failed.failed == 1 and failed.published == 1
     ocr.convert_batch.assert_awaited_once()
-    target.feed_prepared.assert_not_awaited()
+    target.feed_prepared.assert_awaited_once()
     async with database() as db:
-        assert (
-            await current_extraction(
-                db, fence.organization_id, fence.sync_id, row.id, row.record_revision
-            )
-            is None
+        coverage = await current_extraction(
+            db, fence.organization_id, fence.sync_id, row.id, row.record_revision
         )
+        assert [p.outcome for p in coverage.parts] == ["indexed", "failed"]
+        assert coverage.parts[1].reason == "conversion_failed"
 
 
 async def test_drive_metadata_only_reports_missing_original_then_new_bytes_are_indexed(

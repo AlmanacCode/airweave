@@ -93,9 +93,49 @@ def _pending_record():
             Entity.indexed_revision.is_distinct_from(Entity.record_revision),
             Entity.indexed_pipeline_version.is_distinct_from(Sync.index_pipeline_version),
             Entity.indexed_generation.is_(None),
+            Entity.projection_error.is_not(None),
         ),
         or_(Entity.deleted_at.is_not(None), content_is_available()),
     )
+
+
+def _retain_published_parts(
+    previous: ProjectionGeneration, coverage: ExtractionCoverage | None, work: ProjectionWork
+) -> None:
+    """A retry at the same canonical revision cannot erase already searchable parts."""
+    if (
+        previous.revision != work.record.revision
+        or previous.pipeline_version != work.pipeline_version
+        or previous.extraction_coverage is None
+    ):
+        return
+    prior = ExtractionCoverage.model_validate(previous.extraction_coverage)
+    prior_parts = {p.part_index for p in prior.parts if p.outcome == "indexed"}
+    current_parts = (
+        {p.part_index for p in coverage.parts if p.outcome == "indexed"} if coverage else set()
+    )
+    if not prior_parts <= current_parts:
+        raise ValueError("Projection retry cannot discard published parts")
+
+
+def _retire_previous(
+    previous: ProjectionGeneration,
+    replacement: ProjectionGeneration,
+    coverage: ExtractionCoverage | None,
+    work: ProjectionWork,
+    no_content: bool,
+) -> None:
+    """Validated replacement retires index artifacts without dropping eligible body facts."""
+    if not no_content:
+        _retain_published_parts(previous, coverage, work)
+    if (
+        previous.mail_body_text is None
+        or replacement.mail_body_text is not None
+        or previous.revision != work.record.revision
+        or previous.pipeline_version != work.pipeline_version
+    ):
+        previous.retired_at = datetime.now(timezone.utc)
+    previous.next_gc_at = datetime.now(timezone.utc)
 
 
 class CanonicalProjectionStore:
@@ -485,14 +525,16 @@ class CanonicalProjectionStore:
             if work.previous_generation is not None:
                 previous = await db.get(ProjectionGeneration, work.previous_generation)
                 if previous is not None:
-                    if previous.mail_body_text is None:
-                        previous.retired_at = datetime.now(timezone.utc)
-                    previous.next_gc_at = datetime.now(timezone.utc)
+                    _retire_previous(previous, attempt, coverage, work, no_content)
             entity.indexed_revision = work.record.revision
             entity.indexed_pipeline_version = work.pipeline_version
             entity.indexed_generation = generation
             entity.indexed_chunk_count = chunk_count
-            entity.projection_error = None
+            entity.projection_error = (
+                "conversion_failed"
+                if coverage is not None and any(p.outcome == "failed" for p in coverage.parts)
+                else None
+            )
             await db.flush()
             return True
 

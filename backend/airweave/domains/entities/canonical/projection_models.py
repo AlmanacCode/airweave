@@ -3,7 +3,7 @@
 import re
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from airweave.domains.entities.canonical.models import SourceRecord
 
@@ -91,6 +91,21 @@ class ProjectionBatchResult(BaseModel):
     published: int = 0
     superseded: int = 0
     failed: int = 0
+
+
+class ProjectionResult(BaseModel):
+    """A partial publication can succeed while retaining explicit conversion failures."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    published: bool = False
+    conversion_failed: bool = False
+
+    @model_validator(mode="after")
+    def failure_requires_publication(self) -> "ProjectionResult":
+        """Rejected CAS is superseded; a reported partial must actually be published."""
+        if self.conversion_failed and not self.published:
+            raise ValueError("Conversion failure result requires a partial publication")
+        return self
 
 
 class ProjectionDocument(BaseModel):

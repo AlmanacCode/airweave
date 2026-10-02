@@ -76,6 +76,7 @@ class TextualRepresentationBuilder:
         runtime: "ProcessingRuntime",
         *,
         native_bodies: dict[str, NativeTextBody] | None = None,
+        strict_conversion: bool = False,
     ) -> BuiltTextBatch:
         """Retain exact converted text and content boundaries before chunking clears them."""
         native_bodies = native_bodies or {}
@@ -99,11 +100,16 @@ class TextualRepresentationBuilder:
                 entity.textual_representation = prefix + body.text
 
         # Step 2: Partition entities by converter
-        converter_groups, failed_entities = self._partition_by_converter(entities, sync_context)
+        converter_groups, failed_entities = self._partition_by_converter(
+            entities, sync_context, strict_conversion=strict_conversion
+        )
 
         # Step 3: Convert each partition
         additional_failures = await self._convert_partitions(
-            converter_groups, sync_context, content_starts
+            converter_groups,
+            sync_context,
+            content_starts,
+            strict_conversion=strict_conversion,
         )
         failed_entities.extend(additional_failures)
 
@@ -127,6 +133,7 @@ class TextualRepresentationBuilder:
                 )
                 for entity in entities
             ),
+            failed_entity_ids=tuple(entity.entity_id for entity in failed_entities),
         )
 
     # ------------------------------------------------------------------------------------
@@ -322,12 +329,15 @@ class TextualRepresentationBuilder:
         self,
         entities: List[BaseEntity],
         sync_context: "ProcessingContext",
+        *,
+        strict_conversion: bool = False,
     ) -> Tuple[Dict[Any, List[Tuple[BaseEntity, str]]], List[BaseEntity]]:
         """Partition entities by their converter type.
 
         Args:
             entities: Entities to partition
             sync_context: Sync context for logging
+            strict_conversion: Propagate routing errors instead of reporting content failures
 
         Returns:
             Tuple of (converter_groups, failed_entities) where:
@@ -347,6 +357,8 @@ class TextualRepresentationBuilder:
                     converter_groups[converter] = []
                 converter_groups[converter].append((entity, key))
             except EntityProcessingError as e:
+                if strict_conversion:
+                    raise
                 sync_context.logger.warning(
                     f"Skipping {entity.__class__.__name__}[{entity.entity_id}]: {e}"
                 )
@@ -389,6 +401,8 @@ class TextualRepresentationBuilder:
         converter_groups: Dict[Any, List[Tuple[BaseEntity, str]]],
         sync_context: "ProcessingContext",
         content_starts: dict[str, int],
+        *,
+        strict_conversion: bool = False,
     ) -> List[BaseEntity]:
         """Execute batch conversion for each converter group.
 
@@ -396,6 +410,7 @@ class TextualRepresentationBuilder:
             converter_groups: Dict mapping converter to (entity, key) tuples
             sync_context: Sync context for logging
             content_starts: Per-entity converter-content offsets to populate
+            strict_conversion: Only explicit unavailable converter results may omit content
 
         Returns:
             List of entities that failed conversion
@@ -408,7 +423,11 @@ class TextualRepresentationBuilder:
             for i in range(0, len(entity_key_pairs), batch_size):
                 sub_batch = entity_key_pairs[i : i + batch_size]
                 failures = await self._convert_sub_batch(
-                    converter, sub_batch, sync_context, content_starts
+                    converter,
+                    sub_batch,
+                    sync_context,
+                    content_starts,
+                    strict_conversion=strict_conversion,
                 )
                 failed_entities.extend(failures)
 
@@ -420,6 +439,8 @@ class TextualRepresentationBuilder:
         sub_batch: List[Tuple[BaseEntity, str]],
         sync_context: "ProcessingContext",
         content_starts: dict[str, int],
+        *,
+        strict_conversion: bool = False,
     ) -> List[BaseEntity]:
         """Convert a sub-batch of entities using the given converter.
 
@@ -428,6 +449,7 @@ class TextualRepresentationBuilder:
             sub_batch: List of (entity, key) tuples
             sync_context: Sync context for logging
             content_starts: Per-entity converter-content offsets to populate
+            strict_conversion: Propagate unexpected converter exceptions
 
         Returns:
             List of entities that failed conversion
@@ -438,6 +460,8 @@ class TextualRepresentationBuilder:
         try:
             # Batch convert returns Dict[key, text_content]
             results = await converter.convert_batch(keys)
+            if strict_conversion and set(results) != set(keys):
+                raise EntityProcessingError("Converter did not account for every requested input")
 
             # Append content to each entity
             for entity, key in sub_batch:
@@ -460,6 +484,8 @@ class TextualRepresentationBuilder:
             # Infrastructure failure - propagate to fail entire sync
             raise
         except EntityProcessingError as e:
+            if strict_conversion:
+                raise
             # Recoverable converter issue - skip sub-batch
             converter_name = converter.__class__.__name__
             sync_context.logger.warning(
@@ -467,6 +493,8 @@ class TextualRepresentationBuilder:
             )
             failed_entities.extend([entity for entity, _ in sub_batch])
         except Exception as e:
+            if strict_conversion:
+                raise
             # Unexpected errors - mark sub-batch as failed but continue
             converter_name = converter.__class__.__name__
             sync_context.logger.error(

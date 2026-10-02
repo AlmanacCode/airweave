@@ -33,8 +33,8 @@ from airweave.domains.entities.canonical.projection_mappers import map_record
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.projector import (
     ProjectionContext,
+    ProjectionConversionTracker,
     ProjectionRuntime,
-    StrictProjectionTracker,
     _select_inputs,
 )
 from airweave.domains.entities.canonical.requests import BlobReference
@@ -221,7 +221,7 @@ async def prepare_body(work, sessions, store, storage, registry, builder) -> boo
         built = await builder.build_with_text(
             selected,
             ProjectionContext(logging.getLogger("private-mail-text"), "gmail"),
-            ProjectionRuntime(StrictProjectionTracker()),
+            ProjectionRuntime(ProjectionConversionTracker()),
         )
         body = prepared_mail_body(built.representations, generation, work.record.completeness)
         if body is None:

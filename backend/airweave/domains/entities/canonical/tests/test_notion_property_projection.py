@@ -304,9 +304,11 @@ async def test_unsupported_property_publishes_explicit_extraction(database, sour
             )
             if w.record.identity.record_type == "page_property"
         )
-    assert await projector(database, storage).project_one(
-        work, "notion", destination(binding.collection_id), logger
-    )
+    assert (
+        await projector(database, storage).project_one(
+            work, "notion", destination(binding.collection_id), logger
+        )
+    ).published
     async with database() as db:
         row = await db.scalar(select(Entity).where(Entity.id == work.record.id))
         coverage = await current_extraction(
