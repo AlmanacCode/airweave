@@ -6,6 +6,7 @@ import re
 from collections import defaultdict
 from uuid import UUID
 
+from anyio import CapacityLimiter, create_task_group
 from fastapi import HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 from sqlalchemy import and_, case, func, or_, select, tuple_
@@ -82,6 +83,19 @@ class _EnrichmentRecord(BaseModel):
     native_version: NativeVersion | None
 
 
+class _CollectionResult(BaseModel):
+    """Detached collection outcome; SQL sessions never cross concurrent tasks."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    hits: dict[UUID, OwnedSearchHit]
+    scores: dict[UUID, tuple[float, ProjectionLocator]]
+    text: dict[UUID, str]
+    excluded: int
+    postfiltered: int
+    engine_partial: bool
+    window_full: bool
+
+
 class OwnedSearchService:
     """Canonical retrieval and optional shared ranking, without source provider calls."""
 
@@ -129,31 +143,56 @@ class OwnedSearchService:
             retrieval_strategy=request.mode,
         )
         prepared_query = await self._executor.prepare_query(plan) if groups else None
-        for (collection_id, readable_id), sync_ids in groups.items():
-            # A new session has no checked-out connection before indexed retrieval:
-            # this path has neither principal ACL discovery nor provider federation.
-            async with sessions() as db:
-                results = await self._executor.execute(
-                    plan=plan,
-                    prepared_query=prepared_query,
-                    user_filter=[FilterGroup(conditions=self._prefilters(request, sync_ids))],
-                    collection_id=str(collection_id),
-                    db=db,
-                    ctx=ctx,
-                    collection_readable_id=readable_id,
-                    indexed_only=True,
-                )
-                group_hits, group_scores, group_text, rejected, filtered = await self._enrich(
-                    db, ctx, request, sync_ids, scopes, results
-                )
-            engine_partial |= results.engine_partial
-            exclusions += results.excluded_candidates
-            full |= len(results.results) + results.excluded_candidates >= 200
-            hits.update(group_hits)
-            scores.update(group_scores)
-            matched_text.update(group_text)
-            exclusions += rejected
-            postfiltered += filtered
+        limiter = CapacityLimiter(4)
+        outcomes: dict[UUID, _CollectionResult | HTTPException] = {}
+
+        async def retrieve(collection_id: UUID, readable_id: str, sync_ids: list[UUID]) -> None:
+            async with limiter:
+                try:
+                    # Each task owns a session. No SQL connection is checked out
+                    # before the executor's index request; federation stays disabled.
+                    async with sessions() as db:
+                        results = await self._executor.execute(
+                            plan=plan,
+                            prepared_query=prepared_query,
+                            user_filter=[
+                                FilterGroup(conditions=self._prefilters(request, sync_ids))
+                            ],
+                            collection_id=str(collection_id),
+                            db=db,
+                            ctx=ctx,
+                            collection_readable_id=readable_id,
+                            indexed_only=True,
+                        )
+                        found, ranks, text, rejected, filtered = await self._enrich(
+                            db, ctx, request, sync_ids, scopes, results
+                        )
+                    outcomes[collection_id] = _CollectionResult(
+                        hits=found,
+                        scores=ranks,
+                        text=text,
+                        excluded=results.excluded_candidates + rejected,
+                        postfiltered=filtered,
+                        engine_partial=results.engine_partial,
+                        window_full=len(results.results) + results.excluded_candidates >= 200,
+                    )
+                except HTTPException as error:
+                    outcomes[collection_id] = error
+
+        async with create_task_group() as tasks:
+            for (collection_id, readable_id), sync_ids in groups.items():
+                tasks.start_soon(retrieve, collection_id, readable_id, sync_ids)
+        for collection_id, _ in groups:
+            outcome = outcomes[collection_id]
+            if isinstance(outcome, HTTPException):
+                raise outcome
+            engine_partial |= outcome.engine_partial
+            exclusions += outcome.excluded
+            full |= outcome.window_full
+            hits.update(outcome.hits)
+            scores.update(outcome.scores)
+            matched_text.update(outcome.text)
+            postfiltered += outcome.postfiltered
         # Revalidate the whole union before any remote text disclosure: earlier
         # collections may have changed while later collections were retrieved.
         async with sessions() as db:

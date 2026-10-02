@@ -1,11 +1,12 @@
 """Real SQL authority and actual HTTP/executor with fake search/embedding transport."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event, select, update
 
@@ -673,3 +674,81 @@ async def test_owned_lexical_fragment_keeps_original_chunk(
     assert response.json()["items"][0]["excerpts"] == [expected]
     assert response.json()["items"][0]["record_id"] == str(locator.record_id)
     assert candidate.textual_representation == original
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+async def test_collection_retrieval_overlaps_with_bounded_independent_sessions(
+    database, indexed, http_search, unavailable
+):
+    """Seven collections must overlap, without seven simultaneous index requests."""
+    fence, _, _ = indexed
+    client, _, _, executor, _ = http_search
+    syncs = [fence.sync_id]
+    async with database() as db:
+        deployment = await db.scalar(select(VectorDbDeploymentMetadata))
+        for i in range(6):
+            sync_id = uuid4()
+            syncs.append(sync_id)
+            db.add(
+                Collection(
+                    name=f"Parallel {i}",
+                    readable_id=f"parallel-{i}",
+                    organization_id=fence.organization_id,
+                    vector_db_deployment_metadata_id=deployment.id,
+                )
+            )
+            db.add(Sync(id=sync_id, organization_id=fence.organization_id, name=f"Parallel {i}"))
+            await db.flush()
+            db.add(
+                SourceConnection(
+                    name=f"Parallel {i}",
+                    short_name="gmail",
+                    organization_id=fence.organization_id,
+                    readable_collection_id=f"parallel-{i}",
+                    sync_id=sync_id,
+                    is_authenticated=True,
+                )
+            )
+        await db.commit()
+    first_wave = asyncio.Event()
+    active = peak = 0
+    sessions_seen = []
+    embeddings_seen = []
+
+    async def retrieve(**kwargs):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        sessions_seen.append(kwargs["db"])
+        embeddings_seen.append(kwargs["prepared_query"])
+        if active == 4:
+            first_wave.set()
+        try:
+            # A sequential implementation cannot release this rendezvous.
+            await asyncio.wait_for(first_wave.wait(), timeout=2)
+            await asyncio.sleep(0)
+            if unavailable and kwargs["collection_readable_id"] == "parallel-3":
+                raise HTTPException(404, "Collection was withdrawn")
+            return SearchResults(results=[])
+        finally:
+            active -= 1
+
+    executor.execute = retrieve
+    response = await client.post(
+        "/sync/search",
+        json={
+            "query": "budget",
+            "sync_ids": [str(sync) for sync in syncs],
+            "mode": "keyword",
+        },
+    )
+    if unavailable:
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Collection was withdrawn"}
+    else:
+        assert response.status_code == 200, response.text
+        assert response.json()["items"] == []
+    assert peak == 4 and len(sessions_seen) == 7
+    assert len({id(session) for session in sessions_seen}) == 7
+    assert embeddings_seen[0] is not None
+    assert all(value is embeddings_seen[0] for value in embeddings_seen)
