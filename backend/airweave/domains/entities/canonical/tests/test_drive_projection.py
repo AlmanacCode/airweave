@@ -142,7 +142,8 @@ async def test_docs_text_keeps_missing_media_in_extraction_parts():
     source, storage, _ = docs_record(native_available=True)
     before = source.model_dump()
     async with map_record(source, "google_drive", storage) as result:
-        assert len(result.parts) == 2
+        assert len(result.parts) == 3
+        assert result.parts[-1].part.kind == "metadata"
         assert "retained authored text" in Path(result.entities[0].local_path).read_text()
         missing = result.parts[1]
         assert missing.entity is None and missing.omission is None
@@ -150,7 +151,11 @@ async def test_docs_text_keeps_missing_media_in_extraction_parts():
         assert missing.part.part_index == 1
         evidence = coverage(result, source)
         assert evidence.status == "partial"
-        assert [part.outcome for part in evidence.parts] == ["indexed", "unavailable_original"]
+        assert [part.outcome for part in evidence.parts] == [
+            "indexed",
+            "unavailable_original",
+            "indexed",
+        ]
     assert source.model_dump() == before
     assert storage.read_file.await_count == 2
 
@@ -179,7 +184,8 @@ async def test_unknown_extensionless_original_is_unsupported_not_conversion_fail
     storage.read_file.return_value = content
     before = source.model_dump()
     async with map_record(source, "google_drive", storage) as result:
-        assert len(result.parts) == 1 and not result.entities
+        assert len(result.parts) == 2
+        assert len(result.entities) == 1 and result.parts[1].part.kind == "metadata"
         assert result.parts[0].omission == "unsupported_format"
         assert coverage(result, source).status == "unavailable"
     assert source.model_dump() == before
@@ -206,8 +212,8 @@ async def test_docs_without_native_or_export_publishes_only_unavailable_coverage
     storage = AsyncMock()
     storage.read_file.return_value = raw
     async with map_record(source, "google_drive", storage) as result:
-        assert not result.entities
-        assert len(result.parts) == 1 and result.parts[0].part.part_index == 0
+        assert len(result.entities) == 1 and result.parts[-1].part.kind == "metadata"
+        assert len(result.parts) == 2 and result.parts[0].part.part_index == 0
         evidence = coverage(result, source)
         assert evidence.status == "unavailable"
         assert evidence.parts[0].outcome == "unavailable_original"

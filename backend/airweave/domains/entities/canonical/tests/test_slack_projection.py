@@ -357,7 +357,8 @@ async def test_child_file_retained_and_unavailable_have_one_extraction_owner():
         contents = {manifest.key: data, original.key: content}
         storage.read_file.side_effect = lambda key, contents=contents, **_: contents[key]
         async with map_record(current, "slack", storage) as mapped:
-            assert len(mapped.parts) == 1 and mapped.parts[0].part.key == "file:F1"
+            assert len(mapped.parts) == 2 and mapped.parts[0].part.key == "file:F1"
+            assert mapped.parts[1].part.kind == "metadata"
             assert (mapped.parts[0].entity is not None) == captured
         with pytest.raises(ValueError, match="exact message parent"):
             async with map_record(current.model_copy(update={"parent": None}), "slack", storage):

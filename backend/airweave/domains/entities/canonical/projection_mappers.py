@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 from pydantic import BaseModel, ConfigDict, JsonValue, StrictBool, TypeAdapter, ValidationError
 
 from airweave.domains.entities.canonical.extraction_models import ExtractionPart
+from airweave.domains.entities.canonical.file_metadata import with_file_metadata
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_inputs import ProjectionInput, ProjectionInputs
 from airweave.domains.entities.canonical.projection_policy import excluded_from_search
@@ -510,7 +511,7 @@ async def map_record(  # noqa: C901 -- explicit provider dispatch keeps mapper o
         elif source_name == "slack" and record.identity.record_type == "file":
             from airweave.domains.entities.canonical.slack_projection import map_slack_file
 
-            yield await map_slack_file(record, storage, directory)
+            yield with_file_metadata(record, await map_slack_file(record, storage, directory))
             return
         elif source_name == "slack" and record.identity.record_type == "message":
             from airweave.domains.entities.canonical.slack_projection import map_slack_files
@@ -528,7 +529,7 @@ async def map_record(  # noqa: C901 -- explicit provider dispatch keeps mapper o
             yield _wispr_inputs(record)
             return
         elif source_name == "google_drive":
-            yield await _drive(record, storage, directory)
+            yield with_file_metadata(record, await _drive(record, storage, directory))
             return
         else:
             entities = await _map_entities(record, source_name, storage, directory)

@@ -11,7 +11,7 @@ class MatchedPart(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     part_index: int = Field(ge=0)
     key: str = Field(min_length=1, max_length=2048)
-    kind: Literal["body", "file", "record"]
+    kind: Literal["body", "file", "record", "metadata"]
     title: str = Field(max_length=512)
 
 
