@@ -34,13 +34,6 @@ def _attachment(part: dict) -> bool:
     )
 
 
-def _has_html(part: dict) -> bool:
-    """Find an HTML alternative even when wrapped by multipart/related."""
-    return part.get("mimeType") == "text/html" or any(
-        _has_html(child) for child in part.get("parts", [])
-    )
-
-
 async def _body(
     part: dict,
     path: str,
@@ -80,6 +73,32 @@ class GmailProjection:
         self.directory = directory
         self.attachments: list[ProjectionInput] = []
         self.charset_recoveries: list[CharsetRecovery] = []
+        self.decoded_text: dict[str, DecodedText] = {}
+
+    async def _decoded_text_for(self, part: dict, path: str) -> DecodedText:
+        """Decode one MIME body once, whether selection or rendering reaches it first."""
+        decoded = self.decoded_text.get(path)
+        if decoded is None:
+            content = await _body(part, path, self.record, self.storage)
+            decoded = _decode_text(content, part, path)
+            self.decoded_text[path] = decoded
+        return decoded
+
+    async def _has_nonempty_html(self, part: dict, path: str) -> bool:
+        """Check decoded HTML content, including HTML nested in related parts."""
+        mime = part.get("mimeType", "").lower()
+        if mime.startswith("multipart/"):
+            children = list(enumerate(part.get("parts", [])))
+            if mime == "multipart/alternative":
+                children.reverse()
+            for index, child in children:
+                if await self._has_nonempty_html(child, f"{path}/parts/{index}"):
+                    return True
+            return False
+        if mime != "text/html" or _attachment(part):
+            return False
+        decoded = await self._decoded_text_for(part, path)
+        return bool(decoded.text.strip())
 
     async def attachment(self, part: dict, path: str) -> None:
         """Project retained attachment bytes; keep missing bytes explicit on the original."""
@@ -130,18 +149,21 @@ class GmailProjection:
         if mime.startswith("multipart/"):
             children = list(enumerate(part.get("parts", [])))
             if mime == "multipart/alternative":
-                html_parts = [(i, p) for i, p in children if _has_html(p)]
+                html_part = None
+                for index, child in reversed(children):
+                    if await self._has_nonempty_html(child, f"{path}/parts/{index}"):
+                        html_part = (index, child)
+                        break
                 plain_parts = [(i, p) for i, p in children if p.get("mimeType") == "text/plain"]
                 # Prefer one complete alternative, not duplicate plain and HTML text.
-                children = html_parts[-1:] or plain_parts[-1:] or children[-1:]
+                children = [html_part] if html_part else plain_parts[-1:] or children[-1:]
             return "\n".join(
                 [await self.render(child, f"{path}/parts/{index}") for index, child in children]
             )
         if _attachment(part):
             await self.attachment(part, path)
             return ""
-        content = await _body(part, path, self.record, self.storage)
-        decoded = _decode_text(content, part, path)
+        decoded = await self._decoded_text_for(part, path)
         if decoded.recovery is not None:
             self.charset_recoveries.append(decoded.recovery)
         text = decoded.text

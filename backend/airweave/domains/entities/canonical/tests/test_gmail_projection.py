@@ -119,6 +119,97 @@ async def test_alternative_prefers_full_html_not_plain_duplicate_or_snippet(tmp_
     assert entities[0].local_path is not None
 
 
+@pytest.mark.parametrize("html_body", [b"", b" \n\t "])
+@pytest.mark.asyncio
+async def test_alternative_falls_back_to_plain_when_html_is_empty(tmp_path, html_body):
+    source = record(
+        {
+            "mimeType": "multipart/alternative",
+            "parts": [part(b"usable plain body", "text/plain"), part(html_body, "text/html")],
+        }
+    )
+
+    await map_gmail(source, AsyncMock(), tmp_path)
+
+    assert next(tmp_path.glob("*.html")).read_text() == "<pre>usable plain body</pre>"
+
+
+@pytest.mark.asyncio
+async def test_related_empty_html_alternative_falls_back_without_materializing_siblings(tmp_path):
+    source = record(
+        {
+            "mimeType": "multipart/alternative",
+            "parts": [
+                part(b"usable plain body", "text/plain"),
+                {
+                    "mimeType": "multipart/related",
+                    "parts": [
+                        part(b" \n ", "text/html"),
+                        part(b"image bytes", "image/png", filename="image.png"),
+                    ],
+                },
+            ],
+        }
+    )
+
+    entities = await map_gmail(source, AsyncMock(), tmp_path)
+
+    assert len(entities.entities) == 1
+    assert next(tmp_path.glob("*.html")).read_text() == "<pre>usable plain body</pre>"
+
+
+@pytest.mark.asyncio
+async def test_unreadable_html_alternative_does_not_fall_back_to_plain(tmp_path):
+    source = record(
+        {
+            "mimeType": "multipart/alternative",
+            "parts": [
+                part(b"usable plain body", "text/plain"),
+                {"mimeType": "text/html", "body": {"attachmentId": "missing", "size": 0}},
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="exactly one"):
+        await map_gmail(source, AsyncMock(), tmp_path)
+
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.asyncio
+async def test_last_readable_html_skips_earlier_missing_blob_and_reads_selected_once(
+    tmp_path, nested
+):
+    payload = {
+        "mimeType": "multipart/alternative",
+        "parts": [
+            {"mimeType": "text/html", "body": {"attachmentId": "missing", "size": 0}},
+            {"mimeType": "text/html", "body": {"attachmentId": "selected", "size": 0}},
+        ],
+    }
+    body_path = "/payload/parts/1/body"
+    if nested:
+        payload = {
+            "mimeType": "multipart/alternative",
+            "parts": [
+                part(b"plain", "text/plain"),
+                {"mimeType": "multipart/related", "parts": [payload]},
+            ],
+        }
+        body_path = "/payload/parts/1/parts/0/parts/1/body"
+    source = record(payload)
+    content = b"<p>Selected external HTML</p>"
+    source = source.model_copy(update={"blobs": (blob(source, content, body_path),)})
+    storage = AsyncMock()
+    storage.read_file.return_value = content
+
+    await map_gmail(source, storage, tmp_path)
+
+    assert next(tmp_path.glob("*.html")).read_text() == content.decode()
+    storage.read_file.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_external_blob_and_duplicate_filename_attachments_get_distinct_identity(tmp_path):
     source = record(
