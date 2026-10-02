@@ -1,0 +1,90 @@
+{
+  "terminal": "completed",
+  "elapsed_seconds": 65.983,
+  "workflow_started": true,
+  "counts": {
+    "derived_bytes": 144635,
+    "document_bytes": 7558927,
+    "documents": 503,
+    "local_dense_requests": 503,
+    "vespa_requests": 503,
+    "forbidden_requests": 0
+  },
+  "runtime_commit": "f6c89e446365629b075a30e791c39edfdf63c602",
+  "capture_complete": false,
+  "native_unique_files_metadata_only": 124,
+  "paid_calls": 0,
+  "provider_calls": 0,
+  "limits": {
+    "seconds": 600,
+    "aggregate_derived_bytes": 134217728,
+    "free_floor": 2147483648
+  },
+  "cleanup_verified": false,
+  "policy_exclusions": 0,
+  "policy_exclusion_basis": "Frozen Slack projection policy excludes no record kinds; zero chunks reported separately",
+  "original_checkpoint_and_payload_unchanged": true,
+  "clone_checkpoint_and_payload_unchanged": true,
+  "per_kind": [
+    {
+      "entity_definition_short_name": "message",
+      "records": 1855,
+      "current_publications": 1855,
+      "zero_chunk_publications": 0,
+      "failures": 0
+    },
+    {
+      "entity_definition_short_name": "channel",
+      "records": 80,
+      "current_publications": 80,
+      "zero_chunk_publications": 0,
+      "failures": 0
+    }
+  ],
+  "extraction": {
+    "complete": 1744,
+    "partial": 111
+  },
+  "import_proof": {
+    "imported": 479,
+    "previous_publications_unchanged": 1456,
+    "source_checkpoint_unchanged": true,
+    "target_checkpoint_unchanged": true,
+    "new_target_ids_are_derived_copies": true,
+    "native_identity_unchanged": true,
+    "provider_calls": 0,
+    "index_feed_calls": 0,
+    "synthetic_evaluation_delta": true
+  },
+  "final_generations": {
+    "prior_publication_generations_unchanged": 1456,
+    "delta_current": 479,
+    "new_total_current": 1935,
+    "source_target_identity_map_retained": true
+  },
+  "installed_cli": {
+    "commands": 13,
+    "preselected_native_positives": 3,
+    "keyword_found": 3,
+    "hybrid_found": 3,
+    "exact_original_reads": 3,
+    "native_text_matches": 3,
+    "fixture_authentication": true,
+    "product_commit": "1d3b9fd21",
+    "slack_only_loopback_ports": [
+      58171,
+      58172
+    ]
+  },
+  "coverage_caveats": [
+    "Evolved existing isolated evaluation index; prior dated qualification evidence remains a historical snapshot.",
+    "New target record UUIDs are derived copies of exact retained native observations; private identity mapping records source and target revisions.",
+    "Capture source still has27completed scans and1collecting; index import does not copy or advance capture checkpoints.",
+    "124 unique native file IDs have metadata only;111message extractions partial.",
+    "No production cross-store replicator implemented."
+  ],
+  "runtime": {
+    "detached_read_only_fixture": true,
+    "not_production_deployment": true
+  }
+}
