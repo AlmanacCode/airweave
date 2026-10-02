@@ -164,7 +164,13 @@ async def test_captured_blob_to_published_search_and_withdrawal(
                 result = await api.post("/sync/search", json={**request, "mode": mode})
                 assert result.status_code == 200, result.text
                 assert [hit["record_id"] for hit in result.json()["items"]] == [record_id]
-                assert "fundraising meeting" in " ".join(result.json()["items"][0]["excerpts"])
+                excerpt = " ".join(result.json()["items"][0]["excerpts"])
+                # Lexical summaries may select the matching filename rather than
+                # the body sentence. Semantic mode retains the full chunk fallback.
+                assert "fundraising" in excerpt.casefold()
+                assert "<hi>" not in excerpt and "<sep />" not in excerpt
+                if mode == "semantic":
+                    assert "fundraising meeting" in excerpt
                 assert result.json()["sources"][0]["pending_records"] == 0
             changed = original.model_copy(
                 update={"payload": {**original.payload, "name": "Updated fundraising.txt"}}

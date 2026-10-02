@@ -587,7 +587,10 @@ class OwnedSearchService:
                 # Remove only Vespa's presentation delimiters. All other markup is
                 # ordinary untrusted text, never parsed/rendered as HTML here.
                 excerpt = (
-                    snippet.replace("<hi>", "").replace("</hi>", "").strip()
+                    snippet.replace("<hi>", "")
+                    .replace("</hi>", "")
+                    .replace("<sep />", " … ")
+                    .strip()
                     or result.textual_representation
                 )[:2000]
             else:

@@ -632,17 +632,21 @@ async def test_visibility_batches_exact_parts_generations_and_duplicate_chunks(d
 
 
 @pytest.mark.parametrize(
-    "mode,snippet,use_fragment",
+    "mode,snippet,expected_fragment",
     [
-        ("keyword", "… <hi>नमस्ते</hi> 原文 <script>alert(1)</script>", True),
-        ("hybrid", "… <hi>नमस्ते</hi> 原文", True),
-        ("semantic", "… <hi>नमस्ते</hi> 原文", False),
-        ("hybrid", "An unmatched lead without term markers", False),
-        ("keyword", None, False),
+        (
+            "keyword",
+            "<sep /><hi>नमस्ते</hi> 原文 <script>alert(1)</script><sep />",
+            "… नमस्ते 原文 <script>alert(1)</script> …",
+        ),
+        ("hybrid", "… <hi>नमस्ते</hi> 原文", "… नमस्ते 原文"),
+        ("semantic", "… <hi>नमस्ते</hi> 原文", None),
+        ("hybrid", "An unmatched lead without term markers", None),
+        ("keyword", None, None),
     ],
 )
 async def test_owned_lexical_fragment_keeps_original_chunk(
-    database, indexed, http_search, mode, snippet, use_fragment
+    database, indexed, http_search, mode, snippet, expected_fragment
 ):
     fence, locator, _ = indexed
     client, vector, _, _, _ = http_search
@@ -664,7 +668,7 @@ async def test_owned_lexical_fragment_keeps_original_chunk(
         },
     )
     assert response.status_code == 200, response.text
-    expected = snippet.replace("<hi>", "").replace("</hi>", "") if use_fragment else original[:2000]
+    expected = expected_fragment if expected_fragment is not None else original[:2000]
     assert response.json()["items"][0]["excerpts"] == [expected]
     assert response.json()["items"][0]["record_id"] == str(locator.record_id)
     assert candidate.textual_representation == original
