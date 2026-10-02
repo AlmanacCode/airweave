@@ -637,3 +637,35 @@ The final operator stdout serialization failed after durable evidence was saved;
 this is a reporting defect, not a workflow failure. No recapture or repeated
 projection was performed to fix reporting. Production worker activation and
 capture child-workflow dispatch remain unqualified.
+
+
+### Slack checkpoint progress, 2026-10-02
+
+A surviving retained evaluation had 79 channels, 381 messages and an active
+checkpoint; its failed job had hit the record budget. Its pinned native
+workspace/user fingerprint matched current capture, but its schema lacked current
+columns. One isolated current-schema copy preserved originals, scans and cursor.
+A new writer used the actual canonical capture driver against the same active
+cycle. The original corpus digest remained unchanged.
+
+The bounded 600-second pass retained **80 channels and 1,376 messages**, including
+**995 new message IDs**. It made 136 capture proxy requests, including identity
+and retries, plus one separate broker metadata read. Nine observed HTTP 429
+responses each supplied a 60-second Retry-After. The deadline cancelled the job;
+the cycle remains active with 23 complete scans and one collecting scan. SQL
+proved that the prior collecting message scan kept its scan and sweep IDs,
+advanced its revision and continuation, and completed. The isolated copy and
+advanced checkpoint are preserved. Another pass needs a new writer job because
+the cancelled job is terminal; it must reuse this copy and its current checkpoint.
+
+File capture stayed disabled to preserve the immutable cycle configuration.
+Ninety-one messages contain metadata for 101 distinct native file IDs; these
+references are **not downloaded assets**. The 995 new messages are captured only:
+zero new projection generations or publication rows were created. The 381 prior
+message publication rows were copied; their remote index was not requalified.
+No model, index feed, provider write,
+auth change or scheduling activation ran. Full source completion and separate
+file retention remain unqualified. The copy retains original index routing IDs;
+future projection must first isolate its collection namespace.
+
+See `evidence/slack-checkpoint-progress-20261002.json`.

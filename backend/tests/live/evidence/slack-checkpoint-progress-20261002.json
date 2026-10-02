@@ -1,0 +1,136 @@
+{
+  "date": "2026-10-02",
+  "provider": "slack",
+  "implementation_commit": "a6c2d0eaed22da59edf666e6ac2215f69d74f107",
+  "scope": "Full accessible channel membership and retained message history; partial capture only, no hidden date/channel filter",
+  "status": "bounded_partial_progress_verified",
+  "source_authority": "fresh pinned native workspace/user attestation through actual SlackSource.create; saved broker account metadata ACTIVE, not disabled, exact selected account/user/auth-config matches",
+  "prior_capture": {
+    "channels": 79,
+    "messages": 381,
+    "job_status": "failed",
+    "failure": "BudgetExceeded: records",
+    "cycle": "active",
+    "current_fingerprint_matches": true,
+    "schema_upgrade_required": true
+  },
+  "isolation": "One current-schema clone; original native payload/revision/blob-reference digest unchanged before and after. Existing scans/cursor/IDs copied unchanged; new pending job claimed existing cycle. No original schema migration, cursor reset, abandonment or terminal-job revival.",
+  "limits": {
+    "timeout": 600,
+    "request_limit": 180,
+    "record_limit": 5000,
+    "blob_byte_limit": 536870912,
+    "file_byte_limit": 209715200
+  },
+  "capture": {
+    "elapsed_seconds": 600.6,
+    "capture_proxy_requests_including_identity_and_retries": 136,
+    "separate_broker_metadata_reads": 1,
+    "observations": 1148,
+    "channels": 80,
+    "messages": 1376,
+    "new_message_ids": 995,
+    "original_message_ids_preserved": 381,
+    "same_payload_revision_bumps": 0,
+    "completed_scans": 23,
+    "collecting_scans": 1,
+    "stop": "approved 600-second deadline",
+    "error_type": "TimeoutError",
+    "job_status": "cancelled",
+    "cycle_phase": "active",
+    "same_cycle": true,
+    "new_writer_claimed": true,
+    "durable_saved_scan_resume": [
+      {
+        "record_type": "message",
+        "same_scan": true,
+        "same_sweep": true,
+        "revision_advanced": true,
+        "continuation_changed": true,
+        "phase_after": "complete"
+      }
+    ],
+    "rate_limits": [
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 118
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 120
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 122
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 125
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 127
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 129
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 131
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 133
+      },
+      {
+        "status": 429,
+        "retry_after_seconds": 60.0,
+        "request_number": 136
+      }
+    ],
+    "full_scope_completed": false,
+    "clone_checkpoint_preserved": true,
+    "process_exited": true
+  },
+  "files": {
+    "capture_enabled": false,
+    "product_default_changed": false,
+    "messages_with_native_file_metadata": 91,
+    "unique_native_file_ids": 101,
+    "new_original_bytes": 0,
+    "reason": "Enabling capture_files changes immutable cycle configuration; preserve active checkpoint. File metadata is not original asset retention."
+  },
+  "storage": {
+    "cloned_schema_all_providers_table_bytes": 11444224,
+    "cloned_schema_all_providers_index_bytes": 3833856,
+    "slack_native_json_logical_bytes": 1835169,
+    "slack_native_json_compressed_bytes": 1366643,
+    "new_blob_bytes": 0
+  },
+  "not_qualified": [
+    "full accessible source completion",
+    "file asset retention in this pass",
+    "new-record projection/search/read or recurring workflow activation"
+  ],
+  "no_provider_writes": true,
+  "no_credential_or_grant_changes": true,
+  "paid_model_calls": 0,
+  "index_feed_calls": 0,
+  "resume_contract": "Continue this preserved current-schema clone with a new pending writer job; terminal cancelled jobs cannot be revived. Keep pinned source/configuration unchanged; driver loads saved cycle/scans. Separate file qualification requires deliberate distinct cycle/scope. Clone retains original index routing IDs; isolate index namespace before any future projection.",
+  "indexing": {
+    "current_revision_sql_publication_rows": 381,
+    "new_message_sql_publication_rows": 0,
+    "fresh_index_verification": false,
+    "new_message_projection_generations": 0,
+    "new_messages_captured_only": 995
+  }
+}
