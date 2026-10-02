@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 
 from airweave.api import deps, middleware
 from airweave.api.v1.endpoints.native_imports import router
+from airweave.api.v1.endpoints.native_sources import router as sources_router
 from airweave.db.session import get_db
 from airweave.domains.entities.canonical.store import CanonicalRecordStore
 from airweave.domains.native_ingestion.import_service import NativeImports
@@ -52,6 +53,7 @@ async def native_api(database, monkeypatch, request):
     ctx = SimpleNamespace(is_api_key_auth=True, organization=SimpleNamespace(id=org))
     app = FastAPI()
     app.include_router(router, prefix="/native/sources")
+    app.include_router(sources_router, prefix="/native/sources")
     app.exception_handler(RequestValidationError)(middleware.validation_exception_handler)
     app.middleware("http")(middleware.log_requests)
     logs = []
@@ -67,7 +69,9 @@ async def native_api(database, monkeypatch, request):
 
     app.dependency_overrides[get_db] = session
     app.dependency_overrides[deps.get_context] = lambda: ctx
-    app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(native_imports=service)
+    app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(
+        native_imports=service, native_sources=NativeSources(sources)
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app), base_url="http://test"
     ) as client:

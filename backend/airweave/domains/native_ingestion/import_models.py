@@ -1,9 +1,10 @@
 """Native import intent and durable identity, without client-controlled writer fences."""
 
+import json
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, JsonValue, field_validator, model_validator
 
 from airweave.core.shared_models import SyncJobStatus
 from airweave.domains.entities.canonical.coverage_models import CompletionPolicy
@@ -20,6 +21,17 @@ class StartNativeImport(NativeModel):
         default="bounded",
         description="Complete message enumeration for each selected session; sessions only",
     )
+    publisher_cursor: dict[str, JsonValue] | None = None
+
+    @field_validator("publisher_cursor")
+    @classmethod
+    def bounded_publisher_cursor(
+        cls, value: dict[str, JsonValue] | None
+    ) -> dict[str, JsonValue] | None:
+        """Opaque source position is immutable import intent, not a second checkpoint."""
+        if value is not None and len(json.dumps(value, allow_nan=False).encode()) > 32768:
+            raise ValueError("Native publisher cursor exceeds 32KiB")
+        return value
 
     def completion_policy(self, record_type: str) -> CompletionPolicy:
         """Complete transcripts own only children of the selected session roots."""

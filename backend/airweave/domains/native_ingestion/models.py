@@ -46,8 +46,8 @@ class NativeSourceBinding(NativeModel):
     dataset: Literal["knowledge", "sessions"]
 
 
-class NativeSnapshot(NativeModel):
-    """An attested copy of native JSON, not a second editable authority."""
+class NativeSnapshotMetadata(NativeModel):
+    """Typed native identity and version, independently readable without original bytes."""
 
     authority: Literal["almanac"] = "almanac"
     representation: Literal["snapshot"] = "snapshot"
@@ -57,12 +57,9 @@ class NativeSnapshot(NativeModel):
     parent: RecordIdentity | None = None
     version: NativeVersion
     operation: Literal["upsert", "delete"] = "upsert"
-    original: dict[str, JsonValue]
-    source_created_at: AwareDatetime | None = None
-    source_updated_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
-    def identity_contract(self) -> "NativeSnapshot":
+    def identity_contract(self) -> "NativeSnapshotMetadata":
         """Keep version domains and session child identity explicit."""
         if self.identity.record_type == "knowledge":
             if self.version.kind != "record" or self.parent is not None:
@@ -84,6 +81,14 @@ class NativeSnapshot(NativeModel):
         if self.identity.record_type != "message" and self.identity.container_id is not None:
             raise ValueError("Native roots have no container")
         return self
+
+
+class NativeSnapshot(NativeSnapshotMetadata):
+    """An attested copy of native JSON, not a second editable authority."""
+
+    original: dict[str, JsonValue]
+    source_created_at: AwareDatetime | None = None
+    source_updated_at: AwareDatetime | None = None
 
 
 class IngestNativeBatch(NativeModel):
