@@ -3,6 +3,7 @@
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -10,6 +11,8 @@ from sqlalchemy.orm import selectinload
 from airweave import crud
 from airweave.api.context import ApiContext
 from airweave.db.unit_of_work import UnitOfWork
+from airweave.domains.owned_provisioning.models import ManagedSource
+from airweave.domains.owned_provisioning.store import owned_source_spec
 from airweave.domains.source_connections.protocols import SourceConnectionRepositoryProtocol
 from airweave.domains.source_connections.types import ScheduleInfo, SourceConnectionStats
 from airweave.domains.sources.protocols import SourceRegistryProtocol
@@ -27,6 +30,25 @@ class SourceConnectionRepository(SourceConnectionRepositoryProtocol):
     async def get(self, db: AsyncSession, id: UUID, ctx: ApiContext) -> Optional[SourceConnection]:
         """Get a source connection by ID within org scope."""
         return await crud.source_connection.get(db, id, ctx)
+
+    async def get_owned_source(
+        self,
+        db: AsyncSession,
+        source: SourceConnection,
+        ctx: ApiContext,
+    ) -> ManagedSource | None:
+        """Verify tenant ownership and committed selectors before shared credential use."""
+        spec = await owned_source_spec(db, source, ctx.organization.id)
+        if spec is not None:
+            config_class = self._source_registry.get(spec.provider).config_ref
+            expected = (
+                config_class.model_validate(spec.source_config()).model_dump(mode="json")
+                if config_class is not None
+                else spec.source_config()
+            )
+            if source.config_fields != expected:
+                raise HTTPException(409, "Owned source scope or configuration mismatch")
+        return spec
 
     async def get_by_sync_id(
         self, db: AsyncSession, sync_id: UUID, ctx: ApiContext

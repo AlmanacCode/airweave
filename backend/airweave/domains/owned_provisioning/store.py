@@ -5,24 +5,28 @@ import json
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api.context import ApiContext
 from airweave.core.datetime_utils import utc_now_naive
+from airweave.core.shared_models import IntegrationType
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.source_lifecycle import stop_source_writer
-from airweave.domains.owned_provisioning.models import EnsureSource, source_assurance
+from airweave.domains.owned_provisioning.models import EnsureSource, ManagedSource, source_assurance
+from airweave.domains.owned_provisioning.settings import OwnedComposioSettings
 from airweave.domains.source_connections.protocols import SourceConnectionCreateServiceProtocol
 from airweave.domains.sources.protocols import SourceValidationServiceProtocol
 from airweave.models.connection import Connection
+from airweave.models.organization import Organization
 from airweave.models.owned_provisioning import OwnedProvisioning
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
+from airweave.models.sync_connection import SyncConnection
 from airweave.platform.configs.config import StripeConfig
 from airweave.schemas.source_connection import (
-    AuthProviderAuthentication,
     ScheduleConfig,
     SourceConnectionCreate,
 )
@@ -45,6 +49,113 @@ async def locked_intent(db: AsyncSession, organization: UUID, account: UUID) -> 
     return row
 
 
+async def owned_creation_spec(
+    db: AsyncSession,
+    ctx: ApiContext,
+    intent_id: UUID,
+) -> ManagedSource:
+    """Require a persisted tenant intent before admitting secret-free source creation."""
+    result = (
+        await db.execute(
+            select(OwnedProvisioning, Organization.owned_owner_user_id)
+            .join(Organization, Organization.id == OwnedProvisioning.organization_id)
+            .where(
+                OwnedProvisioning.id == intent_id,
+                OwnedProvisioning.organization_id == ctx.organization.id,
+                OwnedProvisioning.client_namespace == "almanac",
+            )
+        )
+    ).one_or_none()
+    if not ctx.is_api_key_auth or result is None:
+        raise HTTPException(403, "Owned source creation requires its tenant intent")
+    row, owner = result
+    if (
+        row.source_connection_id is not None
+        or row.sync_id is not None
+        or row.desired_state != "active"
+    ):
+        raise HTTPException(403, "Owned source creation requires its tenant intent")
+    return _owned_spec(row, owner)
+
+
+def _owned_spec(row: OwnedProvisioning, owner: str | None) -> ManagedSource:
+    try:
+        request = EnsureSource.model_validate(row.request_payload)
+    except ValidationError:
+        raise HTTPException(409, "Owned source configuration requires reprovisioning") from None
+    spec = request.source
+    if (
+        owner is None
+        or spec is None
+        or spec.user_id != owner
+        or request.state != "active"
+        or request.generation != row.generation
+    ):
+        raise HTTPException(409, "Owned source owner or generation mismatch")
+    return spec
+
+
+async def owned_source_spec(
+    db: AsyncSession,
+    source: SourceConnection,
+    organization: UUID,
+) -> ManagedSource | None:
+    """Verify ownership, generation and source linkage in one tenant-scoped read."""
+    if source.organization_id != organization:
+        raise HTTPException(409, "Owned source organization mismatch")
+    linked = (
+        select(SyncConnection.id)
+        .join(Connection, Connection.id == SyncConnection.connection_id)
+        .where(
+            SyncConnection.sync_id == OwnedProvisioning.sync_id,
+            SyncConnection.connection_id == source.connection_id,
+            Connection.organization_id == organization,
+            Connection.short_name == source.short_name,
+            Connection.integration_type == IntegrationType.SOURCE,
+            Connection.integration_credential_id.is_(None),
+        )
+        .exists()
+    )
+    result = (
+        await db.execute(
+            select(
+                OwnedProvisioning,
+                Organization.owned_owner_user_id,
+                Sync.provisioning_generation,
+                linked,
+            )
+            .join(Organization, Organization.id == OwnedProvisioning.organization_id)
+            .outerjoin(
+                Sync,
+                (Sync.id == OwnedProvisioning.sync_id) & (Sync.organization_id == organization),
+            )
+            .where(
+                OwnedProvisioning.organization_id == organization,
+                OwnedProvisioning.source_connection_id == source.id,
+                OwnedProvisioning.client_namespace == "almanac",
+            )
+        )
+    ).one_or_none()
+    if result is None:
+        return None
+    row, owner, generation, connection_linked = result
+    spec = _owned_spec(row, owner)
+    if (
+        row.sync_id != source.sync_id
+        or row.desired_state != "active"
+        or generation != row.generation
+        or not connection_linked
+        or source.short_name != spec.provider
+        or source.readable_collection_id != spec.collection
+        or source.readable_auth_provider_id is not None
+        or source.auth_provider_config != spec.auth_config()
+        or source_assurance(source.short_name, source.config_fields, source.auth_provider_config)
+        != spec.account_assurance
+    ):
+        raise HTTPException(409, "Owned source binding mismatch")
+    return spec
+
+
 class ProvisioningStore:
     """Source domain creation participates in our transaction; it cannot commit early."""
 
@@ -52,10 +163,12 @@ class ProvisioningStore:
         self,
         create: SourceConnectionCreateServiceProtocol,
         validation: SourceValidationServiceProtocol,
+        shared_composio: OwnedComposioSettings | None = None,
     ):
         """Reuse transactional source creation and source-specific validation."""
         self.create = create
         self.validation = validation
+        self.shared_composio = shared_composio
 
     async def ensure(
         self, db: AsyncSession, ctx: ApiContext, account: UUID, request: EnsureSource
@@ -135,10 +248,15 @@ class ProvisioningStore:
                     and previous.source is not None
                     and previous.source.account_assurance == request.source.account_assurance
                     and previous.source.config == request.source.config
-                    and previous.source.auth_provider == request.source.auth_provider
+                    and previous.source.project_key == request.source.project_key
                     and previous.source.auth_config_id == request.source.auth_config_id
                     and previous.source.user_id == request.source.user_id
                 )
+            # Publish the new intent inside this same transaction before owned creation.
+            row.generation = request.generation
+            row.request_payload = payload
+            row.desired_state = request.state
+            await db.flush()
             if request.source is not None:
                 await self._configure(db, uow, ctx, row, request)
             if row.sync_id is not None:
@@ -173,24 +291,23 @@ class ProvisioningStore:
         request: EnsureSource,
     ) -> None:
         spec = request.source
-        auth = await db.scalar(
-            select(Connection).where(
-                Connection.organization_id == ctx.organization.id,
-                Connection.readable_id == spec.auth_provider,
-                Connection.short_name == "composio",
+        if self.shared_composio is None:
+            raise HTTPException(503, "Owned Composio deployment configuration is unavailable")
+        self.shared_composio.verify(spec)
+        owner = await db.scalar(
+            select(Organization.owned_owner_user_id).where(
+                Organization.id == ctx.organization.id,
             )
         )
-        if auth is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Owned capture requires this organization's Composio connection",
-            )
+        if owner is None or spec.user_id != owner:
+            raise HTTPException(409, "Owned source owner mismatch")
         config = self.validation.validate_config(spec.provider, spec.source_config(), ctx)
         if row.source_connection_id is None:
-            created = await self.create.create_deferred(
+            created = await self.create.create_owned_deferred(
                 db,
                 ctx=ctx,
                 uow=uow,
+                intent_id=row.id,
                 obj_in=SourceConnectionCreate(
                     name="Almanac " + spec.provider,
                     short_name=spec.provider,
@@ -198,9 +315,6 @@ class ProvisioningStore:
                     config=config,
                     schedule=ScheduleConfig(cron=spec.cron),
                     sync_immediately=False,
-                    authentication=AuthProviderAuthentication(
-                        provider_readable_id=spec.auth_provider, provider_config=spec.auth_config()
-                    ),
                 ),
             )
             if created.sync_id is None:
@@ -247,7 +361,7 @@ class ProvisioningStore:
                         detail="Reconnect changes selected Linear teams; connect a new account",
                     )
             source.config_fields = config
-            source.readable_auth_provider_id = spec.auth_provider
+            source.readable_auth_provider_id = None
             source.auth_provider_config = spec.auth_config()
             sync = await db.get(Sync, row.sync_id)
             sync.cron_schedule = spec.cron

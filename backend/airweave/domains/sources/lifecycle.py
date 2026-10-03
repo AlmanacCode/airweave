@@ -31,6 +31,7 @@ from airweave.domains.auth_provider.protocols import AuthProviderRegistryProtoco
 from airweave.domains.connections.protocols import ConnectionRepositoryProtocol
 from airweave.domains.credentials.protocols import IntegrationCredentialServiceProtocol
 from airweave.domains.oauth.protocols import OAuth2ServiceProtocol
+from airweave.domains.owned_provisioning.settings import OwnedComposioSettings
 from airweave.domains.source_connections.protocols import (
     SourceConnectionRepositoryProtocol,
 )
@@ -80,6 +81,7 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
         conn_repo: ConnectionRepositoryProtocol,
         credential_service: IntegrationCredentialServiceProtocol,
         oauth2_service: OAuth2ServiceProtocol,
+        shared_composio: OwnedComposioSettings | None = None,
     ) -> None:
         """Initialize with all required dependencies."""
         self._source_registry = source_registry
@@ -88,6 +90,7 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
         self._conn_repo = conn_repo
         self._credential_service = credential_service
         self._oauth2_service = oauth2_service
+        self._shared_composio = shared_composio
 
         from airweave.core.redis_client import redis_client
         from airweave.domains.sources.rate_limiting.config_provider import (
@@ -291,7 +294,19 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
 
         readable_auth_provider_id = getattr(source_connection, "readable_auth_provider_id", None)
 
-        if not readable_auth_provider_id and not connection.integration_credential_id:
+        owned_source = await self._sc_repo.get_owned_source(db, source_connection, ctx)
+        if owned_source is not None:
+            if self._shared_composio is None:
+                raise AuthProviderAuthError(
+                    "Owned Composio deployment configuration is unavailable",
+                    provider_name="composio",
+                )
+            self._shared_composio.verify(owned_source)
+        if (
+            not owned_source
+            and not readable_auth_provider_id
+            and not connection.integration_credential_id
+        ):
             raise NotFoundException(f"Connection {connection_id} has no integration credential")
 
         integration_credential_id = (
@@ -313,6 +328,7 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
             oauth_type=entry.oauth_type,
             readable_auth_provider_id=readable_auth_provider_id,
             auth_provider_config=getattr(source_connection, "auth_provider_config", None),
+            owned_source=owned_source,
         )
 
     # ------------------------------------------------------------------
@@ -334,6 +350,20 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
         - Auth provider connections (Pipedream direct/proxy, Composio direct)
         - Database-stored credentials with OAuth refresh
         """
+        if source_connection_data.owned_source is not None:
+            if access_token:
+                raise AuthProviderAuthError(
+                    "Owned authentication cannot be overridden", provider_name="composio"
+                )
+            return await self._get_auth_provider_configuration(
+                db=db,
+                source_connection_data=source_connection_data,
+                readable_auth_provider_id=None,
+                auth_provider_config=source_connection_data.owned_source.auth_config(),
+                ctx=ctx,
+                logger=logger,
+            )
+
         # Case 1: Direct token injection (highest priority — sync only)
         if access_token:
             logger.debug("Using directly injected access token")
@@ -365,7 +395,7 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
         self,
         db: AsyncSession,
         source_connection_data: SourceConnectionData,
-        readable_auth_provider_id: str,
+        readable_auth_provider_id: str | None,
         auth_provider_config: Dict[str, Any],
         ctx: ApiContext,
         logger: ContextualLogger,
@@ -373,13 +403,28 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
         """Resolve credentials via an auth provider (Pipedream, Composio, etc.)."""
         logger.info("Using auth provider for authentication")
 
-        auth_provider_instance = await self._create_auth_provider_instance(
-            db=db,
-            readable_auth_provider_id=readable_auth_provider_id,
-            auth_provider_config=auth_provider_config,
-            ctx=ctx,
-            logger=logger,
-        )
+        if source_connection_data.owned_source is not None:
+            if self._shared_composio is None:
+                raise AuthProviderAuthError(
+                    "Owned Composio deployment configuration is unavailable",
+                    provider_name="composio",
+                )
+            provider = self._auth_provider_registry.get("composio").provider_class_ref
+            auth_provider_instance = await provider.create(
+                credentials={"api_key": self._shared_composio.api_key.get_secret_value()},
+                config=auth_provider_config,
+            )
+            auth_provider_instance.set_logger(logger)
+        else:
+            if readable_auth_provider_id is None:
+                raise NotFoundException("Auth provider connection is required")
+            auth_provider_instance = await self._create_auth_provider_instance(
+                db=db,
+                readable_auth_provider_id=readable_auth_provider_id,
+                auth_provider_config=auth_provider_config,
+                ctx=ctx,
+                logger=logger,
+            )
 
         # Get runtime auth fields from the source registry (precomputed at startup).
         # Auth providers handle token refresh, so OAuth lifecycle fields

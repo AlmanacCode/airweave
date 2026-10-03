@@ -17,6 +17,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings
 
 from airweave.core.config.enums import AuthMode, Environment, StorageBackendType
+from airweave.domains.owned_provisioning.settings import OwnedComposioSettings
 
 _BANNED_PASSWORDS: frozenset[str] = frozenset(
     {
@@ -119,6 +120,7 @@ class Settings(BaseSettings):
 
     AUTH_MODE: AuthMode = AuthMode.API_KEY
     # Existing org-scoped key auth; only the enrollment endpoint accepts this pair.
+    OWNED_COMPOSIO: OwnedComposioSettings | None = Field(default=None, repr=False)
     OWNED_TENANT_CONTROL_ORGANIZATION_ID: UUID | None = None
     OWNED_TENANT_CONTROL_API_KEY_IDS: tuple[UUID, ...] = ()
 

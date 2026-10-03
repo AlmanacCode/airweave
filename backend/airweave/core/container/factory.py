@@ -461,6 +461,7 @@ def create_container(settings: Settings) -> Container:
         event_bus=event_bus,
         auth_provider_service=auth_provider_service,
         sync_job_repo=source_deps["sync_job_repo"],
+        shared_composio=settings.OWNED_COMPOSIO,
     )
     source_connection_service = SourceConnectionService(
         sc_repo=source_deps["sc_repo"],
@@ -630,7 +631,7 @@ def create_container(settings: Settings) -> Container:
             NativeImportStore(NativeSourceStore(), CanonicalRecordStore())
         ),
         owned_provisioning=OwnedProvisioningService(
-            store=ProvisioningStore(create_service, source_validation),
+            store=ProvisioningStore(create_service, source_validation, settings.OWNED_COMPOSIO),
             lifecycle=source_deps["source_lifecycle_service"],
             jobs=source_deps["sync_job_repo"],
             syncs=source_deps["sync_repo"],
@@ -930,6 +931,7 @@ def _create_source_services(settings: Settings) -> dict:
         conn_repo=conn_repo,
         credential_service=credential_service,
         oauth2_service=oauth2_svc,
+        shared_composio=settings.OWNED_COMPOSIO,
     )
 
     return {
