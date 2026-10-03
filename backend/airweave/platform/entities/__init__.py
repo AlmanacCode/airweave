@@ -334,6 +334,7 @@ from .trello import (
     TrelloMemberEntity,
 )
 from .web import WebFileEntity
+from .whatsapp import WhatsAppAttachmentEntity, WhatsAppMessageEntity
 from .wispr import WisprMeetingEntity, WisprNoteEntity
 from .word import WordDocumentEntity
 from .zendesk import (
@@ -705,6 +706,7 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
     "web": [
         WebFileEntity,
     ],
+    "whatsapp": [WhatsAppMessageEntity, WhatsAppAttachmentEntity],
     "wispr": [WisprMeetingEntity, WisprNoteEntity],
     "word": [
         WordDocumentEntity,

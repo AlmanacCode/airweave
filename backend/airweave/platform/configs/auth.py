@@ -1171,3 +1171,15 @@ class EnronAuthConfig(BaseConfig):
         title="Placeholder",
         description="Internal placeholder (ignored)",
     )
+
+
+class WhatsAppAuthConfig(AuthConfig):
+    """Internal Unipile v2 credentials stored by existing encrypted auth handling."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    api_key: str = Field(
+        min_length=1,
+        repr=False,
+        title="Unipile v2 API Key",
+        description="Application-scoped Unipile v2 API key. No account enrollment is performed.",
+    )

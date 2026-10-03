@@ -117,6 +117,7 @@ class SourceRegistry(SourceRegistryProtocol):
         entity_entries = self._entity_definition_registry.list_for_source(source_cls.short_name)
         output_entity_definitions = [entry.short_name for entry in entity_entries]
 
+        auth_methods = [method.value for method in source_cls.auth_methods]
         return SourceRegistryEntry(
             short_name=source_cls.short_name,
             name=source_cls.source_name,
@@ -132,10 +133,12 @@ class SourceRegistry(SourceRegistryProtocol):
             config_fields=Fields.from_config_class(config_ref) if config_ref else Fields(fields=[]),
             supported_auth_providers=self._compute_supported_auth_providers(
                 source_cls.short_name, self._auth_provider_registry
-            ),
+            )
+            if "auth_provider" in auth_methods
+            else [],
             runtime_auth_all_fields=runtime_all,
             runtime_auth_optional_fields=runtime_optional,
-            auth_methods=[m.value for m in source_cls.auth_methods],
+            auth_methods=auth_methods,
             oauth_type=_enum_to_str(source_cls.oauth_type),
             requires_byoc=source_cls.requires_byoc,
             supports_continuous=source_cls.supports_continuous,

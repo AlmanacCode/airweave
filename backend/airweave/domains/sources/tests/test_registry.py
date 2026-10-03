@@ -28,6 +28,7 @@ _PATCH_SETTINGS = "airweave.domains.sources.registry.settings"
 
 class _AuthMethod(Enum):
     DIRECT = "direct"
+    AUTH_PROVIDER = "auth_provider"
     OAUTH_BROWSER = "oauth_browser"
 
 
@@ -252,7 +253,7 @@ BLOCK_CASES = [
 def test_auth_provider_blocking(case: BlockCase):
     provider = _make_auth_provider_entry("acme", blocked_sources=case.blocked_sources)
     registry = _build_registry(
-        [_make_source_cls("slack", "Slack")],
+        [_make_source_cls("slack", "Slack", auth_methods=[_AuthMethod.AUTH_PROVIDER])],
         auth_entries=[provider],
     )
     entry = registry.get("slack")
@@ -395,3 +396,12 @@ def test_build_entry_oauth_source_has_runtime_auth_fields():
     entry = registry.get("todoist")
     assert entry.runtime_auth_all_fields == ["access_token"]
     assert entry.runtime_auth_optional_fields == set()
+
+
+def test_direct_only_source_does_not_advertise_auth_brokers():
+    provider = _make_auth_provider_entry("acme", blocked_sources=[])
+    registry = _build_registry(
+        [_make_source_cls("direct", "Direct", auth_methods=[_AuthMethod.DIRECT])],
+        auth_entries=[provider],
+    )
+    assert registry.get("direct").supported_auth_providers == []

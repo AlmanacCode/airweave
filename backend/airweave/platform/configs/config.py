@@ -1530,3 +1530,24 @@ class EnronConfig(SourceConfig):
         ),
         min_length=1,
     )
+
+
+class WhatsAppCaptureConfig(SourceConfig):
+    """Backend-attested principal and explicit acquisition budgets, not credentials."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    account_id: str = Field(min_length=1)
+    account_user_id: str = Field(min_length=1)
+    native_user_id: str = Field(min_length=1)
+    pagination: Literal["cursor", "offset"]
+    page_size: int = Field(strict=True, ge=1, le=100)
+    max_pages_per_scope: int = Field(strict=True, ge=1, le=10000)
+    maximum_attachment_bytes: int = Field(strict=True, gt=0, le=200 * 1024 * 1024)
+    participant_pagination: Literal["cursor", "offset"]
+    maximum_participant_pages: int = Field(strict=True, ge=1, le=256)
+    maximum_participant_items: int = Field(strict=True, ge=1, le=10000)
+    maximum_participant_bytes: int = Field(strict=True, gt=0, le=20 * 1024 * 1024)
+    reaction_pagination: Literal["cursor", "offset"]
+    maximum_reaction_pages: int = Field(strict=True, ge=1, le=256)
+    maximum_reaction_items: int = Field(strict=True, ge=1, le=10000)
+    maximum_reaction_bytes: int = Field(strict=True, gt=0, le=20 * 1024 * 1024)

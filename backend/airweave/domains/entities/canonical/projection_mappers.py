@@ -491,6 +491,13 @@ async def map_record(  # noqa: C901 -- explicit provider dispatch keeps mapper o
         return
     with TemporaryDirectory(prefix="airweave-projection-") as temporary:
         directory = Path(temporary)
+        if source_name == "whatsapp":
+            from airweave.domains.entities.canonical.whatsapp_projection import (
+                map_whatsapp_message,  # noqa: PLC0415
+            )
+
+            yield await map_whatsapp_message(record, storage, directory)
+            return
         if source_name == "gmail":
             from airweave.domains.entities.canonical.gmail_projection import map_gmail
 
