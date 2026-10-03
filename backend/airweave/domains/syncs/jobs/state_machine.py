@@ -18,7 +18,7 @@ from airweave.core.events.sync import SyncLifecycleEvent
 from airweave.core.logging import logger
 from airweave.core.protocols.event_bus import EventBus
 from airweave.core.shared_models import SourceConnectionErrorCategory, SyncJobStatus
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.domains.sync_pipeline.pipeline.entity_tracker import SyncStats
 from airweave.domains.syncs.jobs.protocols import (
     SyncJobRepositoryProtocol,
@@ -113,7 +113,7 @@ class SyncJobStateMachine(SyncJobStateMachineProtocol):
             InvalidTransitionError: If the transition is illegal.
             ValueError: If the sync job is not found.
         """
-        async with get_db_context() as db:
+        async with get_tenant_db_context(ctx.organization.id) as db:
             db_job = await self.sync_job_repo.get(db=db, id=sync_job_id, ctx=ctx)
             if not db_job:
                 raise ValueError(f"Sync job {sync_job_id} not found")

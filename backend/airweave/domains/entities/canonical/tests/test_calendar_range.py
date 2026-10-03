@@ -165,8 +165,9 @@ async def test_http_missing_coverage_action_and_cross_org(database, source, monk
         async with database() as db:
             yield db
 
-    app.dependency_overrides[deps.get_context] = context
+    app.dependency_overrides[deps.get_owned_context] = context
     app.dependency_overrides[get_db] = session
+    app.dependency_overrides[deps.get_tenant_db] = session
     params = {"calendar_id": "cal", "start": "2026-03-01T00:00:00Z", "end": "2026-03-02T00:00:00Z"}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         path = f"/sync/{fence.sync_id}/calendar/events"

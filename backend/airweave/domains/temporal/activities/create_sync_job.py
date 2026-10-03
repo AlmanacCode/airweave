@@ -16,7 +16,7 @@ from airweave.core.events.sync import SyncLifecycleEvent
 from airweave.core.exceptions import NotFoundException
 from airweave.core.protocols import EventBus
 from airweave.core.shared_models import SyncStatus
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.domains.collections.protocols import CollectionRepositoryProtocol
 from airweave.domains.connections.protocols import ConnectionRepositoryProtocol
 from airweave.domains.source_connections.protocols import SourceConnectionRepositoryProtocol
@@ -71,7 +71,7 @@ class CreateSyncJobActivity:
 
         ctx.logger.info(f"Creating sync job for sync {sync_id} (force_full_sync={force_full_sync})")
 
-        async with get_db_context() as db:
+        async with get_tenant_db_context(ctx.organization.id) as db:
             try:
                 sync = await self.sync_repo.get_without_connections(
                     db=db,
@@ -159,7 +159,7 @@ class CreateSyncJobActivity:
             await asyncio.sleep(wait_interval)
             total_waited += wait_interval
 
-            async with get_db_context() as check_db:
+            async with get_tenant_db_context(ctx.organization.id) as check_db:
                 still_running = await self.sync_job_repo.get_active_for_sync(
                     db=check_db,
                     sync_id=UUID(sync_id),

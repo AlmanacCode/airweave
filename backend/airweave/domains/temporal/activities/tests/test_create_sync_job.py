@@ -21,7 +21,7 @@ MODULE = "airweave.domains.temporal.activities.create_sync_job"
 
 
 @asynccontextmanager
-async def _fake_db():
+async def _fake_db(_organization):
     yield AsyncMock()
 
 
@@ -80,7 +80,7 @@ def activity(event_bus, sync_repo, sync_job_repo, sc_repo, conn_repo, collection
 
 @pytest.mark.unit
 async def test_creates_sync_job(activity, sync_job_repo):
-    with patch(f"{MODULE}.get_db_context", _fake_db):
+    with patch(f"{MODULE}.get_tenant_db_context", _fake_db):
         result = await activity.run(
             sync_id=SYNC_ID,
             ctx_dict=make_ctx_dict(),
@@ -104,7 +104,7 @@ async def test_returns_orphaned_when_sync_missing(activity, sync_repo):
 
     sync_repo.get_without_connections = raise_not_found
 
-    with patch(f"{MODULE}.get_db_context", _fake_db):
+    with patch(f"{MODULE}.get_tenant_db_context", _fake_db):
         result = await activity.run(
             sync_id=SYNC_ID,
             ctx_dict=make_ctx_dict(),
@@ -122,7 +122,7 @@ async def test_skips_when_job_already_running(activity, sync_job_repo):
     running_job.status = "RUNNING"
     sync_job_repo.seed_jobs_for_sync(UUID(SYNC_ID), [running_job])
 
-    with patch(f"{MODULE}.get_db_context", _fake_db):
+    with patch(f"{MODULE}.get_tenant_db_context", _fake_db):
         result = await activity.run(
             sync_id=SYNC_ID,
             ctx_dict=make_ctx_dict(),
@@ -154,7 +154,7 @@ async def test_force_full_sync_waits_for_running_jobs(activity, sync_job_repo):
     sync_job_repo.get_active_for_sync = get_active_declining
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         patch(f"{MODULE}.activity") as mock_activity,
         patch(f"{MODULE}.asyncio.sleep", new_callable=AsyncMock),
     ):
@@ -184,7 +184,7 @@ async def test_force_full_sync_timeout_raises(activity, sync_job_repo):
     sync_job_repo.get_active_for_sync = always_running
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         patch(f"{MODULE}.activity") as mock_activity,
         patch(f"{MODULE}.asyncio.sleep", new_callable=AsyncMock),
         pytest.raises(Exception, match="Timeout"),
@@ -221,7 +221,7 @@ async def test_publish_pending_event_success(activity, event_bus, sc_repo, conn_
     col.readable_id = "test-collection"
     collection_repo.seed_readable("test-collection", col)
 
-    with patch(f"{MODULE}.get_db_context", _fake_db):
+    with patch(f"{MODULE}.get_tenant_db_context", _fake_db):
         result = await activity.run(
             sync_id=SYNC_ID,
             ctx_dict=make_ctx_dict(),
@@ -239,7 +239,7 @@ async def test_publish_pending_event_failure_tolerated(activity, event_bus, sc_r
 
     sc_repo.get_by_sync_id = raise_error
 
-    with patch(f"{MODULE}.get_db_context", _fake_db):
+    with patch(f"{MODULE}.get_tenant_db_context", _fake_db):
         result = await activity.run(
             sync_id=SYNC_ID,
             ctx_dict=make_ctx_dict(),

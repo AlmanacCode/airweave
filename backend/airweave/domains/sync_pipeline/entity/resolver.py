@@ -8,7 +8,7 @@ import time
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from airweave import models
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.domains.entities.protocols import EntityRepositoryProtocol
 from airweave.domains.entities.registry import EntityDefinitionRegistry
 from airweave.domains.sync_pipeline.entity.actions import (
@@ -158,7 +158,7 @@ class EntityActionResolver:
                 f"Bulk entity lookup for {len(entity_requests)} entities ({num_chunks} chunks)..."
             )
 
-            async with get_db_context() as db:
+            async with get_tenant_db_context(sync_context.organization_id) as db:
                 existing_map = await self._entity_repo.bulk_get_by_entity_sync_and_definition(
                     db,
                     sync_id=sync_context.sync.id,

@@ -189,7 +189,9 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
 
     destination.feed_prepared = AsyncMock(side_effect=feed_prepared)
     storage = MagicMock(write_file=AsyncMock())
-    projector = CanonicalProjector(CanonicalProjectionStore(), database, processor, storage)
+    projector = CanonicalProjector(
+        CanonicalProjectionStore(), lambda _organization: database(), processor, storage
+    )
     assert (await projector.project_one(work, "slack", destination, MagicMock())).published
     destination.feed_prepared.assert_awaited_once()
     assert not await pending(database, fence)

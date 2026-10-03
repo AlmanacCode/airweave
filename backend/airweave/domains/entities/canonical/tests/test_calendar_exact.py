@@ -173,8 +173,9 @@ async def test_exact_http_is_source_authenticated_and_tenant_scoped(database, so
         async with database() as db:
             yield db
 
-    app.dependency_overrides[deps.get_context] = context
+    app.dependency_overrides[deps.get_owned_context] = context
     app.dependency_overrides[get_db] = session
+    app.dependency_overrides[deps.get_tenant_db] = session
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         path = f"/sync/{fence.sync_id}/calendar/events/exact"
         result = await client.get(path, params={"calendar_id": "cal"})

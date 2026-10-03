@@ -46,7 +46,10 @@ def attached(*parts):
 def pipeline(database, tmp_path, registry):
     processor = ChunkEmbedProcessor(registry, FakeDenseEmbedder(), FakeSparseEmbedder())
     return CanonicalProjector(
-        CanonicalProjectionStore(), database, processor, FilesystemBackend(tmp_path)
+        CanonicalProjectionStore(),
+        lambda _organization: database(),
+        processor,
+        FilesystemBackend(tmp_path),
     )
 
 
@@ -105,7 +108,7 @@ async def test_body_query_and_original_thread_read_work_before_attachment_finish
 
 
 async def test_partial_retry_cannot_drop_a_good_part_and_recovers_without_recapture(
-    database, source, tmp_path
+    database, source, tmp_path, worker_discovery
 ):
     service, fence = source
     binding = await bind_projection(database, fence, "gmail")

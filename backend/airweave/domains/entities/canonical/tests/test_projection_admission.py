@@ -74,7 +74,7 @@ async def test_stale_work_is_denied_before_mapper_storage_or_processor(
     monkeypatch.setattr("airweave.domains.entities.canonical.projection_mappers.map_record", mapper)
     processor, storage = MagicMock(), AsyncMock()
     destination = MagicMock(collection_id=binding.collection_id, feed_prepared=AsyncMock())
-    project = CanonicalProjector(store, database, processor, storage)
+    project = CanonicalProjector(store, lambda _organization: database(), processor, storage)
     assert not (await project.project_one(work, "gmail", destination, MagicMock())).published
     mapper.assert_not_called()
     assert not processor.mock_calls and not storage.mock_calls
@@ -114,7 +114,7 @@ async def test_wrong_destination_rejected_before_processing_and_manifest(databas
     async with database() as db:
         work = (await store.pending(db, fence.organization_id, fence.sync_id))[0]
     processor = MagicMock()
-    project = CanonicalProjector(store, database, processor, AsyncMock())
+    project = CanonicalProjector(store, lambda _organization: database(), processor, AsyncMock())
     assert not (
         await project.project_one(work, "gmail", MagicMock(collection_id=uuid4()), MagicMock())
     ).published
@@ -162,7 +162,9 @@ async def test_stale_activity_route_does_not_poison_new_binding_work(database, s
     service, fence = source
     binding = await bind_projection(database, fence, "slack")
     await capture(database, service, fence, observation())
-    project = CanonicalProjector(CanonicalProjectionStore(), database, MagicMock(), AsyncMock())
+    project = CanonicalProjector(
+        CanonicalProjectionStore(), lambda _organization: database(), MagicMock(), AsyncMock()
+    )
     result = await project.batch(
         fence.organization_id,
         fence.sync_id,

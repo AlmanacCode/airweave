@@ -173,7 +173,8 @@ async def test_parent_filter_is_exact_visible_and_bound_to_continuation(database
             yield db
 
     app.dependency_overrides[get_db] = session
-    app.dependency_overrides[deps.get_context] = lambda: SimpleNamespace(
+    app.dependency_overrides[deps.get_tenant_db] = session
+    app.dependency_overrides[deps.get_owned_context] = lambda: SimpleNamespace(
         organization=SimpleNamespace(id=fence.organization_id)
     )
     app.dependency_overrides[deps.get_canonical_query_service] = lambda: service

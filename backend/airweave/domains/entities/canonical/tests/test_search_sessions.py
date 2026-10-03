@@ -67,7 +67,7 @@ async def test_waiting_search_releases_connection_and_cancels_cleanly(
 ):
     fence, _, _ = indexed
     client, vector, _, executor, _ = http_search
-    client._transport.app.dependency_overrides[deps.get_search_session_factory] = (
+    client._transport.app.dependency_overrides[deps.get_tenant_session_factory] = (
         lambda: single_connection
     )
     entered, release = asyncio.Event(), asyncio.Event()
@@ -108,7 +108,7 @@ async def test_revoked_source_during_vespa_cannot_return_cached_hit(
 ):
     fence, locator, _ = indexed
     client, vector, _, _, _ = http_search
-    client._transport.app.dependency_overrides[deps.get_search_session_factory] = (
+    client._transport.app.dependency_overrides[deps.get_tenant_session_factory] = (
         lambda: single_connection
     )
     vector.seed_results(SearchResults(results=[hit(fence, locator.encode())]))
@@ -142,7 +142,7 @@ async def test_read_phase_releases_acquired_connection(
     fence, locator, _ = indexed
     client, vector, _, _, _ = http_search
     app = client._transport.app
-    app.dependency_overrides[deps.get_search_session_factory] = lambda: single_connection
+    app.dependency_overrides[deps.get_tenant_session_factory] = lambda: single_connection
     service = app.dependency_overrides[deps.get_container]().owned_search
     vector.seed_results(SearchResults(results=[hit(fence, locator.encode())]))
     entered = asyncio.Event()
@@ -217,9 +217,9 @@ async def test_search_auth_closes_own_transaction_without_committing_auth0_activ
         )
         await db.commit()
     monkeypatch.setattr(db_session, "AsyncSessionLocal", single_connection)
-    assert deps.get_search_session_factory() is single_connection
+    assert deps.get_control_session_factory() is single_connection
     auth0_user = Auth0User.model_construct(id="auth0|search", email="search@example.com")
-    ctx = await deps.get_owned_search_context(
+    ctx = await deps.get_owned_context(
         request=Request(
             {
                 "type": "http",
@@ -230,7 +230,7 @@ async def test_search_auth_closes_own_transaction_without_committing_auth0_activ
                 "scheme": "http",
             }
         ),
-        sessions=deps.get_search_session_factory(),
+        sessions=deps.get_control_session_factory(),
         x_api_key="synthetic-owned-search-key" if mode == AuthMode.API_KEY else None,
         x_organization_id=str(fence.organization_id),
         auth0_user=auth0_user if mode == AuthMode.AUTH0 else None,
@@ -252,7 +252,7 @@ async def test_scope_identity_change_during_retrieval_rejects_response(
 ):
     fence, locator, _ = indexed
     client, vector, _, _, _ = http_search
-    client._transport.app.dependency_overrides[deps.get_search_session_factory] = (
+    client._transport.app.dependency_overrides[deps.get_tenant_session_factory] = (
         lambda: single_connection
     )
     vector.seed_results(SearchResults(results=[hit(fence, locator.encode())]))

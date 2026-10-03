@@ -165,7 +165,7 @@ async def test_complete_sync_calls_state_machine_transition():
     orch, sm = _make_orchestrator()
 
     with (
-        patch(f"{MODULE}.get_db_context", AsyncMock()),
+        patch(f"{MODULE}.get_tenant_db_context", AsyncMock()),
         patch(f"{MODULE}.business_events"),
     ):
         await orch._complete_sync()

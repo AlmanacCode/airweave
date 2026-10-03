@@ -75,6 +75,14 @@ class ProjectionSourceRef(BaseModel):
     sync_id: UUID
 
 
+class ProjectionGenerationRef(BaseModel):
+    """Cleanup discovery returns scope and identity, never a stored manifest."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    organization_id: UUID
+    generation_id: UUID
+
+
 class ProjectionSourcePage(BaseModel):
     """Bounded source keyset page; a cursor exists only when another row was observed."""
 

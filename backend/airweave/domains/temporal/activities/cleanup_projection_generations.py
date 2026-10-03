@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from temporalio import activity
 
-from airweave.db.session import get_db_context
+from airweave.db.session import get_db_context, get_tenant_db_context
 from airweave.domains.entities.canonical.projection_gc import ProjectionGCStore
 from airweave.domains.storage.protocols import StorageBackend
 from airweave.platform.destinations.vespa.client import VespaClient
@@ -29,11 +29,11 @@ class CleanupProjectionGenerationsActivity:
         client = await VespaClient.connect()
         remaining = 100
         try:
-            for generation in due:
+            for target in due:
                 if remaining <= 0:
                     break
-                async with get_db_context() as db:
-                    page = await store.claim(db, generation, now=now, limit=remaining)
+                async with get_tenant_db_context(target.organization_id) as db:
+                    page = await store.claim(db, target.generation_id, now=now, limit=remaining)
                 if page is None:
                     continue
                 error = None
@@ -45,7 +45,7 @@ class CleanupProjectionGenerationsActivity:
                         await self.storage.delete_file(key)
                 except Exception as failure:
                     error = type(failure).__name__
-                async with get_db_context() as db:
+                async with get_tenant_db_context(target.organization_id) as db:
                     await store.acknowledge(db, page, now=datetime.now(timezone.utc), error=error)
                 remaining -= len(page.documents) + len(page.artifact_keys)
         finally:

@@ -54,7 +54,7 @@ async def test_scanned_pdf_without_ocr_stays_pending_with_owned_bytes(database, 
     store = CanonicalProjectionStore()
     projector = CanonicalProjector(
         store,
-        database,
+        lambda _organization: database(),
         ChunkEmbedProcessor(
             ConverterRegistry(ocr_provider=None), FakeDenseEmbedder(), FakeSparseEmbedder()
         ),

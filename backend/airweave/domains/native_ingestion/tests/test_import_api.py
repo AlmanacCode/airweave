@@ -12,7 +12,6 @@ from sqlalchemy import func, select
 from airweave.api import deps, middleware
 from airweave.api.v1.endpoints.native_imports import router
 from airweave.api.v1.endpoints.native_sources import router as sources_router
-from airweave.db.session import get_db
 from airweave.domains.entities.canonical.store import CanonicalRecordStore
 from airweave.domains.native_ingestion.import_service import NativeImports
 from airweave.domains.native_ingestion.import_store import NativeImportStore
@@ -67,8 +66,8 @@ async def native_api(database, monkeypatch, request):
         async with database() as db:
             yield db
 
-    app.dependency_overrides[get_db] = session
-    app.dependency_overrides[deps.get_context] = lambda: ctx
+    app.dependency_overrides[deps.get_tenant_db] = session
+    app.dependency_overrides[deps.get_owned_context] = lambda: ctx
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(
         native_imports=service, native_sources=NativeSources(sources)
     )

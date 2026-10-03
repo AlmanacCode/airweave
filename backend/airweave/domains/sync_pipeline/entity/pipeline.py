@@ -288,11 +288,11 @@ class EntityPipeline:
 
     async def _identify_orphans(self, sync_context: SyncContext) -> Dict[str, List[str]]:
         """Identify orphaned entity IDs (in DB but not encountered), grouped by definition."""
-        from airweave.db.session import get_db_context
+        from airweave.db.session import get_tenant_db_context
 
         encountered_ids = self._tracker.get_all_encountered_ids_flat()
 
-        async with get_db_context() as db:
+        async with get_tenant_db_context(sync_context.organization_id) as db:
             stored_entities = await self._entity_repo.get_by_sync_id(
                 db=db, sync_id=sync_context.sync.id
             )

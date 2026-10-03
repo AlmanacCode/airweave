@@ -16,7 +16,9 @@ from airweave.models import Collection, Entity, Organization, SourceConnection, 
 from airweave.models.vector_db_deployment_metadata import VectorDbDeploymentMetadata
 
 
-async def test_source_pages_skip_failed_indexed_unsupported_and_foreign_rows(database, source):
+async def test_source_pages_skip_failed_indexed_unsupported_and_unavailable_rows(
+    database, source, worker_discovery
+):
     service, seed = source
     foreign = uuid4()
     async with database() as db:
@@ -43,13 +45,10 @@ async def test_source_pages_skip_failed_indexed_unsupported_and_foreign_rows(dat
         "provider",
         "unauthenticated",
         "missing-collection",
-        "foreign-collection",
         "tombstone",
         "failed",
         "indexed",
         "unsupported",
-        "foreign-source",
-        "foreign-record",
         "withdrawn",
     ):
         sync_id, job_id = uuid4(), uuid4()
@@ -68,7 +67,7 @@ async def test_source_pages_skip_failed_indexed_unsupported_and_foreign_rows(dat
                 SourceConnection(
                     id=uuid4(),
                     sync_id=sync_id,
-                    organization_id=foreign if case == "foreign-source" else seed.organization_id,
+                    organization_id=seed.organization_id,
                     name=case,
                     short_name=(
                         "legacy"
@@ -78,13 +77,7 @@ async def test_source_pages_skip_failed_indexed_unsupported_and_foreign_rows(dat
                         else "almanac"
                     ),
                     is_authenticated=case != "unauthenticated",
-                    readable_collection_id=(
-                        None
-                        if case == "missing-collection"
-                        else "foreign"
-                        if case == "foreign-collection"
-                        else "owned"
-                    ),
+                    readable_collection_id=(None if case == "missing-collection" else "owned"),
                 )
             )
             await db.commit()
@@ -113,8 +106,6 @@ async def test_source_pages_skip_failed_indexed_unsupported_and_foreign_rows(dat
                 record.indexed_revision = record.record_revision
                 record.indexed_pipeline_version = 1
                 record.indexed_generation = uuid4()
-            elif case == "foreign-record":
-                record.organization_id = foreign
             elif case == "withdrawn":
                 record.removal_reason = "access_revoked"
             await db.commit()
@@ -149,7 +140,7 @@ async def test_recovery_execution_skips_failed_until_original_changes(database, 
         assert len(await store.pending(db, fence.organization_id, fence.sync_id)) == 1
         assert not await store.pending(db, fence.organization_id, fence.sync_id, skip_failed=True)
     # Isolate only the expensive external projection; exercise the actual batch selector.
-    projector = CanonicalProjector(store, database, None, None)
+    projector = CanonicalProjector(store, lambda _organization: database(), None, None)
     projector.project_one = AsyncMock(return_value=ProjectionResult(published=True))
     logger = AsyncMock()
     assert (

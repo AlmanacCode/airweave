@@ -17,7 +17,7 @@ from temporalio.service import RPCError
 from airweave.core.context import BaseContext
 from airweave.core.logging import logger
 from airweave.core.shared_models import SyncStatus
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.domains.syncs.protocols import SyncRepositoryProtocol, SyncStateMachineProtocol
 from airweave.domains.syncs.types import (
     InvalidSyncTransitionError,
@@ -74,7 +74,7 @@ class SyncStateMachine(SyncStateMachineProtocol):
         2. Conditional UPDATE with optimistic lock (WHERE status = current).
         3. Apply schedule side effects after the commit succeeds.
         """
-        async with get_db_context() as db:
+        async with get_tenant_db_context(ctx.organization.id) as db:
             sync_obj = await self.sync_repo.get_without_connections(db, sync_id, ctx)
             if not sync_obj:
                 raise ValueError(f"Sync {sync_id} not found")

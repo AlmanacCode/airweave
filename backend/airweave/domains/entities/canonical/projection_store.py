@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, exists, or_, select, tuple_
+from sqlalchemy import and_, exists, or_, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
@@ -240,35 +240,15 @@ class CanonicalProjectionStore:
         """
         if not 1 <= limit <= 100:
             raise ValueError("Projection source page size must be between 1 and 100")
-        owned_source = exists(
-            select(SourceConnection.id)
-            .join(
-                Collection,
-                and_(
-                    Collection.readable_id == SourceConnection.readable_collection_id,
-                    Collection.organization_id == SourceConnection.organization_id,
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT organization_id,sync_id FROM owned_pending_sources("
+                    "CAST(:sources AS text[]),CAST(:after AS uuid),:limit)"
                 ),
+                {"sources": list(source_names), "after": after_id, "limit": limit},
             )
-            .where(
-                SourceConnection.is_authenticated.is_(True),
-                source_is_readable(SourceConnection.organization_id, SourceConnection.sync_id),
-                SourceConnection.sync_id == Sync.id,
-                SourceConnection.organization_id == Sync.organization_id,
-                SourceConnection.short_name.in_(source_names),
-            )
-        )
-        fresh_work = exists(
-            select(Entity.id).where(
-                Entity.sync_id == Sync.id,
-                Entity.organization_id == Sync.organization_id,
-                _pending_record(),
-                Entity.projection_error.is_(None),
-            )
-        )
-        statement = select(Sync.organization_id, Sync.id).where(owned_source, fresh_work)
-        if after_id is not None:
-            statement = statement.where(Sync.id > after_id)
-        rows = (await db.execute(statement.order_by(Sync.id).limit(limit + 1))).all()
+        ).all()
         sources = tuple(
             ProjectionSourceRef(organization_id=organization, sync_id=sync)
             for organization, sync in rows[:limit]

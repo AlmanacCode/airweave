@@ -81,6 +81,7 @@ class FakeSyncJobRepository:
         dumped = {k: v for k, v in obj_in.model_dump().items() if k in valid_fields}
         if "id" not in dumped or dumped["id"] is None:
             dumped["id"] = uuid_mod.uuid4()
+        dumped.setdefault("provisioning_generation", 1)
         job = SyncJob(**dumped, organization_id=ctx.organization.id)
         self._store[job.id] = job
         self._created.append(job)

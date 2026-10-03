@@ -12,7 +12,6 @@ from airweave.api import deps
 from airweave.api.context import ApiContext
 from airweave.api.router import TrailingSlashRouter
 from airweave.core.config import settings
-from airweave.db.session import get_db
 from airweave.domains.entities.canonical.calendar_exact import read_event
 from airweave.domains.entities.canonical.calendar_query import (
     CalendarRange,
@@ -49,8 +48,8 @@ async def calendar_events(
     timezone: str = "UTC",
     limit: int = Query(100, ge=1, le=250),
     cursor: str | None = None,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
 ) -> CalendarRangePage:
     """List observed occurrences; requests beyond coverage include an explicit sync action."""
     try:
@@ -72,8 +71,8 @@ async def calendar_event(
     sync_id: UUID,
     event_id: str = Path(min_length=1, max_length=1024),
     calendar_id: str = Query(min_length=1, max_length=1024),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
 ) -> SourceRecord:
     """Read one captured provider identity; no live lookup or window expansion."""
     connection = await _authorized_connection(db, ctx.organization.id, sync_id)

@@ -16,7 +16,7 @@ from airweave.core.shared_models import (
     SyncJobStatus,
     SyncStatus,
 )
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.domains.access_control.pipeline import AccessControlPipeline
 from airweave.domains.sources.exceptions.classifier import classify_error
 from airweave.domains.sync_pipeline.canonical_capture import CanonicalCapturePipeline
@@ -240,7 +240,7 @@ class SyncOrchestrator:
                 # Check guardrails unless explicitly skipped
                 if not self.sync_context.execution_config.behavior.skip_guardrails:
                     try:
-                        async with get_db_context() as db:
+                        async with get_tenant_db_context(self.sync_context.organization_id) as db:
                             await self._usage_checker.is_allowed(
                                 db, self.sync_context.organization.id, ActionType.ENTITIES
                             )
@@ -313,7 +313,7 @@ class SyncOrchestrator:
     async def _check_capture_limits(self) -> None:
         """Keep the existing usage guard before each durable provider page."""
         if not self.sync_context.execution_config.behavior.skip_guardrails:
-            async with get_db_context() as db:
+            async with get_tenant_db_context(self.sync_context.organization_id) as db:
                 await self._usage_checker.is_allowed(
                     db, self.sync_context.organization.id, ActionType.ENTITIES
                 )
@@ -636,7 +636,7 @@ class SyncOrchestrator:
             from airweave import crud
             from airweave.models.entity import Entity as EntityModel
 
-            async with get_db_context() as db:
+            async with get_tenant_db_context(self.sync_context.organization_id) as db:
                 # Get the original source_name from any synced entity
                 result = await db.execute(
                     sa_select(EntityModel.source_name)
@@ -689,7 +689,7 @@ class SyncOrchestrator:
             return
 
         try:
-            async with get_db_context() as db:
+            async with get_tenant_db_context(self.sync_context.organization_id) as db:
                 await self._sync_cursor_service.create_or_update_cursor(
                     db=db,
                     sync_id=self.sync_context.sync.id,

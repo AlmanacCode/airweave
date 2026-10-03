@@ -19,6 +19,7 @@ def _make_settings(**overrides) -> MagicMock:
     defaults.update(overrides)
 
     settings = MagicMock()
+    settings.owned_control_configured = False
     for key, value in defaults.items():
         setattr(settings, key, value)
 

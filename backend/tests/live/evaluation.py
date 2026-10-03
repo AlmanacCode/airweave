@@ -149,7 +149,7 @@ async def capture_corpus(root: Path, manifest: Manifest, sessions, providers):
     runtime = configure(root, manifest)
     projector = CanonicalProjector(
         CanonicalProjectionStore(),
-        sessions,
+        lambda _organization: sessions(),
         ChunkEmbedProcessor(
             runtime.converter_registry, runtime.dense_embedder, runtime.sparse_embedder
         ),
@@ -285,7 +285,7 @@ async def project(root: Path, manifest: Manifest, sessions):
     runtime = configure(root, manifest)
     projector = CanonicalProjector(
         CanonicalProjectionStore(),
-        sessions,
+        lambda _organization: sessions(),
         ChunkEmbedProcessor(
             runtime.converter_registry, runtime.dense_embedder, runtime.sparse_embedder
         ),

@@ -28,7 +28,7 @@ from airweave.core.shared_models import (
     SyncJobStatus,
     SyncStatus,
 )
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.page_source import CanonicalPageSource
 from airweave.domains.entities.canonical.search_metadata import SEARCH_METADATA_PIPELINE_VERSION
@@ -426,7 +426,7 @@ class SyncService(SyncServiceProtocol):
         Called exclusively from RunSyncActivity (Temporal worker).
         """
         try:
-            async with get_db_context() as db:
+            async with get_tenant_db_context(ctx.organization.id) as db:
                 orchestrator = await self._sync_factory.create_orchestrator(
                     db=db,
                     sync=sync,

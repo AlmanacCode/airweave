@@ -57,7 +57,7 @@ from airweave.core.protocols.identity import IdentityProvider
 from airweave.core.protocols.payment import PaymentGatewayProtocol
 from airweave.core.protocols.webhooks import WebhookPublisher
 from airweave.core.redis_client import redis_client
-from airweave.db.session import health_check_engine
+from airweave.db.session import get_tenant_engine, health_check_engine
 from airweave.domains.access_control.broker import AccessBroker
 from airweave.domains.access_control.repository import AccessControlMembershipRepository
 from airweave.domains.arf.service import ArfService
@@ -177,6 +177,8 @@ def create_container(settings: Settings) -> Container:
 
         container = create_container(settings)
     """
+    if settings.owned_control_configured and settings.TENANT_DATABASE_URI is None:
+        raise RuntimeError("Owned product service requires explicit TENANT_DATABASE_URI")
     # -----------------------------------------------------------------
     # Webhooks (Svix adapter)
     # SvixAdapter implements both WebhookPublisher and WebhookAdmin
@@ -662,6 +664,10 @@ def _create_health_service(settings: Settings) -> HealthService:
         "temporal": TemporalHealthProbe(get_cached_temporal_client),
     }
 
+    if settings.owned_control_configured:
+        probes["tenant_postgres"] = PostgresHealthProbe(get_tenant_engine(), name="tenant_postgres")
+        critical_names = critical_names | {"tenant_postgres"}
+
     unknown = critical_names - probes.keys()
     if unknown:
         logger.warning(
@@ -947,22 +953,9 @@ def _create_source_services(settings: Settings) -> dict:
     }
 
 
-def _owned_control_configured(settings: Settings) -> bool:
-    """Owned product control, not Airweave subscription accounting, owns limits.
-
-    Require the complete established enrollment-control pair. This selection
-    never turns on local-development behavior or disables provider/API controls.
-    """
-    organization = settings.OWNED_TENANT_CONTROL_ORGANIZATION_ID is not None
-    keys = bool(settings.OWNED_TENANT_CONTROL_API_KEY_IDS)
-    if organization != keys:
-        raise ValueError("Owned control requires both organization and allowed API key IDs")
-    return organization
-
-
 def _create_payment_gateway(settings: Settings) -> PaymentGatewayProtocol:
     """Create payment gateway: Stripe if enabled, otherwise a null implementation."""
-    if settings.STRIPE_ENABLED and not _owned_control_configured(settings):
+    if settings.STRIPE_ENABLED and not settings.owned_control_configured:
         from airweave.adapters.payment.stripe import StripePaymentGateway
 
         return StripePaymentGateway()
@@ -1103,7 +1096,7 @@ def _create_usage_checker(
     """Create the singleton UsageLimitChecker."""
     from airweave.domains.usage.limit_checker import AlwaysAllowLimitChecker
 
-    if _owned_control_configured(settings) or settings.LOCAL_DEVELOPMENT:
+    if settings.owned_control_configured or settings.LOCAL_DEVELOPMENT:
         return AlwaysAllowLimitChecker()
 
     return UsageLimitChecker(
@@ -1120,7 +1113,7 @@ def _create_usage_ledger(settings: Settings, billing_deps: dict) -> UsageLedgerP
     from airweave.domains.usage.ledger import NullUsageLedger
     from airweave.domains.usage.repository import UsageRepository
 
-    if _owned_control_configured(settings) or settings.LOCAL_DEVELOPMENT:
+    if settings.owned_control_configured or settings.LOCAL_DEVELOPMENT:
         return NullUsageLedger()
 
     return UsageLedger(

@@ -11,7 +11,6 @@ from sqlalchemy import func, select, update
 
 from airweave.api import deps
 from airweave.api.v1.endpoints.native_sources import router
-from airweave.db.session import get_db
 from airweave.domains.native_ingestion.source_models import (
     EnsureNativeSource,
     native_source_id,
@@ -130,8 +129,8 @@ async def test_http_session_cannot_ensure_or_read_but_backend_key_can(database, 
         async with database() as db:
             yield db
 
-    app.dependency_overrides[get_db] = session
-    app.dependency_overrides[deps.get_context] = lambda: ctx
+    app.dependency_overrides[deps.get_tenant_db] = session
+    app.dependency_overrides[deps.get_owned_context] = lambda: ctx
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(native_sources=service)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app), base_url="http://test"

@@ -39,4 +39,32 @@ def test_partial_owned_control_config_is_rejected(organization, keys):
         }
     )
     with pytest.raises(ValueError, match="both organization and allowed API key IDs"):
-        factory._owned_control_configured(config)
+        assert config.owned_control_configured
+
+
+def test_owned_container_requires_explicit_tenant_credentials_before_external_wiring():
+    config = settings.model_copy(
+        update={
+            "OWNED_TENANT_CONTROL_ORGANIZATION_ID": uuid4(),
+            "OWNED_TENANT_CONTROL_API_KEY_IDS": (uuid4(),),
+            "TENANT_DATABASE_URI": None,
+        }
+    )
+    with pytest.raises(RuntimeError, match="explicit TENANT_DATABASE_URI"):
+        factory.create_container(config)
+
+
+def test_owned_readiness_requires_actual_tenant_connection(monkeypatch):
+    config = settings.model_copy(
+        update={
+            "LOCAL_DEVELOPMENT": False,
+            "OWNED_TENANT_CONTROL_ORGANIZATION_ID": uuid4(),
+            "OWNED_TENANT_CONTROL_API_KEY_IDS": (uuid4(),),
+        }
+    )
+    sentinel = object()
+    monkeypatch.setattr(factory, "get_tenant_engine", lambda: sentinel)
+    monkeypatch.setattr(factory, "redis_client", SimpleNamespace(client=object()))
+    health = factory._create_health_service(config)
+    tenant = next(probe for probe in health._critical if probe.name == "tenant_postgres")
+    assert tenant._engine is sentinel

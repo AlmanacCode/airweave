@@ -152,10 +152,11 @@ async def test_document_read_authorization_integrity_and_native_contract(
             yield db
 
     owner = uuid4() if variant == "other_tenant" else fence.organization_id
-    app.dependency_overrides[deps.get_context] = lambda: SimpleNamespace(
+    app.dependency_overrides[deps.get_owned_context] = lambda: SimpleNamespace(
         organization=SimpleNamespace(id=owner)
     )
     app.dependency_overrides[get_db] = session
+    app.dependency_overrides[deps.get_tenant_db] = session
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(storage_backend=storage)
     app.dependency_overrides[deps.get_canonical_query_service] = lambda: CanonicalQueryService(
         CanonicalRecordStore(), CanonicalQueryStore(), "fixture"

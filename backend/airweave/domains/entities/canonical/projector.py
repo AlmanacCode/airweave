@@ -93,7 +93,7 @@ class CanonicalProjector:
     def __init__(
         self,
         store: CanonicalProjectionStore,
-        sessions: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+        sessions: Callable[[UUID], AbstractAsyncContextManager[AsyncSession]],
         processor: ChunkEmbedProcessor,
         storage: StorageBackend,
     ):
@@ -112,7 +112,7 @@ class CanonicalProjector:
             or destination.collection_id != work.binding.collection_id
         ):
             return False
-        async with self._sessions() as db:
+        async with self._sessions(work.organization_id) as db:
             return await self._store.admit(db, work)
 
     async def _prepare_mail_text(
@@ -124,7 +124,7 @@ class CanonicalProjector:
         body = prepared_mail_body(built, generation, work.record.completeness)
         if body is None:
             raise ValueError("Gmail projection did not convert its required body")
-        async with self._sessions() as db:
+        async with self._sessions(work.organization_id) as db:
             return await self._store.prepare_mail_body(db, work, generation, body)
 
     async def project_one(
@@ -197,7 +197,7 @@ class CanonicalProjector:
                 _stamp_chunks(chunks, work.record)
                 prepared = destination.prepare_documents(chunks)
                 manifest = _scope_manifest(prepared, work.record.sync_id, destination.collection_id)
-                async with self._sessions() as db:
+                async with self._sessions(work.organization_id) as db:
                     if not await self._store.prepare(
                         db,
                         work,
@@ -214,7 +214,7 @@ class CanonicalProjector:
                     )
                 await destination.feed_prepared(prepared)
         if no_documents:
-            async with self._sessions() as db:
+            async with self._sessions(work.organization_id) as db:
                 if not await self._store.prepare(
                     db,
                     work,
@@ -225,7 +225,7 @@ class CanonicalProjector:
                     text_representations=(),
                 ):
                     return ProjectionResult()
-        async with self._sessions() as db:
+        async with self._sessions(work.organization_id) as db:
             published = await self._store.publish(db, work, generation, len(chunks))
         return ProjectionResult(
             published=published,
@@ -282,7 +282,7 @@ class CanonicalProjector:
         skip_failed: bool = False,
     ) -> ProjectionBatchResult:
         """Failed rows stay pending; other rows in the page continue to make progress."""
-        async with self._sessions() as db:
+        async with self._sessions(organization_id) as db:
             pending = await self._store.pending(
                 db,
                 organization_id,
@@ -302,7 +302,7 @@ class CanonicalProjector:
                 failed += int(result.conversion_failed)
             except Exception as error:
                 failed += 1
-                async with self._sessions() as db:
+                async with self._sessions(organization_id) as db:
                     await self._store.fail(db, work, type(error).__name__)
                 logger.warning(
                     "Canonical projection failed for record %s (%s)",

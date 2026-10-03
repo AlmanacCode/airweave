@@ -98,7 +98,7 @@ async def publication(database, source, tmp_path):
     }
     records = CanonicalQueryService(CanonicalRecordStore(), CanonicalQueryStore(), "test-key")
     reader = CanonicalTextReader(records, storage)
-    projector = CanonicalProjector(store, database, processor, storage)
+    projector = CanonicalProjector(store, lambda _organization: database(), processor, storage)
     return SimpleNamespace(
         service=service,
         fence=fence,
@@ -148,7 +148,8 @@ async def test_pdf_full_content_read_is_single_conversion_and_published_with_ind
             yield db
 
     app.dependency_overrides[get_db] = session
-    app.dependency_overrides[deps.get_context] = lambda: SimpleNamespace(
+    app.dependency_overrides[deps.get_tenant_db] = session
+    app.dependency_overrides[deps.get_owned_context] = lambda: SimpleNamespace(
         organization=SimpleNamespace(id=p.fence.organization_id)
     )
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(

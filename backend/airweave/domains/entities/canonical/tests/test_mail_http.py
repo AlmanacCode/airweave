@@ -136,8 +136,9 @@ async def test_http_blob_scope_revision_missing_corrupt_and_revoke_during_io(dat
         async with database() as db:
             yield db
 
-    app.dependency_overrides[deps.get_context] = context
+    app.dependency_overrides[deps.get_owned_context] = context
     app.dependency_overrides[get_db] = session
+    app.dependency_overrides[deps.get_tenant_db] = session
     app.dependency_overrides[deps.get_canonical_query_service] = service
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(storage_backend=storage)
     path = f"/sync/{fence.sync_id}/records/{record_id}/blobs/{digest}"

@@ -1,6 +1,5 @@
 """CRUD operations for sync jobs."""
 
-from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -11,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from airweave.core.context import BaseContext
 from airweave.crud._base_organization import CRUDBaseOrganization
 from airweave.db.unit_of_work import UnitOfWork
-from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
 from airweave.models.sync_job import SyncJob
 from airweave.schemas.sync_job import SyncJobCreate, SyncJobUpdate
@@ -147,46 +145,6 @@ class CRUDSyncJob(CRUDBaseOrganization[SyncJob, SyncJobCreate, SyncJobUpdate]):
         # Add the sync name to the job object
         job.sync_name = sync_name
         return job
-
-    async def get_stuck_jobs_by_status(
-        self,
-        db: AsyncSession,
-        status: list[str],
-        modified_before: Optional[datetime] = None,
-        started_before: Optional[datetime] = None,
-    ) -> list[SyncJob]:
-        """Get sync jobs stuck in specific statuses based on timestamps.
-
-        Args:
-            db: Database session
-            status: List of statuses to filter by
-            modified_before: For CANCELLING/PENDING jobs - modified_at before this time
-            started_before: For RUNNING jobs - started_at before this time
-
-        Returns:
-            List of stuck sync jobs
-        """
-        # Native imports share durable jobs, but own their explicit resume/cancel
-        # lifecycle. Provider heartbeat timeouts must never terminate them.
-        native_source = (
-            select(SourceConnection.id)
-            .where(
-                SourceConnection.sync_id == SyncJob.sync_id,
-                SourceConnection.organization_id == SyncJob.organization_id,
-                SourceConnection.short_name == "almanac",
-            )
-            .exists()
-        )
-        stmt = select(SyncJob).where(SyncJob.status.in_(status), ~native_source)
-
-        # Apply timestamp filters based on what's provided
-        if modified_before is not None:
-            stmt = stmt.where(SyncJob.modified_at < modified_before)
-        if started_before is not None:
-            stmt = stmt.where(SyncJob.started_at < started_before)
-
-        result = await db.execute(stmt)
-        return list(result.scalars().all())
 
 
 sync_job = CRUDSyncJob(SyncJob)

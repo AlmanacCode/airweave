@@ -19,7 +19,7 @@ from temporalio.exceptions import ApplicationError, ApplicationErrorCategory
 from airweave import schemas
 from airweave.core.context import BaseContext
 from airweave.core.exceptions import NotFoundException
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.domains.collections.protocols import CollectionRepositoryProtocol
 from airweave.domains.sync_pipeline.config import SyncConfig
 from airweave.domains.syncs.jobs.protocols import SyncJobRepositoryProtocol
@@ -134,7 +134,7 @@ class RunSyncActivity:
         sync_id = UUID(sync_dict["id"])
         collection_id = UUID(collection_dict["id"])
 
-        async with get_db_context() as db:
+        async with get_tenant_db_context(ctx.organization.id) as db:
             sync = await self.sync_repo.get(db=db, id=sync_id, ctx=ctx)
             if not sync:
                 raise ValueError(f"Sync {sync_id} not found in database")
@@ -224,7 +224,7 @@ class RunSyncActivity:
     ) -> SyncConfig | None:
         """Load execution config from DB, or None on failure."""
         try:
-            async with get_db_context() as db:
+            async with get_tenant_db_context(ctx.organization.id) as db:
                 model = await self.sync_job_repo.get(db=db, id=sync_job.id, ctx=ctx)
                 if model and model.sync_config:
                     return SyncConfig(**model.sync_config)

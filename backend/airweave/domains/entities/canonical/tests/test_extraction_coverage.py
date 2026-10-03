@@ -65,7 +65,7 @@ def destination(collection_id):
 def projector(database, storage):
     return CanonicalProjector(
         CanonicalProjectionStore(),
-        database,
+        lambda _organization: database(),
         ChunkEmbedProcessor(ConverterRegistry(), FakeDenseEmbedder(), FakeSparseEmbedder()),
         storage,
     )
@@ -397,7 +397,7 @@ async def test_inline_image_without_ocr_and_configured_conversion_failure_are_di
     ocr = MagicMock(convert_batch=AsyncMock(side_effect=lambda paths: dict.fromkeys(paths)))
     configured = CanonicalProjector(
         CanonicalProjectionStore(),
-        database,
+        lambda _organization: database(),
         ChunkEmbedProcessor(ConverterRegistry(ocr), FakeDenseEmbedder(), FakeSparseEmbedder()),
         storage,
     )

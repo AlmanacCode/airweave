@@ -491,7 +491,7 @@ async def test_checkpoint_failure_prevents_completed_transition():
     db_context.__aenter__ = AsyncMock(return_value=MagicMock())
     db_context.__aexit__ = AsyncMock(return_value=False)
     with patch(
-        "airweave.domains.sync_pipeline.orchestrator.get_db_context", return_value=db_context
+        "airweave.domains.sync_pipeline.orchestrator.get_tenant_db_context", return_value=db_context
     ):
         with pytest.raises(ConnectionError, match="database unavailable"):
             await orch._complete_sync()

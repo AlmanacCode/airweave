@@ -313,3 +313,11 @@ async def source(database):
             db, organization_id, sync_id, job_id, attempt_id=uuid4(), attempt_number=1
         )
     return service, fence
+
+
+@pytest.fixture
+async def worker_discovery(database):
+    """Install real worker ID capabilities only in this disposable schema."""
+    async with database.kw["bind"].begin() as db:
+        await db.run_sync(migrate, "0017_owned_tenant_rls.py")
+        await db.run_sync(migrate, "0018_owned_worker_discovery.py")
