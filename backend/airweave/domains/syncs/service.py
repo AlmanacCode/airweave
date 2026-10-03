@@ -265,21 +265,12 @@ class SyncService(SyncServiceProtocol):
                 detail=f"Cannot trigger sync: sync is {sync.status}",
             )
 
-        active_jobs = await self._sync_job_repo.get_active_for_sync(db, sync_id, ctx)
-        if active_jobs:
-            job_status = active_jobs[0].status.lower()
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot start new sync: a sync job is already {job_status}",
-            )
-
-        sync_schema = schemas.Sync.model_validate(sync, from_attributes=True)
-
         sync_job = await self._sync_job_repo.create(
             db,
             SyncJobCreate(sync_id=sync_id, status=SyncJobStatus.PENDING),
             ctx,
         )
+        sync_schema = schemas.Sync.model_validate(sync, from_attributes=True)
         await db.flush()
         await db.refresh(sync_job)
         sync_job_schema = schemas.SyncJob.model_validate(sync_job, from_attributes=True)

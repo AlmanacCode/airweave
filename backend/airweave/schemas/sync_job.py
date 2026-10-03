@@ -41,9 +41,9 @@ class SyncJobBase(BaseModel):
 
 
 class SyncJobCreate(SyncJobBase):
-    """Schema for creating a SyncJob object."""
+    """Internal admission input; not an API request identity contract."""
 
-    pass
+    id: UUID | None = None
 
 
 class SyncJobUpdate(BaseModel):

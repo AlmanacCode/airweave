@@ -166,15 +166,47 @@ activity slots do not establish a whole-pipeline four/eight-record bound.
 Retain provider backoff, rate limits and record bounds; measure SQL checkout
 waits, backlog and per-stage memory before increasing capacity.
 
-A remaining lifecycle gate is forced full sync job creation:
-`CreateSyncJobActivity` currently holds an activity slot and an outer SQL
-transaction while polling active jobs for up to an hour, opening another session
-for each poll. After restart enough waiting cleanup activities can occupy all
-slots needed by queued run activities. Raising the pool/slot limits cannot prove
-fair recovery. Replace that wait with a short, identity-checked admission attempt
-and Temporal retry/backoff only after job creation has a stable idempotent
-identity; broad retries today can duplicate committed jobs after lost replies.
-The configuration slice does not claim that gate is closed.
+Sync admission now uses one short transaction under the existing sync-row lock.
+The internal job UUID is stable for organization, sync, Temporal namespace/run/activity
+identity. Exact retries reuse the current-generation job; manual and scheduled
+callers cannot both admit a new active job. Failed/cancelled operations are failures,
+not successful skips. Ordinary busy schedules skip; forced busy schedules defer
+through SDK backoff without retaining an activity slot or SQL session.
+
+New workflow histories use thirty-second attempts and constant thirty-second retry
+intervals. Ordinary admissions have at most three attempts within two minutes;
+forced admissions have a sixty-five-minute schedule-to-close bound. Explicit
+admission errors are nonretryable; SDK timeout uncertainty can retry the same ID.
+The workflow patch preserves previous command policy when replaying old histories.
+Event publication remains best effort and cannot fail an admitted job's reply.
+
+Exhausting retries after commit can leave PENDING until existing recovery runs:
+API startup ensures the singleton cleanup schedule every 150 seconds, which finds
+provider PENDING jobs older than three minutes and transitions them to CANCELLED.
+Admission failure is outside the workflow's execution transition handler. Cleanup
+availability is therefore a real deployment prerequisite, not an unconditional
+latency guarantee; a failed cleanup leaves the pending job visible and blocking.
+No new recovery queue or job metadata was introduced.
+
+Temporal Python SDK 1.22.0 / Python 3.13 qualification used its actual default
+sandbox and callable result decoder. The production typed activity initially
+failed decoding postponed dataclass fields (`NameError: Any`); eager annotations
+in `activity_results.py` resolve it without widening sandbox passthrough or changing
+the wire result. The four-slot test uses production admission and retry policy:
+four busy attempts close SQL contexts, a queued completion activity runs, then
+all four retry with unchanged distinct operation IDs. A separate ordinary run
+commits a pending job, loses its reply through the real thirty-second SDK timeout,
+and recovers the same job on attempt two. PostgreSQL qualification uses an isolated
+schema for committed replay, concurrent admission, and current authority fences.
+Focused results: 23 admission/activity/workflow checks passed (2.39s); the
+four-slot SDK case passed (3.10s), ordinary real-time timeout case passed (32.71s),
+and 51 existing sync service checks passed (2.97s). An additional actual SQL
+cleanup-entrypoint test passed (3.29s): it cancels an eligible stable-UUID pending
+job, permits a subsequent admission, and leaves a recent running job untouched.
+The cleanup fixture supplies the absent external cancellation response; SQL
+selection and state-machine updates are real. These isolated-schema tests do not
+requalify deployed role grants or schedules. These are local SDK/SQL proofs,
+not a deployed restart or provider throughput test.
 
 Local verification: twenty-one configuration/wiring/shutdown checks passed in
 focused runs; the real

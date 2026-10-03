@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from airweave import schemas
 from airweave.core.context import BaseContext
 from airweave.core.events.sync import SyncLifecycleEvent
 from airweave.core.exceptions import NotFoundException
 from airweave.core.protocols import EventBus
-from airweave.core.shared_models import SyncStatus
+from airweave.core.shared_models import SyncJobStatus, SyncStatus
+from airweave.crud.crud_sync_job import SyncJobBusy
 from airweave.db.session import get_tenant_db_context
 from airweave.domains.collections.protocols import CollectionRepositoryProtocol
 from airweave.domains.connections.protocols import ConnectionRepositoryProtocol
@@ -61,11 +62,24 @@ class CreateSyncJobActivity:
         Args:
             sync_id: The sync ID to create a job for
             ctx_dict: The API context as dict
-            force_full_sync: If True (daily cleanup), wait for running jobs to complete
+            force_full_sync: If True (daily cleanup), defer busy admission through Temporal retry
 
         Returns:
             CreateSyncJobResult with sync_job_dict, or orphaned/skipped flags.
         """
+        try:
+            return await self._admit(sync_id, ctx_dict, force_full_sync)
+        except ApplicationError:
+            raise
+        except Exception as exc:
+            raise ApplicationError(
+                "Sync job admission failed", type="SyncJobAdmissionFailed", non_retryable=True
+            ) from exc
+
+    async def _admit(
+        self, sync_id: str, ctx_dict: Dict[str, Any], force_full_sync: bool
+    ) -> CreateSyncJobResult:
+        """One short SQL attempt; Temporal owns waiting between busy attempts."""
         ctx = await build_activity_context(ctx_dict, sync_id=sync_id)
         organization = ctx.organization
 
@@ -99,32 +113,34 @@ class CreateSyncJobActivity:
                     reason=f"Sync status is {sync.status}",
                 )
 
-            running_jobs = await self.sync_job_repo.get_active_for_sync(
-                db=db,
-                sync_id=UUID(sync_id),
-                ctx=ctx,
+            info = activity.info()
+            operation_id = uuid5(
+                NAMESPACE_URL,
+                f"sync-job:{organization.id}:{sync_id}:{info.workflow_namespace}:"
+                f"{info.workflow_run_id}:{info.activity_id}",
             )
-
-            if running_jobs:
+            sync_job_in = schemas.SyncJobCreate(sync_id=UUID(sync_id), id=operation_id)
+            try:
+                sync_job = await self.sync_job_repo.create(db=db, obj_in=sync_job_in, ctx=ctx)
+            except SyncJobBusy as exc:
                 if force_full_sync:
-                    await self._wait_for_running_jobs(db, sync_id, ctx, running_jobs)
-                else:
-                    ctx.logger.info(
-                        f"Sync {sync_id} already has {len(running_jobs)} running "
-                        f"job(s). Skipping scheduled run."
-                    )
-                    return CreateSyncJobResult(
-                        skipped=True,
-                        sync_id=sync_id,
-                        reason=f"Already has {len(running_jobs)} running job(s)",
-                    )
-
-            sync_job_in = schemas.SyncJobCreate(sync_id=UUID(sync_id))
-            sync_job = await self.sync_job_repo.create(db=db, obj_in=sync_job_in, ctx=ctx)
+                    raise ApplicationError("Sync is busy", type="SyncJobBusy") from exc
+                return CreateSyncJobResult(skipped=True, sync_id=sync_id, reason=exc.detail)
+            if sync_job.status in (
+                SyncJobStatus.FAILED,
+                SyncJobStatus.CANCELLED,
+                SyncJobStatus.CANCELLING,
+            ):
+                raise ApplicationError(
+                    "Operation job failed or was cancelled",
+                    type="SyncJobAdmissionFailed",
+                    non_retryable=True,
+                )
+            if sync_job.status != SyncJobStatus.PENDING:
+                return CreateSyncJobResult(
+                    skipped=True, sync_id=sync_id, reason="Operation job is no longer pending"
+                )
             sync_job_id = sync_job.id
-
-            await db.commit()
-            await db.refresh(sync_job)
 
             ctx.logger.info(f"Created sync job {sync_job_id} for sync {sync_id}")
 
@@ -135,48 +151,6 @@ class CreateSyncJobActivity:
                 sync_job_dict=sync_job_schema.model_dump(mode="json"),
                 sync_id=sync_id,
             )
-
-    async def _wait_for_running_jobs(
-        self,
-        db: AsyncSession,
-        sync_id: str,
-        ctx: BaseContext,
-        running_jobs: list[SyncJob],
-    ) -> None:
-        """Wait for running jobs to complete before daily cleanup."""
-        ctx.logger.info(
-            f"🔄 Daily cleanup sync for {sync_id}: "
-            f"Found {len(running_jobs)} running job(s). "
-            f"Waiting for them to complete before starting cleanup..."
-        )
-
-        max_wait_time = 60 * 60
-        wait_interval = 30
-        total_waited = 0
-
-        while total_waited < max_wait_time:
-            activity.heartbeat({"phase": "waiting_for_running_jobs", "waited_s": total_waited})
-            await asyncio.sleep(wait_interval)
-            total_waited += wait_interval
-
-            async with get_tenant_db_context(ctx.organization.id) as check_db:
-                still_running = await self.sync_job_repo.get_active_for_sync(
-                    db=check_db,
-                    sync_id=UUID(sync_id),
-                    ctx=ctx,
-                )
-
-                if not still_running:
-                    ctx.logger.info(
-                        f"✅ Running jobs completed. Proceeding with cleanup sync for {sync_id}"
-                    )
-                    return
-
-        ctx.logger.error(
-            f"❌ Timeout waiting for running jobs to complete for sync {sync_id}. "
-            f"Skipping cleanup sync."
-        )
-        raise Exception(f"Timeout waiting for running jobs to complete after {max_wait_time}s")
 
     async def _publish_pending_event(
         self,

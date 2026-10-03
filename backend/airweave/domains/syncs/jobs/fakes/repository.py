@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api.context import ApiContext
+from airweave.crud.crud_sync_job import SyncJobBusy
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.models.sync_job import SyncJob
 from airweave.schemas.sync_job import SyncJobCreate, SyncJobUpdate
@@ -51,7 +52,7 @@ class FakeSyncJobRepository:
         """Return seeded active jobs for the sync."""
         self._calls.append(("get_active_for_sync", db, sync_id, ctx))
         jobs = self._by_sync.get(sync_id, [])
-        return [j for j in jobs if j.status in ("PENDING", "RUNNING", "CANCELLING")]
+        return [j for j in jobs if j.status in ("pending", "running", "cancelling")]
 
     async def get_all_by_sync_id(
         self,
@@ -77,6 +78,10 @@ class FakeSyncJobRepository:
     ) -> SyncJob:
         """Create a fake SyncJob from the schema and store it."""
         self._calls.append(("create", db, obj_in, ctx, uow))
+        if obj_in.id is not None and obj_in.id in self._store:
+            return self._store[obj_in.id]
+        if await self.get_active_for_sync(db, obj_in.sync_id, ctx):
+            raise SyncJobBusy()
         valid_fields = {c.key for c in SyncJob.__table__.columns}
         dumped = {k: v for k, v in obj_in.model_dump().items() if k in valid_fields}
         if "id" not in dumped or dumped["id"] is None:
@@ -85,6 +90,7 @@ class FakeSyncJobRepository:
         job = SyncJob(**dumped, organization_id=ctx.organization.id)
         self._store[job.id] = job
         self._created.append(job)
+        self._by_sync.setdefault(job.sync_id, []).append(job)
         return job
 
     async def update(

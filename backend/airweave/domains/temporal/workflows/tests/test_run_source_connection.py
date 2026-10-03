@@ -140,20 +140,23 @@ async def test_skips_when_sync_job_already_running():
 
 
 @pytest.mark.unit
-async def test_skips_when_create_sync_job_raises():
-    """When create_sync_job activity fails, workflow exits gracefully."""
+async def test_admission_failure_fails_workflow():
+    """Admission outages are failures, not clean scheduled skips."""
     recorder = ActivityRecorder()
+    from temporalio.client import WorkflowFailureError
+
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        await _run_workflow(
-            env,
-            activities=[
-                mock_create_sync_job(recorder, raise_error=RuntimeError("db down")),
-                mock_run_sync(recorder),
-                mock_self_destruct(recorder),
-                mock_transition_sync_job(recorder),
-            ],
-            sync_job_dict=None,
-        )
+        with pytest.raises(WorkflowFailureError):
+            await _run_workflow(
+                env,
+                activities=[
+                    mock_create_sync_job(recorder, raise_error=RuntimeError("db down")),
+                    mock_run_sync(recorder),
+                    mock_self_destruct(recorder),
+                    mock_transition_sync_job(recorder),
+                ],
+                sync_job_dict=None,
+            )
 
     assert not recorder.called("run_sync")
 
