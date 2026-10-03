@@ -51,6 +51,7 @@ from airweave.domains.entities.canonical.slack_models import (
     SlackTimestamp,
 )
 from airweave.domains.entities.canonical.slack_query import CanonicalSlackQuery
+from airweave.domains.entities.canonical.status_models import SourceStatus
 from airweave.domains.entities.canonical.store import CanonicalStoreError
 from airweave.domains.entities.canonical.text_models import TextRead, TextRepresentationList
 from airweave.domains.entities.canonical.wispr_models import (
@@ -202,6 +203,17 @@ async def drive_file(
     return await CanonicalDriveQuery(service.signing_key).file(
         db, ctx.organization.id, sync_id, file_id
     )
+
+
+@router.get("/{sync_id}/status", response_model=SourceStatus)
+async def retained_source_status(
+    sync_id: UUID,
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> SourceStatus:
+    """Observe saved import/preparation facts; never execute provider or model calls."""
+    return await service.status(db, ctx.organization.id, sync_id)
 
 
 @router.get("/{sync_id}/records", response_model=RecordPage)

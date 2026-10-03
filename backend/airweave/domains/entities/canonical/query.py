@@ -20,6 +20,8 @@ from airweave.domains.entities.canonical.query_models import (
     SpreadsheetRead,
 )
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
+from airweave.domains.entities.canonical.status_models import SourceStatus
+from airweave.domains.entities.canonical.status_store import source_status
 from airweave.domains.entities.canonical.store import (
     CanonicalRecordStore,
     CanonicalStoreError,
@@ -91,6 +93,10 @@ class CanonicalQueryService:
         self.records = records
         self.queries = queries
         self.signing_key = signing_key
+
+    async def status(self, db: AsyncSession, organization_id: UUID, sync_id: UUID) -> SourceStatus:
+        """Read capture and preparation facts without provider or model work."""
+        return await source_status(db, organization_id, sync_id)
 
     def _encode(self, cursor: RecordCursor | MailThreadCursor) -> str:
         return jwt.encode(cursor.model_dump(mode="json"), self.signing_key, algorithm="HS256")
