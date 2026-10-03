@@ -6,7 +6,14 @@ Wraps environment variables and provides defaults.
 from typing import Optional
 from uuid import UUID
 
-from pydantic import PostgresDsn, TypeAdapter, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    Field,
+    PostgresDsn,
+    TypeAdapter,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings
 
 from airweave.core.config.enums import AuthMode, Environment, StorageBackendType
@@ -143,6 +150,7 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str
     POSTGRES_SSLMODE: str = "prefer"  # disable for PgBouncer, require for Azure PostgreSQL
     SQLALCHEMY_ASYNC_DATABASE_URI: Optional[PostgresDsn] = None
+    TENANT_DATABASE_URI: PostgresDsn | None = Field(default=None, repr=False)
 
     LOCAL_NGROK_SERVER: Optional[str] = None
 
