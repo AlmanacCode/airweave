@@ -246,7 +246,7 @@ class SlackSource(BaseSource):
     def capture_cycle_configuration(self) -> CycleConfiguration:
         """Existing cycle ownership includes the trusted visibility principal."""
         principal = self._require_principal()
-        material = {"version": 2, "team_id": principal.team_id, "user_id": principal.user_id}
+        material = {"version": 3, "team_id": principal.team_id, "user_id": principal.user_id}
         if self.slack_config.capture_files:
             material["capture_files"] = "message_owned_children_v1"
         fingerprint = hashlib.sha256(
@@ -259,6 +259,7 @@ class SlackSource(BaseSource):
             fingerprint=fingerprint,
             record_types=self.canonical_record_types,
             container_parents=self.canonical_container_parents,
+            known_object_validation=("message",),
             exact_parent_validation=("message",) if self.slack_config.capture_files else (),
         )
 
@@ -394,16 +395,18 @@ class SlackSource(BaseSource):
         )
 
     async def refresh_known(self, record: SourceRecord, *, files: FileService) -> CaptureRecord:
-        """Recheck an attachment owner without treating an ambiguous miss as deletion."""
+        """Recheck an omitted message without treating an ambiguous miss as deletion."""
         self._require_principal()
-        if not self.slack_config.capture_files or record.identity.record_type != "message":
-            raise ValueError("Slack exact owner refresh requires attachment capture and a message")
+        if record.identity.record_type != "message":
+            raise ValueError("Slack exact owner refresh requires a message")
         try:
             message = await self._read_known_message(record)
             if message is None:
                 raise ValueError("Slack message access remains unconfirmed; capture is incomplete")
             captured = self._capture_message(message, record.identity.container_id)
-            return self._attachment_owner(captured).model_copy(update={"parent": record.parent})
+            if self.slack_config.capture_files:
+                captured = self._attachment_owner(captured)
+            return captured.model_copy(update={"parent": record.parent})
         except ValidationError:
             raise ValueError("Slack exact message read returned invalid provider data") from None
 

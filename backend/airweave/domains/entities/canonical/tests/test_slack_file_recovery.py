@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from airweave.adapters.storage.filesystem import FilesystemBackend
+from airweave.domains.entities.canonical.coverage import capture_coverage
 from airweave.domains.entities.canonical.page_source import (
     InvalidScanContinuation,
     RequiredScopeAccessLost,
@@ -150,16 +151,15 @@ async def test_omitted_accessible_message_does_not_remove_retained_file_children
         await db.commit()
     following = (service, fence.model_copy(update={"job_id": new_job, "attempt_id": uuid4()}))
     connectors = []
-    with pytest.raises(ValueError, match="omitted an accessible prior message"):
-        await attempt(
-            database,
-            following,
-            storage,
-            [],
-            number=1,
-            responses=[ROOT, {"messages": []}, {"messages": [MESSAGE]}],
-            connector_out=connectors,
-        )
+    pipeline, _ = await attempt(
+        database,
+        following,
+        storage,
+        [],
+        number=1,
+        responses=[ROOT, {"messages": []}, {"messages": [MESSAGE]}, {"messages": [MESSAGE]}],
+        connector_out=connectors,
+    )
     call = connectors[0]._get.call_args_list[-1]
     assert call.args[0].endswith("conversations.history")
     assert call.args[1] == {
@@ -171,6 +171,13 @@ async def test_omitted_accessible_message_does_not_remove_retained_file_children
     }
     async with database() as db:
         rows = (await db.scalars(select(Entity).where(Entity.sync_id == fence.sync_id))).all()
+        cycle = await service.read_cycle(db, pipeline._writer())
+        assert cycle.phase == "complete"
+        coverage = (await capture_coverage(db, fence.organization_id, (fence.sync_id,)))[
+            fence.sync_id
+        ]
+        assert coverage.phase == "complete"
+        assert coverage.discovery == "scope_enumeration_complete"
         assert len(rows) == 5
         for row in rows:
             stored = await service.store.read(db, fence.organization_id, fence.sync_id, row.id)
