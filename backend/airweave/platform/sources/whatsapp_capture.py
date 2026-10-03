@@ -71,7 +71,7 @@ def _source_failure(error: UnipileError) -> NoReturn:
 class WhatsAppProgress(BaseModel):
     """Bounded continuation committed atomically with records by the shared engine."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
     cursor: str | None = Field(default=None, min_length=1, max_length=8192)
     offset: int = Field(default=0, ge=0)
     pages: int = Field(default=0, ge=0)
@@ -497,7 +497,9 @@ class WhatsAppCapture:
             descendant_visibility_fields=("is_hidden", "view_mode", "is_event"),
             completeness="partial",
             observed_at=observed_at,
-            source_created_at=TypeAdapter(AwareDatetime).validate_python(message.timestamp),
+            source_created_at=TypeAdapter(
+                AwareDatetime, config=ConfigDict(hide_input_in_errors=True)
+            ).validate_python(message.timestamp),
             kind="delete" if message.is_deleted else "upsert",
             removal_reason="provider_deleted" if message.is_deleted else None,
             blobs=tuple(blobs),

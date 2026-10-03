@@ -16,7 +16,7 @@ from airweave.platform.sources.records.whatsapp_models import (
 class WhatsAppCollectionPage(BaseModel):
     """An actual list request and its untouched native JSON response."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     query: dict[str, str | int]
     response: dict[str, JsonValue]
 
@@ -24,7 +24,7 @@ class WhatsAppCollectionPage(BaseModel):
 class WhatsAppParticipantCollection(BaseModel):
     """Exhausted observation interval, never an instantaneous native roster snapshot."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     chat_id: str = Field(min_length=1)
     pagination: Literal["cursor", "offset"]
     page_size: int = Field(ge=1, le=100)
@@ -87,7 +87,7 @@ def reaction_page_digest(data: list[dict[str, JsonValue]]) -> str:
 class WhatsAppReactionCollection(BaseModel):
     """Exact message-owned response collection; reactions have no native IDs or times."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     chat_id: str = Field(min_length=1)
     message_id: str = Field(min_length=1)
     pagination: Literal["cursor", "offset"]

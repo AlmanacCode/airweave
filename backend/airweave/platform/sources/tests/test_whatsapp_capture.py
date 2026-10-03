@@ -1,11 +1,13 @@
 """Native acquisition simulations; no private accounts or provider mutations."""
 
 import hashlib
+import traceback
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.requests import (
@@ -707,3 +709,60 @@ async def test_reaction_transient_reordered_wholepage_cursor_and_parent_validati
     ]
     result = await capture.capture_page(scope, ScanContinuation(), parent=owner, files=Files())
     assert result.final and capture.client.reactions.await_args_list[1].kwargs == {"cursor": "next"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["native_parent", "collection", "continuation", "timestamp"])
+async def test_validation_error_traceback_omits_private_inputs(boundary):
+    sentinel = "synthetic" + "-private-value-" + "never-log"
+    capture = source()
+    owner = parent()
+    with pytest.raises(ValidationError) as failure:
+        if boundary == "native_parent":
+            invalid = owner.model_copy(update={"payload": CHAT | {"is_group": sentinel}})
+            await capture.capture_page(
+                capture.child_scope(owner, "whatsapp_chat_participants"),
+                ScanContinuation(),
+                parent=invalid,
+                files=Files(),
+            )
+        elif boundary == "collection":
+            WhatsAppParticipantCollection.model_validate(
+                {
+                    "chat_id": sentinel,
+                    "pagination": "offset",
+                    "page_size": 20,
+                    "pages": [
+                        {
+                            "query": {"offset": 0, "limit": 20},
+                            "response": {
+                                "data": [
+                                    {
+                                        "object": "GroupParticipant",
+                                        "is_admin": sentinel,
+                                        "is_self": False,
+                                        "user": {"object": "User", "id": sentinel},
+                                    }
+                                ]
+                            },
+                        }
+                    ],
+                }
+            )
+        elif boundary == "continuation":
+            await capture.capture_page(
+                CompletedScope(record_type="whatsapp_chat"),
+                ScanContinuation(value={"offset": sentinel}),
+                files=Files(),
+            )
+        else:
+            await capture._message(
+                WhatsAppMessage.model_validate(MESSAGE | {"timestamp": sentinel}),
+                owner.identity,
+                Files(),
+                datetime.now(timezone.utc),
+            )
+    error = failure.value
+    assert sentinel not in str(error)
+    assert sentinel not in "".join(traceback.format_exception(error))
+    assert error.__cause__ is None  # No catch-all replacement or altered cause policy.

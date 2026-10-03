@@ -164,7 +164,9 @@ def _captured_message(record: SourceRecord) -> WhatsAppMessage:
         raise ValueError("WhatsApp message identity differs from its retained original")
     if message.sender and message.sender.id != message.sender_id:
         raise ValueError("WhatsApp sender profile disagrees with native sender ID")
-    TypeAdapter(AwareDatetime).validate_python(message.timestamp)
+    TypeAdapter(AwareDatetime, config=ConfigDict(hide_input_in_errors=True)).validate_python(
+        message.timestamp
+    )
     return message
 
 
@@ -234,7 +236,9 @@ async def map_whatsapp_message(
     message = _captured_message(record)
     if _excluded_message(message):
         return ProjectionInputs(parts=())
-    timestamp = TypeAdapter(AwareDatetime).validate_python(message.timestamp)
+    timestamp = TypeAdapter(
+        AwareDatetime, config=ConfigDict(hide_input_in_errors=True)
+    ).validate_python(message.timestamp)
     _validate_blobs(record, message)
     restricted = message.view_mode is not None
     parts = _text_parts(message, timestamp, restricted=restricted)

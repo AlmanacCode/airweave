@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 class WhatsAppNativeModel(BaseModel):
     """Retain the original JSON shape while typing fields used by acquisition."""
 
-    model_config = ConfigDict(extra="allow", strict=True)
+    model_config = ConfigDict(extra="allow", strict=True, hide_input_in_errors=True)
 
     def original(self) -> dict[str, JsonValue]:
         """Return only supplied fields, including unrecognized provider additions."""
