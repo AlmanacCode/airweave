@@ -130,5 +130,31 @@
     "/tmp/wispr-retained-index-20261002/current-v3-interruption-safe.json": "40da92f41a5430fc4a0e12f6a2168b261fb278c98dae7c0d64fa9c3a629d40e6",
     "/tmp/wispr-retained-index-20261002/fixed-v3-proof.json": "6eb3db92f7fd286c0c23d7d4e63ea47efd4d8eeeb73094fec22531da2828294f",
     "/tmp/wispr-current-full-preflight-20261002/cli-proof.private.json": "425fb9590e13ec484fc2931aa6d35cb0b6c0021b9f5908b7497af6ad44d0707d"
+  },
+  "retrieval_miss_read_only_diagnosis": {
+    "query_length": 41,
+    "longest_exact_native_sequence": 25,
+    "query_in_title": false,
+    "query_has_ascii_quotes": true,
+    "all_current_document_gets_succeeded": true,
+    "native_and_index_both_contain_all_regex_word_fragments": true,
+    "keyword_delivered_cards": 0,
+    "hybrid_delivered_cards": 20,
+    "hybrid_candidates_considered": 70,
+    "hybrid_excluded_stale_or_ineligible_chunks": 100,
+    "hybrid_candidate_window_full": true,
+    "filter_post_exclusions": 0,
+    "cause": "Quoted phrase spans adjacent transcript chunks2 and3. All source characters are retained and present across those current chunks; no single chunk contains the phrase even after whitespace removal. Exact phrase keyword query returned zero candidates. Hybrid filled bounded candidate window and missed expected card; detailed hybrid ranking attribution remains unverified. No postfilter exclusion or preparation text omission demonstrated.",
+    "query_is_quoted_phrase": true,
+    "quoted_phrase_chars": 39,
+    "quoted_phrase_in_native_exact": false,
+    "quoted_phrase_in_current_index_exact": false,
+    "phrase_matches_after_removing_whitespace_in_native": true,
+    "phrase_matches_after_removing_whitespace_in_current_index": false,
+    "phrase_matches_joined_adjacent_transcript_chunks_after_whitespace_removal": true,
+    "transcript_chunk_indices": [
+      2,
+      3
+    ]
   }
 }
