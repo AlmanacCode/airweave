@@ -1,6 +1,7 @@
 """Text file to markdown converter."""
 
 import asyncio
+import codecs
 import json
 import os
 import xml.dom.minidom
@@ -73,7 +74,7 @@ class TxtConverter(BaseTextConverter):
         except (UnicodeDecodeError, LookupError):
             pass
         except ImportError:
-            logger.debug("chardet not available, falling back to UTF-8 with ignore")
+            logger.debug("chardet not available; unknown text encoding cannot be converted")
         return None
 
     async def _convert_plain_text(self, path: str) -> str:
@@ -83,54 +84,34 @@ class TxtConverter(BaseTextConverter):
         if not raw_bytes:
             return ""
 
+        # A BOM is authoritative; malformed bytes must not fall through to guessing.
+        for bom, encoding in (
+            (codecs.BOM_UTF32_LE, "utf-32"),
+            (codecs.BOM_UTF32_BE, "utf-32"),
+            (codecs.BOM_UTF16_LE, "utf-16"),
+            (codecs.BOM_UTF16_BE, "utf-16"),
+            (codecs.BOM_UTF8, "utf-8-sig"),
+        ):
+            if raw_bytes.startswith(bom):
+                return raw_bytes.decode(encoding, errors="strict")
         try:
-            text = raw_bytes.decode("utf-8")
-            if text.count("\ufffd") == 0:
-                return text
+            return raw_bytes.decode("utf-8", errors="strict")
         except UnicodeDecodeError:
-            pass
-
-        chardet_result = self._try_chardet_decode(raw_bytes, path)
-        if chardet_result is not None:
-            return chardet_result
-
-        text = raw_bytes.decode("utf-8", errors="replace")
-        replacement_count = text.count("\ufffd")
-
-        if replacement_count > 0:
-            text_length = len(text)
-            replacement_ratio = replacement_count / text_length if text_length > 0 else 0
-
-            if replacement_ratio > 0.25 or replacement_count > 5000:
-                logger.warning(
-                    f"File {os.path.basename(path)} contains {replacement_count} "
-                    f"replacement characters ({replacement_ratio:.1%}). "
-                    f"This may indicate binary data or encoding issues."
-                )
-                raise EntityProcessingError(
-                    f"Text file contains excessive binary/corrupted data: "
-                    f"{replacement_count} replacement chars ({replacement_ratio:.1%})"
-                )
-
-        return text
+            detected = self._try_chardet_decode(raw_bytes, path)
+            if detected is not None:
+                return detected
+            raise EntityProcessingError(
+                "Text encoding could not be decoded without data loss"
+            ) from None
 
     async def _convert_json(self, path: str) -> str:
         def _read_and_format():
             with open(path, "rb") as f:
                 raw_bytes = f.read()
 
-            try:
-                text = raw_bytes.decode("utf-8")
-            except UnicodeDecodeError:
-                text = raw_bytes.decode("utf-8", errors="replace")
-                replacement_count = text.count("\ufffd")
-                if replacement_count > 50:
-                    raise EntityProcessingError(
-                        f"JSON contains binary data ({replacement_count} replacement chars)"
-                    )
-
-            data = json.loads(text)
-            formatted = json.dumps(data, indent=2)
+            # The stdlib honors JSON UTF-8/16/32 and BOMs without replacement decoding.
+            data = json.loads(raw_bytes)
+            formatted = json.dumps(data, indent=2, ensure_ascii=False)
             return f"```json\n{formatted}\n```"
 
         try:
@@ -144,38 +125,12 @@ class TxtConverter(BaseTextConverter):
             with open(path, "rb") as f:
                 raw_bytes = f.read()
 
-            try:
-                content = raw_bytes.decode("utf-8")
-            except UnicodeDecodeError:
-                content = raw_bytes.decode("utf-8", errors="replace")
-                replacement_count = content.count("\ufffd")
-                if replacement_count > 50:
-                    raise EntityProcessingError(
-                        f"XML contains binary data ({replacement_count} replacement chars)"
-                    )
-
-            dom = xml.dom.minidom.parseString(content)
+            # Parse bytes so XML's declared encoding remains authoritative.
+            dom = xml.dom.minidom.parseString(raw_bytes)
             formatted = dom.toprettyxml()
             return f"```xml\n{formatted}\n```"
 
         try:
             return await run_in_thread_pool(_read_and_format)
-        except EntityProcessingError:
-            raise
-        except Exception as e:
-            logger.warning(f"XML parsing failed for {path}: {e}, using raw content")
-            with open(path, "rb") as f:
-                raw_bytes = f.read()
-
-            try:
-                raw = raw_bytes.decode("utf-8")
-            except UnicodeDecodeError:
-                raw = raw_bytes.decode("utf-8", errors="replace")
-                replacement_count = raw.count("\ufffd")
-                if replacement_count > 100:
-                    raise EntityProcessingError(
-                        f"XML contains excessive binary data "
-                        f"({replacement_count} replacement chars)"
-                    )
-
-            return f"```xml\n{raw}\n```" if raw.strip() else None
+        except Exception as error:
+            raise EntityProcessingError("XML could not be parsed without data loss") from error
