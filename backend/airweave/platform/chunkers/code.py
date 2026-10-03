@@ -109,7 +109,7 @@ class CodeChunker(BaseChunker):
 
         Stage 1: CodeChunker chunks at AST boundaries (functions, classes)
         Stage 1.5: Recount tokens with tiktoken cl100k_base (Chonkie reports incorrect counts)
-        Stage 2: UnicodeTokenChunker force-splits any chunks exceeding MAX_TOKENS_PER_CHUNK (hard limit)
+        Stage 2: Split oversized chunks within the hard token limit without breaking UTF-8.
 
         Uses run_in_thread_pool because Chonkie is synchronous (avoids blocking event loop).
 

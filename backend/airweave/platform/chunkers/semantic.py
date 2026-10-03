@@ -147,7 +147,7 @@ class SemanticChunker(BaseChunker):
 
         Stage 1: SemanticChunker detects semantic boundaries (embedding similarity)
         Stage 1.5: Recount tokens with tiktoken cl100k_base (OpenAI compatibility)
-        Stage 2: UnicodeTokenChunker force-splits any oversized chunks at token boundaries (hard limit)
+        Stage 2: Split oversized chunks within the hard token limit without breaking UTF-8.
 
         Uses run_in_thread_pool because Chonkie is synchronous (avoids blocking event loop).
 

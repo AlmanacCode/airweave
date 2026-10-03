@@ -11,6 +11,7 @@ from airweave.platform.chunkers.unicode_tokens import UnicodeTokenChunker
     [
         "हिन्दी बैठक 👩🏽‍💻 की बातचीत। " * 30,
         "中文 العربية café e\u0301\n" * 40,
+        "کل کی میٹنگ میں search اور indexing پر بات ہوئی۔ اگلا قدم کیا ہے؟ " * 30,
         "<|endoftext|> repeated text � " * 30,
     ],
 )
