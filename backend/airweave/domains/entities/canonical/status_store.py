@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import and_, cast, func, select
+from sqlalchemy import and_, case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONPATH
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,9 +13,11 @@ from airweave.domains.entities.canonical.projection_store import (
 )
 from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.status_models import (
+    CREDENTIAL_ERROR_CATEGORIES,
     ExtractionStatus,
     PreparationStatus,
     SourceStatus,
+    SyncHealth,
 )
 from airweave.domains.entities.canonical.store import SourceNotFound, content_is_available
 from airweave.models.collection import Collection
@@ -23,6 +25,7 @@ from airweave.models.entity import Entity
 from airweave.models.projection_generation import ProjectionGeneration
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
+from airweave.models.sync_job import SyncJob
 
 
 async def source_status(db: AsyncSession, organization_id: UUID, sync_id: UUID) -> SourceStatus:
@@ -122,9 +125,41 @@ async def source_status(db: AsyncSession, organization_id: UUID, sync_id: UUID) 
         )
     ).one()
     captures = await capture_coverage(db, organization_id, (sync_id,))
+    # Read the newest job before testing its outcome. Filtering to failed jobs
+    # first would let an old credential failure survive a successful retry.
+    credential_error = (
+        select(
+            case(
+                (
+                    and_(
+                        SyncJob.status == "failed",
+                        SyncJob.error_category.in_(CREDENTIAL_ERROR_CATEGORIES),
+                    ),
+                    SyncJob.error_category,
+                ),
+                else_=None,
+            )
+        )
+        .where(
+            SyncJob.organization_id == organization_id,
+            SyncJob.sync_id == Sync.id,
+            SyncJob.provisioning_generation == Sync.provisioning_generation,
+        )
+        .order_by(SyncJob.created_at.desc(), SyncJob.id.desc())
+        .limit(1)
+        .correlate(Sync)
+        .scalar_subquery()
+    )
+    health = (
+        await db.execute(
+            select(Sync.status, credential_error.label("credential_error")).where(
+                Sync.organization_id == organization_id, Sync.id == sync_id
+            )
+        )
+    ).one_or_none()
     # Repeat after all reads: a withdrawal during the request cannot authorize
     # publishing previously computed counts.
-    if not await db.scalar(select(source_is_readable(organization_id, sync_id))):
+    if health is None or not await db.scalar(select(source_is_readable(organization_id, sync_id))):
         raise SourceNotFound("Source is not available")
     candidates = counts.retained - counts.excluded
     return SourceStatus(
@@ -132,6 +167,7 @@ async def source_status(db: AsyncSession, organization_id: UUID, sync_id: UUID) 
         retained_records=counts.retained,
         last_observed_at=counts.observed,
         capture=captures.get(sync_id),
+        sync_health=SyncHealth(status=health.status, credential_error=health.credential_error),
         preparation=PreparationStatus(
             candidate_records=candidates,
             current_records=counts.current,

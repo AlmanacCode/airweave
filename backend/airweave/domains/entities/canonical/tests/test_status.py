@@ -20,6 +20,76 @@ from airweave.domains.entities.canonical.tests.test_http import query_app
 from airweave.models.entity import Entity
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
+from airweave.models.sync_job import SyncJob
+
+
+async def test_current_credential_failure_is_health_not_retained_permission(database, source):
+    service, fence = source
+    binding = await bind_projection(database, fence)
+    original = await capture(database, service, fence, observation())
+    async with database() as db:
+        await db.execute(
+            update(Sync)
+            .where(Sync.id == fence.sync_id)
+            .values(status="paused", provisioning_generation=1)
+        )
+        await db.execute(
+            update(SyncJob)
+            .where(SyncJob.id == fence.job_id)
+            .values(
+                status="failed",
+                error_category="auth_provider_credentials_invalid",
+                error="private-provider-response",
+                provisioning_generation=0,
+            )
+        )
+        await db.commit()
+
+    async def context():
+        return SimpleNamespace(organization=SimpleNamespace(id=fence.organization_id))
+
+    async with AsyncClient(
+        transport=ASGITransport(app=query_app(database, context)), base_url="http://test"
+    ) as client:
+        path = f"/sync/{fence.sync_id}/status"
+        old = await client.get(path)
+        assert old.status_code == 200
+        assert old.json()["sync_health"] == {"status": "paused", "credential_error": None}
+        async with database() as db:
+            await db.execute(
+                update(SyncJob).where(SyncJob.id == fence.job_id).values(provisioning_generation=1)
+            )
+            await db.commit()
+        failed = await client.get(path)
+        assert failed.json()["sync_health"] == {
+            "status": "paused",
+            "credential_error": "auth_provider_credentials_invalid",
+        }
+        assert failed.json()["retained_records"] == 1
+        assert "private-provider-response" not in failed.text
+        read = await client.get(f"/sync/{fence.sync_id}/records/{original.changes[0].record.id}")
+        assert read.status_code == 200
+        async with database() as db:
+            db.add(
+                SyncJob(
+                    organization_id=fence.organization_id,
+                    sync_id=fence.sync_id,
+                    provisioning_generation=1,
+                    status="completed",
+                )
+            )
+            await db.commit()
+        recovered = await client.get(path)
+        assert recovered.json()["sync_health"] == {"status": "paused", "credential_error": None}
+        assert recovered.json()["retained_records"] == 1
+        async with database() as db:
+            await db.execute(
+                update(SourceConnection)
+                .where(SourceConnection.id == binding.source_connection_id)
+                .values(is_authenticated=False)
+            )
+            await db.commit()
+        assert (await client.get(path)).status_code == 404
 
 
 async def test_status_current_exclusions_gaps_and_pipeline_invalidation(database, source):

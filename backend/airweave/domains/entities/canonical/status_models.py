@@ -1,10 +1,19 @@
 """Body-free account progress, derived from current retained/publication facts."""
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from airweave.core.shared_models import SourceConnectionErrorCategory, SyncStatus
 from airweave.domains.entities.canonical.coverage_models import CaptureCoverage
+
+CREDENTIAL_ERROR_CATEGORIES = (
+    SourceConnectionErrorCategory.OAUTH_CREDENTIALS_EXPIRED,
+    SourceConnectionErrorCategory.API_KEY_INVALID,
+    SourceConnectionErrorCategory.AUTH_PROVIDER_ACCOUNT_GONE,
+    SourceConnectionErrorCategory.AUTH_PROVIDER_CREDENTIALS_INVALID,
+)
 
 
 class PreparationStatus(BaseModel):
@@ -36,6 +45,22 @@ class ExtractionStatus(BaseModel):
     unknown_records: int = Field(ge=0)
 
 
+class SyncHealth(BaseModel):
+    """Persisted scheduling state; no category does not attest valid credentials."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    status: SyncStatus
+    credential_error: (
+        Literal[
+            "oauth_credentials_expired",
+            "api_key_invalid",
+            "auth_provider_account_gone",
+            "auth_provider_credentials_invalid",
+        ]
+        | None
+    )
+
+
 class SourceStatus(BaseModel):
     """SQL-only snapshot; unfinished capture does not mean a worker is running."""
 
@@ -46,6 +71,7 @@ class SourceStatus(BaseModel):
     capture: CaptureCoverage | None
     preparation: PreparationStatus
     extraction: ExtractionStatus
+    sync_health: SyncHealth | None = None
 
     @model_validator(mode="after")
     def partition(self):
