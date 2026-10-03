@@ -4,9 +4,8 @@ import hashlib
 import json
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
-
 from airweave.domains.entities.canonical.requests import BlobReference
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 DOCS_MIME = "application/vnd.google-apps.document"
@@ -19,7 +18,10 @@ class ExportState(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     status: Literal["retained", "unavailable"]
     blob: Sha256 | None = None
-    reason: Literal["export_size_limit", "unsupported", "read_size_limit"] | None = None
+    reason: (
+        Literal["export_size_limit", "unsupported", "read_size_limit", "download_not_permitted"]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def coverage(self):

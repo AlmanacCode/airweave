@@ -395,7 +395,7 @@ def _select_inputs(
         elif item.omission == "conversion_failed":
             outcome, reason = "failed", "conversion_failed"
         elif entity is None:
-            outcome, reason = "unavailable_original", "original_not_captured"
+            outcome, reason = "unavailable_original", item.omission or "original_not_captured"
         elif (
             part.kind == "file"
             and part.extension is not None

@@ -16,7 +16,17 @@ class ProjectionInput(BaseModel):
     part: ExtractionPart
     entity: BaseEntity | None
     native_body: NativeTextBody | None = None
-    omission: Literal["unsupported_format", "conversion_failed"] | None = None
+    omission: (
+        Literal[
+            "unsupported_format",
+            "conversion_failed",
+            "export_size_limit",
+            "read_size_limit",
+            "unsupported",
+            "download_not_permitted",
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def valid_omission(self) -> "ProjectionInput":
