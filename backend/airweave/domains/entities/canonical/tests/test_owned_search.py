@@ -602,6 +602,116 @@ async def test_partial_extraction_http_hit_original_and_nonindexed_part_gate(
     assert response.json()["extraction"] is None
 
 
+@pytest.mark.parametrize("gap", ["ocr_unavailable", "embedded_content_unprocessed"])
+async def test_gap_only_partial_hit_and_source_coverage_agree(database, indexed, http_search, gap):
+    from airweave.domains.entities.canonical.extraction_models import (
+        ExtractionCoverage,
+        ExtractionOutcome,
+    )
+    from airweave.models.projection_generation import ProjectionGeneration
+
+    fence, locator, _ = indexed
+    coverage = ExtractionCoverage(
+        parts=(
+            ExtractionOutcome(
+                part_index=0, key="/body", kind="body", outcome="indexed", gaps=(gap,)
+            ),
+        )
+    )
+    async with database() as db:
+        await db.execute(
+            update(ProjectionGeneration)
+            .where(ProjectionGeneration.id == locator.generation)
+            .values(extraction_coverage=coverage.persisted())
+        )
+        await db.commit()
+    client, vector, _, _, dense = http_search
+    vector.seed_results(SearchResults(results=[hit(fence, locator.encode())]))
+    request = {"query": "budget", "sync_ids": [str(fence.sync_id)], "mode": "keyword"}
+    response = await client.post("/sync/search", json=request)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["extraction"] == coverage.model_dump(mode="json")
+    assert coverage.status == "partial"
+    assert payload["retrieval_incomplete"]
+    assert not payload["engine_partial"] and payload["excluded_candidates"] == 0
+    counts = payload["sources"][0]
+    assert counts["partially_indexed_records"] == 1
+    assert counts["pending_records"] == counts["extraction_unknown_records"] == 0
+    assert counts["extraction_unavailable_records"] == 0
+
+    async with database() as db:
+        await db.execute(
+            update(ProjectionGeneration)
+            .where(ProjectionGeneration.id == locator.generation)
+            .values(extraction_coverage=None)
+        )
+        await db.commit()
+    unknown = (await client.post("/sync/search", json=request)).json()["sources"][0]
+    assert unknown["extraction_unknown_records"] == 1
+    assert unknown["partially_indexed_records"] == unknown["pending_records"] == 0
+    assert unknown["extraction_unavailable_records"] == 0
+
+    async with database() as db:
+        await db.execute(
+            update(Entity).where(Entity.id == locator.record_id).values(record_revision=2)
+        )
+        await db.commit()
+    pending = (await client.post("/sync/search", json=request)).json()["sources"][0]
+    assert pending["pending_records"] == 1
+    assert pending["extraction_unknown_records"] == pending["partially_indexed_records"] == 0
+    assert pending["extraction_unavailable_records"] == 0
+    dense.embed_many.assert_not_awaited()
+
+
+async def test_metadata_hit_does_not_count_as_extracted_content(database, indexed, http_search):
+    from airweave.domains.entities.canonical.extraction_models import (
+        ExtractionCoverage,
+        ExtractionOutcome,
+    )
+    from airweave.models.projection_generation import ProjectionGeneration
+
+    fence, locator, _ = indexed
+    coverage = ExtractionCoverage(
+        parts=(
+            ExtractionOutcome(part_index=0, key="metadata", kind="metadata", outcome="indexed"),
+            ExtractionOutcome(
+                part_index=1,
+                key="file",
+                kind="file",
+                outcome="unsupported",
+                reason="unsupported_format",
+            ),
+        )
+    )
+    async with database() as db:
+        await db.execute(
+            update(ProjectionGeneration)
+            .where(ProjectionGeneration.id == locator.generation)
+            .values(extraction_coverage=coverage.persisted())
+        )
+        await db.commit()
+    client, vector, _, _, dense = http_search
+    vector.seed_results(SearchResults(results=[hit(fence, locator.encode())]))
+    response = await client.post(
+        "/sync/search",
+        json={"query": "budget", "sync_ids": [str(fence.sync_id)], "mode": "keyword"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload["items"]) == 1
+    assert coverage.status == "unavailable"
+    assert payload["items"][0]["extraction"] == coverage.model_dump(mode="json")
+    assert payload["retrieval_incomplete"]
+    assert not payload["engine_partial"] and payload["excluded_candidates"] == 0
+    counts = payload["sources"][0]
+    assert counts["extraction_unavailable_records"] == 1
+    assert counts["partially_indexed_records"] == counts["pending_records"] == 0
+    assert counts["extraction_unknown_records"] == 0
+    dense.embed_many.assert_not_awaited()
+
+
 async def test_visibility_batches_exact_parts_generations_and_duplicate_chunks(database, indexed):
     from airweave.domains.search.canonical_visibility import visible_results
     from airweave.models.projection_generation import ProjectionGeneration

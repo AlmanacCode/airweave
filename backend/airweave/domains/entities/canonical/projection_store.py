@@ -5,8 +5,10 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, exists, or_, select, text, tuple_
+from sqlalchemy import and_, cast, exists, func, or_, select, text, tuple_
+from sqlalchemy.dialects.postgresql import JSONPATH
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
@@ -31,6 +33,28 @@ from airweave.models.entity import Entity
 from airweave.models.projection_generation import ProjectionGeneration
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
+
+
+def extraction_has_indexed_content() -> ColumnElement[bool]:
+    """Searchable metadata does not establish extraction of original content."""
+    return func.coalesce(
+        func.jsonb_path_exists(
+            ProjectionGeneration.extraction_coverage,
+            cast('$.parts[*] ? (@.kind != "metadata" && @.outcome == "indexed")', JSONPATH),
+        ),
+        False,
+    )
+
+
+def extraction_has_gaps() -> ColumnElement[bool]:
+    """Known content omissions remain partial even when usable text was indexed."""
+    return func.coalesce(
+        func.jsonb_path_exists(
+            ProjectionGeneration.extraction_coverage,
+            cast('$.parts[*] ? (@.kind != "metadata" && exists(@.gaps[0]))', JSONPATH),
+        ),
+        False,
+    )
 
 
 def publication_matches(locator: ProjectionLocator):

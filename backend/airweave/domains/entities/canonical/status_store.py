@@ -7,6 +7,10 @@ from sqlalchemy.dialects.postgresql import JSONPATH
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.coverage import capture_coverage
+from airweave.domains.entities.canonical.projection_store import (
+    extraction_has_gaps,
+    extraction_has_indexed_content,
+)
 from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.status_models import (
     ExtractionStatus,
@@ -62,13 +66,7 @@ async def source_status(db: AsyncSession, organization_id: UUID, sync_id: UUID) 
         & (func.jsonb_array_length(generation.documents) == 0),
         False,
     )
-    indexed = func.coalesce(
-        func.jsonb_path_exists(
-            coverage,
-            cast('$.parts[*] ? (@.kind != "metadata" && @.outcome == "indexed")', JSONPATH),
-        ),
-        False,
-    )
+    indexed = extraction_has_indexed_content()
     omitted = func.coalesce(
         func.jsonb_path_exists(
             coverage,
@@ -76,12 +74,7 @@ async def source_status(db: AsyncSession, organization_id: UUID, sync_id: UUID) 
         ),
         False,
     )
-    gaps = func.coalesce(
-        func.jsonb_path_exists(
-            coverage, cast('$.parts[*] ? (@.kind != "metadata" && exists(@.gaps[0]))', JSONPATH)
-        ),
-        False,
-    )
+    gaps = extraction_has_gaps()
     # PostgreSQL otherwise repeats the correlated current-publication check for
     # each aggregate. Materialize only narrow facts, never original JSON/text.
     facts = (
