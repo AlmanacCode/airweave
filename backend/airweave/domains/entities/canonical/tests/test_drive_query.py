@@ -122,3 +122,77 @@ async def test_http_exact_native_file_wrong_scope_and_disconnect(database, sourc
         denied = await client.get(path)
         assert denied.status_code == 404
         assert denied.json()["error"]["code"] == "source_not_found"
+
+
+@pytest.mark.parametrize("sort", ["name", "updated"])
+async def test_modified_interval_boundaries_unknowns_and_cursor_binding(database, source, sort):
+    service, fence = source
+    await bind_projection(database, fence, "google_drive")
+    await capture(
+        database,
+        service,
+        fence,
+        file("before", name="A before", updated=NOW - timedelta(microseconds=1)),
+        file("start", name="B start", updated=NOW),
+        file("inside", name="C inside", updated=NOW + timedelta(microseconds=1)),
+        file("end", name="D end", updated=NOW + timedelta(days=1)),
+        file("unknown", name="A unknown", updated=None),
+    )
+    filters = DriveFilters(sort=sort, updated_after=NOW, updated_before=NOW + timedelta(days=1))
+    page = await listing(database, fence, filters=filters, limit=1)
+    assert page.has_more
+    items = list(page.files)
+    first_cursor = page.next_cursor
+    while page.next_cursor:
+        page = await listing(database, fence, filters=filters, limit=1, cursor=page.next_cursor)
+        items.extend(page.files)
+    assert {item.native_id for item in items} == {"start", "inside"}
+    for field, value in (
+        ("updated_after", NOW - timedelta(seconds=1)),
+        ("updated_before", NOW + timedelta(days=2)),
+    ):
+        with pytest.raises(InvalidRecordCursor):
+            await listing(
+                database,
+                fence,
+                filters=filters.model_copy(update={field: value}),
+                limit=1,
+                cursor=first_cursor,
+            )
+    assert {
+        item.native_id
+        for item in (
+            await listing(
+                database, fence, filters=DriveFilters(updated_before=NOW + timedelta(days=1))
+            )
+        ).files
+    } == {"before", "start", "inside"}
+    assert {
+        item.native_id
+        for item in (await listing(database, fence, filters=DriveFilters(updated_after=NOW))).files
+    } == {"start", "inside", "end"}
+
+
+async def test_http_modified_bounds_and_invalid_intervals(database, source):
+    service, fence = source
+    await bind_projection(database, fence, "google_drive")
+    await capture(database, service, fence, file("start"), file("unknown", updated=None))
+    context = SimpleNamespace(organization=SimpleNamespace(id=fence.organization_id))
+    async with AsyncClient(
+        transport=ASGITransport(app=query_app(database, lambda: context)), base_url="http://test"
+    ) as client:
+        path = f"/sync/{fence.sync_id}/drive/files"
+        response = await client.get(
+            path,
+            params={
+                "updated_after": "2025-12-31T19:00:00-05:00",
+                "updated_before": "2026-01-02T00:00:00Z",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert [item["native_id"] for item in response.json()["files"]] == ["start"]
+        for bounds in (
+            {"updated_after": "2026-01-01"},
+            {"updated_after": "2026-01-01T00:00:00Z", "updated_before": "2026-01-01T00:00:00Z"},
+        ):
+            assert (await client.get(path, params=bounds)).status_code == 422

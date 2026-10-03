@@ -169,6 +169,8 @@ async def drive_files(
     drive: DriveID | None = None,
     name: str | None = Query(default=None, min_length=1, max_length=512),
     mime_type: str | None = Query(default=None, pattern=r"^[\w.+-]+/[\w.+-]+$"),
+    updated_after: AwareDatetime | None = None,
+    updated_before: AwareDatetime | None = None,
     sort: Literal["name", "updated"] = "name",
     limit: int = Query(default=50, ge=1, le=100),
     cursor: str | None = Query(default=None, min_length=1, max_length=16384),
@@ -177,17 +179,23 @@ async def drive_files(
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> DriveMetadataPage:
     """Enumerate current saved file metadata without projection or provider requests."""
+    try:
+        filters = DriveFilters(
+            folder=folder,
+            drive=drive,
+            name=name,
+            mime_type=mime_type,
+            sort=sort,
+            updated_after=updated_after,
+            updated_before=updated_before,
+        )
+    except ValidationError:
+        raise HTTPException(422, "Invalid retained Drive modified interval") from None
     return await CanonicalDriveQuery(service.signing_key).files(
         db,
         ctx.organization.id,
         sync_id,
-        DriveListQuery(
-            filters=DriveFilters(
-                folder=folder, drive=drive, name=name, mime_type=mime_type, sort=sort
-            ),
-            limit=limit,
-            cursor=cursor,
-        ),
+        DriveListQuery(filters=filters, limit=limit, cursor=cursor),
     )
 
 
