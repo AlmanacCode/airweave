@@ -60,8 +60,33 @@ class OwnedSearchRequest(BaseModel):
         return self
 
 
+class ExcerptRange(BaseModel):
+    """Half-open Unicode ranges in retained text's content view, excluding headers.
+
+    Select part_key from current text descriptors and require this generation.
+    A replaced publication is unavailable; this is not a historical read handle.
+    The containing match already supplies the original record and revision.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    part_key: str = Field(min_length=1, max_length=2048)
+    generation: UUID
+    view: Literal["content"] = "content"
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    chunk_start: int = Field(ge=0)
+    chunk_end: int = Field(ge=0)
+    truncated: bool
+
+    @model_validator(mode="after")
+    def ordered_range(self) -> "ExcerptRange":
+        if not self.chunk_start <= self.start <= self.end <= self.chunk_end:
+            raise ValueError("Excerpt range exceeds its original chunk")
+        return self
+
+
 class OwnedSearchMatch(BaseModel):
-    """Canonical identity plus excerpts; no native payload or generation IDs."""
+    """Canonical identity plus excerpts; no native payload."""
 
     record_id: UUID
     revision: int
@@ -72,6 +97,7 @@ class OwnedSearchMatch(BaseModel):
     native_version: NativeVersion | None = None
     title: str
     excerpts: tuple[str, ...]
+    excerpt_ranges: tuple[ExcerptRange | None, ...] | None = None
     matched_part: MatchedPart | None = None
     email_thread_id: str | None = Field(default=None, max_length=512, pattern=r"^[A-Za-z0-9_-]+$")
     observed_at: AwareDatetime
@@ -79,6 +105,18 @@ class OwnedSearchMatch(BaseModel):
     source_updated_at: AwareDatetime | None
     completeness: Literal["complete", "partial", "metadata_only"]
     extraction: ExtractionCoverage | None = None
+
+    @model_validator(mode="after")
+    def aligned_excerpt_ranges(self) -> "OwnedSearchMatch":
+        if self.excerpt_ranges is not None:
+            if len(self.excerpt_ranges) != len(self.excerpts):
+                raise ValueError("Excerpt ranges must align with every excerpt")
+            for index, location in enumerate(self.excerpt_ranges):
+                if location is not None and location.end - location.start != len(
+                    self.excerpts[index]
+                ):
+                    raise ValueError("Excerpt range must match its Unicode text length")
+        return self
 
 
 class OwnedSearchGroup(BaseModel):
@@ -162,6 +200,11 @@ class OwnedCandidate(BaseModel):
             or self.hit.revision != self.projection.revision
         ):
             raise ValueError("Candidate identity differs from projection")
+        if self.hit.excerpt_ranges is not None and any(
+            location is not None and location.generation != self.projection.generation
+            for location in self.hit.excerpt_ranges
+        ):
+            raise ValueError("Excerpt differs from its publication")
         return self
 
 

@@ -35,6 +35,7 @@ from airweave.domains.entities.canonical.source import indexed_record_types
 from airweave.domains.entities.canonical.store import content_is_available
 from airweave.domains.native_ingestion.models import NativeVersion
 from airweave.domains.search.owned_models import (
+    ExcerptRange,
     OwnedCandidate,
     OwnedCandidatesResponse,
     OwnedRanking,
@@ -436,7 +437,15 @@ class OwnedSearchService:
                 )
                 additional = (
                     *additional,
-                    exact.model_copy(update={"excerpts": exact.excerpts[:1]}),
+                    exact.model_copy(
+                        update={
+                            "excerpts": exact.excerpts[:1],
+                            "excerpt_ranges": (
+                                exact.excerpt_ranges[:1]
+                                if exact.excerpt_ranges is not None else None
+                            ),
+                        }
+                    ),
                 )
             output[index] = representative.model_copy(
                 update={
@@ -766,7 +775,7 @@ class OwnedSearchService:
             ):
                 exclusions += 1
                 continue
-            matched_part, preview = _matched_content(result, locator, coverage)
+            matched_part, preview, excerpt_range = _matched_content(result, locator, coverage)
             if not self._matches(row, request):
                 postfiltered += 1
                 continue
@@ -806,7 +815,9 @@ class OwnedSearchService:
             current = hits[row.id]
             # Present only the representative part. Ranking still uses its unchanged index text.
             if preview and matched_part == current.matched_part and not current.excerpts:
-                hits[row.id] = current.model_copy(update={"excerpts": (preview,)})
+                hits[row.id] = current.model_copy(
+                    update={"excerpts": (preview,), "excerpt_ranges": (excerpt_range,)}
+                )
         return hits, scores, matched_text, exclusions, postfiltered
 
     @staticmethod
@@ -962,22 +973,40 @@ class OwnedSearchService:
 
 
 def _matched_content(
-    result: SearchResult, locator: ProjectionLocator, coverage: ExtractionCoverage | None
-) -> tuple[MatchedPart | None, str | None]:
+    result: SearchResult,
+    locator: ProjectionLocator,
+    coverage: ExtractionCoverage | None,
+) -> tuple[MatchedPart | None, str | None, ExcerptRange | None]:
     """Current extraction and immutable payload must agree; old text is never guessed."""
     if coverage is None:
-        return None, None
+        return None, None, None
     part = next((part for part in coverage.parts if part.part_index == locator.part_index), None)
     if part is None or part.outcome != "indexed":
-        return None, None
+        return None, None, None
     matched = MatchedPart(
-        part_index=part.part_index, key=part.key, kind=part.kind, title=result.name[:512]
+        part_index=part.part_index,
+        key=part.key,
+        kind=part.kind,
+        title=result.name[:512],
     )
     raw = result.raw_source_fields.get("content_provenance")
     if raw is None:
-        return matched, None
+        return matched, None, None
     try:
         provenance = ContentProvenance.model_validate(raw)
     except ValidationError:
-        return matched, None
-    return matched, provenance.preview if provenance.part == matched else None
+        return matched, None, None
+    if provenance.part != matched:
+        return matched, None, None
+    location = None
+    if provenance.preview_start is not None:
+        location = ExcerptRange(
+            part_key=matched.key,
+            generation=locator.generation,
+            start=provenance.preview_start - provenance.content_start,
+            end=provenance.preview_end - provenance.content_start,
+            chunk_start=provenance.original_chunk_start - provenance.content_start,
+            chunk_end=provenance.original_chunk_end - provenance.content_start,
+            truncated=provenance.preview_truncated,
+        )
+    return matched, provenance.preview, location

@@ -3,6 +3,7 @@
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -131,3 +132,66 @@ def test_fallback_offsets_are_relative_to_full_source(kind):
     )
     (chunks,) = chunker._apply_safety_net_batched([[original]])
     assert [(x["start_index"], x["end_index"]) for x in chunks] == [(40, 43), (43, 46)]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_search_serializes_content_view_unicode_ranges(legacy):
+    from airweave.domains.entities.canonical.extraction_models import (
+        ExtractionCoverage,
+        ExtractionOutcome,
+    )
+    from airweave.domains.entities.canonical.projection_models import ProjectionLocator
+    from airweave.domains.search.owned import _matched_content
+    from airweave.domains.search.owned_models import OwnedSearchMatch
+
+    full = "header\n  🙂" + "界" * 2600
+    saved = provenance(full, 7).chunk_preview(full, full, 0, len(full))
+    if legacy:
+        saved = provenance(full, 7).model_copy(update={"preview": "🙂界"})
+    locator = ProjectionLocator(
+        record_id=uuid4(),
+        revision=2,
+        pipeline_version=7,
+        generation=uuid4(),
+        part_index=0,
+    )
+    coverage = ExtractionCoverage(
+        parts=(
+            ExtractionOutcome(part_index=0, key="body", kind="body", outcome="indexed"),
+        )
+    )
+    result = SimpleNamespace(
+        name="Example", raw_source_fields={"content_provenance": saved.model_dump()}
+    )
+    part, preview, location = _matched_content(result, locator, coverage)
+    match = OwnedSearchMatch(
+        record_id=locator.record_id,
+        revision=2,
+        sync_id=uuid4(),
+        source_connection_id=uuid4(),
+        provider="slack",
+        identity={"record_type": "message", "native_id": "1"},
+        title="Example",
+        excerpts=(preview,),
+        excerpt_ranges=(location,),
+        matched_part=part,
+        observed_at="2026-10-03T00:00:00Z",
+        source_created_at=None,
+        source_updated_at=None,
+        completeness="complete",
+    )
+    assert OwnedSearchMatch.model_validate_json(match.model_dump_json()) == match
+    if legacy:
+        assert match.excerpt_ranges == (None,)
+    else:
+        assert location.view == "content" and location.start == 2
+        assert location.generation == locator.generation
+        assert full[7:][location.start : location.end] == preview
+        assert location.truncated
+    with pytest.raises(ValueError, match="align with every excerpt"):
+        OwnedSearchMatch.model_validate(match.model_dump() | {"excerpt_ranges": ()})
+    if not legacy:
+        with pytest.raises(ValueError, match="Unicode text length"):
+            OwnedSearchMatch.model_validate(
+                match.model_dump() | {"excerpts": (preview + "🙂",)}
+            )
