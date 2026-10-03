@@ -129,3 +129,56 @@ The default remains `0.0.0.0` for container networking. Binding limits network
 reachability; it does not authenticate these endpoints, including `POST /drain`.
 Keep container worker ports private. API listener and API metrics bindings are
 configured separately.
+
+## Shared process capacity
+
+The checked-in manifest explicitly sets `DB_POOL_SIZE=8`,
+`DB_POOL_MAX_OVERFLOW=0`, `TEMPORAL_MAX_CONCURRENT_ACTIVITIES=4`, and
+`TEMPORAL_MAX_CONCURRENT_WORKFLOW_TASKS=8`. These are initial bounded budgets,
+not measured throughput or freshness guarantees. SQL pool capacity no longer
+comes from `SYNC_MAX_WORKERS`; that setting remains per-sync record/batch
+processing concurrency (two in this manifest), not worker replicas or whole
+pipeline concurrency.
+
+Each process can expose eight application SQL connections plus one independent
+health connection. In tenant mode the application budget splits into seven
+content connections and one control connection, with no overflow. One API plus
+one worker therefore has a configured ceiling of **18**; one API plus two worker
+replicas has **27**. Count each additional Uvicorn process, replica and rollout
+surge separately, and add migrations, operators, Temporal persistence and other
+clients to the database's total budget. Pools grow lazily: ceilings are not
+observed connection usage. Connections wait at most the existing 30-second pool
+checkout timeout; this is not a whole-operation deadline.
+
+Each worker admits at most four remote Temporal activities at once. Two worker
+replicas admit eight total, independently of the API process. Eight workflow
+**tasks** per worker bounds execution of workflow decisions, not the number of
+waiting durable workflows. The existing eight workflow pollers and sixteen
+activity pollers control long polling, not admission. A real installed-SDK test
+with those poller values admitted four blocked activities and left the fifth
+queued until a slot was released. No local activities or Nexus handlers are
+registered; those unused SDK slot kinds are not an additional processing path.
+
+Activities can perform multiple internal operations. Canonical capture uses
+ordered durable batches; preparation uses its existing projector; legacy syncs
+have their own record semaphore, provider/model limits and executor. Four
+activity slots do not establish a whole-pipeline four/eight-record bound.
+Retain provider backoff, rate limits and record bounds; measure SQL checkout
+waits, backlog and per-stage memory before increasing capacity.
+
+A remaining lifecycle gate is forced full sync job creation:
+`CreateSyncJobActivity` currently holds an activity slot and an outer SQL
+transaction while polling active jobs for up to an hour, opening another session
+for each poll. After restart enough waiting cleanup activities can occupy all
+slots needed by queued run activities. Raising the pool/slot limits cannot prove
+fair recovery. Replace that wait with a short, identity-checked admission attempt
+and Temporal retry/backoff only after job creation has a stable idempotent
+identity; broad retries today can duplicate committed jobs after lost replies.
+The configuration slice does not claim that gate is closed.
+
+Local verification: twenty-one configuration/wiring/shutdown checks passed in
+focused runs; the real
+SDK admission test passed against a disposable Temporal test server. No provider,
+model, production database, running fixture configuration or deployment changed.
+The SDK capacity knobs are documented by
+[Temporal's Python worker](https://github.com/temporalio/sdk-python/blob/main/temporalio/worker/_worker.py).

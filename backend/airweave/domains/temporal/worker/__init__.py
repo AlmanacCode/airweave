@@ -108,6 +108,8 @@ class TemporalWorker:
                 workflows=get_workflows(),
                 activities=create_activities(),
                 workflow_runner=self._get_sandbox_runner(),
+                max_concurrent_activities=self._config.max_concurrent_activities,
+                max_concurrent_workflow_tasks=self._config.max_concurrent_workflow_tasks,
                 max_concurrent_workflow_task_polls=self._config.max_concurrent_workflow_polls,
                 max_concurrent_activity_task_polls=self._config.max_concurrent_activity_polls,
                 sticky_queue_schedule_to_start_timeout=self._config.sticky_queue_schedule_to_start_timeout,

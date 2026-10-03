@@ -15,16 +15,10 @@ from sqlalchemy.ext.asyncio import (
 from airweave.core.config import settings
 from airweave.db.tenant_session import tenant_session_factory
 
-# Connection Pool Sizing Strategy (PgBouncer-aware):
-# - PgBouncer handles connection pooling to PostgreSQL (2000 client → 300 DB connections)
-# - Production: 6 worker pods × 60 connections = 360 total (120% of backend pool capacity)
-# - SQLAlchemy pool sized for per-pod concurrency, not total system capacity
-# - During batch processing, workers can hold 2-3 connections simultaneously:
-#   1. ActionResolver bulk entity hash lookup
-#   2. EntityPostgresHandler batch insert/update/delete
-#   3. Usage enforcement service flush (every 100 entities)
-# - Base pool = worker count, overflow = 2× workers for peak concurrent DB operations
-# - Example: 20 workers → 20 base + 40 overflow = 60 total connections per pod
+# Explicit per-process application capacity. Tenant mode reserves one base slot
+# for control and gives content the remaining base slots plus finite overflow.
+# The independent health engine adds one connection. Multiply by all API/worker
+# processes and rollout overlap; per-sync record workers do not size SQL pools.
 
 POOL_SIZE = settings.db_pool_size
 MAX_OVERFLOW = settings.db_pool_max_overflow
