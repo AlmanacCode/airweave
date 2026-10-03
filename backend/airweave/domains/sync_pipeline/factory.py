@@ -445,7 +445,14 @@ class SyncFactory(SyncFactoryProtocol):
             execution_config=execution_config,
         )
 
-        node_selections = await self._load_node_selections(db, source_connection_id, ctx)
+        # Owned capture scopes come from the verified persisted account intent.
+        # Legacy browse-tree selection is not an input to this authority path.
+        owned = await self._sc_repo.get_owned_source(db, source_connection, ctx)
+        node_selections = (
+            []
+            if owned is not None
+            else await self._load_node_selections(db, source_connection_id, ctx)
+        )
         if node_selections:
             logger.info(f"Loaded {len(node_selections)} node selections for targeted sync")
 
