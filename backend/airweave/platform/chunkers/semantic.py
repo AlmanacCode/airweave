@@ -1,4 +1,4 @@
-"""Semantic chunker using NeuralChunker with SentenceChunker safety net."""
+"""Semantic boundaries with Unicode-safe token limits and exact-source overlap."""
 
 from typing import Any, Dict, List, Optional
 
@@ -129,7 +129,8 @@ class SemanticChunker(BaseChunker):
 
             # Split oversized groups without cutting Unicode characters.
             self._token_chunker = UnicodeTokenChunker(
-                encoding=tokenizer.encoding, chunk_size=self.MAX_TOKENS_PER_CHUNK
+                encoding=tokenizer.encoding,
+                chunk_size=self.MAX_TOKENS_PER_CHUNK - self.OVERLAP_TOKENS,
             )
 
             logger.info(
@@ -147,7 +148,8 @@ class SemanticChunker(BaseChunker):
 
         Stage 1: SemanticChunker detects semantic boundaries (embedding similarity)
         Stage 1.5: Recount tokens with tiktoken cl100k_base (OpenAI compatibility)
-        Stage 2: Split oversized chunks within the hard token limit without breaking UTF-8.
+        Stage 2: Reserve overlap space and split oversized groups without breaking UTF-8.
+        Stage 3: Add exact preceding source context, recounting the final hard token limit.
 
         Uses run_in_thread_pool because Chonkie is synchronous (avoids blocking event loop).
 
@@ -177,6 +179,7 @@ class SemanticChunker(BaseChunker):
         final_results = await run_in_thread_pool(
             self._apply_safety_net_batched, semantic_results_with_tiktoken
         )
+        final_results = await run_in_thread_pool(self._add_overlap, texts, final_results)
 
         # Filter empty chunks and validate token limits
         for doc_chunks in final_results:
@@ -194,6 +197,36 @@ class SemanticChunker(BaseChunker):
                     )
 
         return final_results
+
+    def _add_overlap(
+        self, texts: List[str], results: List[List[Dict[str, Any]]]
+    ) -> List[List[Dict[str, Any]]]:
+        """Overlap only contiguous source slices within each independently prepared part."""
+        for text, chunks in zip(texts, results, strict=True):
+            previous_start, previous_end = 0, 0
+            for index, chunk in enumerate(chunks):
+                start, end = chunk["start_index"], chunk["end_index"]
+                if (
+                    not previous_end <= start <= end <= len(text)
+                    or text[start:end] != chunk["text"]
+                ):
+                    raise ValueError("Chunk lost its exact prepared-text offsets")
+                original_start = start
+                if index:
+                    context = self._token_chunker.tail(
+                        text[previous_start:start], self.OVERLAP_TOKENS
+                    )
+                    start -= len(context)
+                value = text[start:end]
+                count = len(self._tiktoken_tokenizer.encode(value, allowed_special="all"))
+                # Concatenated BPE token counts need not equal the sum of their parts.
+                while count > self.MAX_TOKENS_PER_CHUNK and start < original_start:
+                    start += 1
+                    value = text[start:end]
+                    count = len(self._tiktoken_tokenizer.encode(value, allowed_special="all"))
+                chunk.update(text=value, start_index=start, token_count=count)
+                previous_start, previous_end = original_start, end
+        return results
 
     def _recount_tokens_with_tiktoken(self, semantic_results: List[List[Any]]) -> List[List[Any]]:
         """Recount all chunks with tiktoken cl100k_base for OpenAI compatibility.
@@ -303,7 +336,7 @@ class SemanticChunker(BaseChunker):
 
         for doc_idx, chunks in enumerate(semantic_results):
             for chunk_idx, chunk in enumerate(chunks):
-                if chunk.token_count > self.MAX_TOKENS_PER_CHUNK:
+                if chunk.token_count > self.MAX_TOKENS_PER_CHUNK - self.OVERLAP_TOKENS:
                     pos = len(oversized_texts)
                     oversized_texts.append(chunk.text)
                     oversized_map[pos] = (doc_idx, chunk_idx)

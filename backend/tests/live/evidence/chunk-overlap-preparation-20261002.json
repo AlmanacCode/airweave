@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-02",
+  "qualification": "read-only preparation, not search or publication",
+  "source": "one real retained Wispr meeting from frozen preselected query diagnostics",
+  "changes": "Up to 128 tokens of exact original prefix overlap within 8192 tokens, confined to one source part.",
+  "upstream_review": {
+    "installed_chonkie": "1.5.5",
+    "refinery": "OverlapRefinery merge leaves offsets unchanged and token slices can split Unicode; reused existing Unicode-safe token boundary code",
+    "source": "Installed chonkie/refinery/overlap.py:200,311,345,404"
+  },
+  "prepared_parts": 3,
+  "prepared_chunks": 10,
+  "strict_source_offsets_passed": true,
+  "previously_split_normalized_phrase_present_in_one_new_chunk": true,
+  "original_and_current_publication_read_only": true,
+  "provider_calls": 0,
+  "paid_calls": 0,
+  "publication_calls": 0,
+  "real_dense_calls": 0,
+  "test_result": {
+    "passed": 37,
+    "seconds": 1.28,
+    "scopes": [
+      "short phrase across old boundary",
+      "independent sourceparts",
+      "Unicode/8192budget/no text loss",
+      "invalid upstream overlapping spans",
+      "existing strict provenance and processor regression"
+    ]
+  },
+  "limitations": [
+    "No corpus reprojected; current installed search fixture remains unchanged.",
+    "Quoted diagnostic phrase has native whitespace differences; normalized presence is preparation evidence, not a retrieval success.",
+    "Arbitrarily long phrases and hybrid relevance are not guaranteed.",
+    "Existing published generations require explicit pipeline-version advance and retained-only reprojection."
+  ],
+  "private_evidence_sha256": "74f93230a6a82ae747dc4483256ae5df0cd8be49071824b2dd997e1f7e9d3038"
+}

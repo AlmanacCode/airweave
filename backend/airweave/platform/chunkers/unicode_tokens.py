@@ -18,6 +18,25 @@ class UnicodeTokenChunker:
         """Keep document order and independent character-offset origins."""
         return [self.chunk(text) for text in texts]
 
+    def tail(self, text: str, max_tokens: int) -> str:
+        """Return an exact suffix within a token budget, never a partial UTF-8 decode."""
+        if max_tokens < 1:
+            raise ValueError("Context token budget must be positive")
+        tokens = self.encoding.encode(text, allowed_special="all")
+        raw = b"".join(self.encoding.decode_single_token_bytes(token) for token in tokens)
+        start = sum(
+            len(self.encoding.decode_single_token_bytes(token))
+            for token in tokens[: max(0, len(tokens) - max_tokens)]
+        )
+        while start < len(raw) and raw[start] & 0xC0 == 0x80:
+            start += 1
+        value = raw[start:].decode("utf-8")
+        while len(self.encoding.encode(value, allowed_special="all")) > max_tokens:
+            value = value[1:]
+        if not text.endswith(value):
+            raise ValueError("Tokenizer changed the original context")
+        return value
+
     def chunk(self, text: str) -> list[Chunk]:
         """Back up token cuts to a UTF-8 boundary, then verify the isolated token count."""
         tokens = self.encoding.encode(text, allowed_special="all")

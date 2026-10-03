@@ -478,6 +478,21 @@ verified workspace/user pair, with `external_user_id` retained for the Almanac b
 Source construction starts at the current canonical search metadata pipeline version;
 older retained trials upgrade using `plan_reprojection` followed by `project`.
 
+Prepared chunks now prepend up to 128 tokens of exact preceding source context,
+reserving space inside the 8192-token limit. Overlap stays within one prepared part;
+character offsets still address its unchanged original text. Chonkie 1.5.5's
+`OverlapRefinery` was inspected: merged context leaves start/end offsets unchanged,
+and token-mode decoding can cut Unicode. The existing Unicode-safe tokenizer owns
+the bounded suffix instead. There is no new parser, storage or index field.
+
+Existing published generations do **not** gain overlap from a code update. Use the
+existing operator to advance that sync's current pipeline version before retained-only
+reprojection; never silently replace a published generation under its old version.
+No corpus was reprojected for this change. The real Wispr boundary diagnostic and
+focused tests show source-faithful short-phrase coverage, not arbitrary-length phrase
+guarantees or improved hybrid ranking. See
+[`chunk-overlap-preparation-20261002.json`](evidence/chunk-overlap-preparation-20261002.json).
+
 The Calendar trial retained 183 visible originals (190 observations including removals)
 and projected every record. The Slack trial stopped at its record budget after 56
 requests: 460 committed originals were all projected, with capture still explicitly
