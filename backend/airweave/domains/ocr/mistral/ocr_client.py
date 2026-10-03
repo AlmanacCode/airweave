@@ -12,7 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Callable, Optional
+import time
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+if TYPE_CHECKING:
+    from mistralai.models import FileChunk as MistralFileChunk
+    from mistralai.models import OCRResponse
 
 import aiofiles
 from httpx import HTTPStatusError
@@ -127,6 +132,34 @@ class MistralOcrClient:
             logger.warning(f"[MISTRAL_OCR] {operation_name} failed after retries: {exc}")
             raise
 
+    async def _ocr_request(self, document: MistralFileChunk) -> OCRResponse:
+        """Observe one OCR retry attempt, before markdown validation.
+
+        Structured logs report SDK acknowledgments, not durable invoices or full costs.
+        SDK-internal retries and requests with no response have unknown consumption.
+        """
+        started = time.monotonic()
+        response = None
+        try:
+            response = await self._client.ocr.process_async(model=OCR_MODEL, document=document)
+            return response
+        finally:
+            usage = response.usage_info if response is not None else None
+            logger.info(
+                "Provider call completed",
+                extra={
+                    "custom_dimensions": {
+                        "provider": "mistral",
+                        "model": OCR_MODEL,
+                        "operation": "ocr",
+                        "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+                        "outcome": "acknowledged" if response is not None else "failed",
+                        "pages_processed": usage.pages_processed if usage is not None else None,
+                        "doc_size_bytes": usage.doc_size_bytes if usage is not None else None,
+                    }
+                },
+            )
+
     # ------------------------------------------------------------------
     # Single file OCR
     # ------------------------------------------------------------------
@@ -163,10 +196,7 @@ class MistralOcrClient:
             from mistralai.models import FileChunk as MistralFileChunk
 
             ocr_resp = await self._api_call(
-                lambda: self._client.ocr.process_async(
-                    model=OCR_MODEL,
-                    document=MistralFileChunk(file_id=file_resp.id),
-                ),
+                lambda: self._ocr_request(MistralFileChunk(file_id=file_resp.id)),
                 operation_name=f"ocr_{file_name}",
             )
 

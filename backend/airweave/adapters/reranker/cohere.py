@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import time
+
 import cohere
 
 from airweave.adapters.reranker.exceptions import RerankerError
 from airweave.adapters.reranker.types import RerankerResult
+from airweave.core.logging import logger
 from airweave.core.protocols.reranker import RerankerProtocol
 
 COHERE_RERANK_MODEL = "rerank-v4.0-pro"
@@ -32,6 +35,10 @@ class CohereReranker(RerankerProtocol):
     ) -> list[RerankerResult]:
         """Rerank documents using Cohere rerank API.
 
+        Structured logs describe SDK acknowledgments, not validated rankings,
+        durable invoices or full costs. SDK-internal retries are not individually
+        visible, and calls with no response have unknown consumption.
+
         Raises:
             RerankerError: If the Cohere API call fails or document limit exceeded.
         """
@@ -41,6 +48,8 @@ class CohereReranker(RerankerProtocol):
                 f"exceeds the API limit of {COHERE_MAX_DOCUMENTS}"
             )
 
+        started = time.monotonic()
+        response = None
         try:
             response = await self._client.rerank(
                 model=COHERE_RERANK_MODEL,
@@ -51,6 +60,34 @@ class CohereReranker(RerankerProtocol):
             )
         except Exception as e:
             raise RerankerError(f"Cohere rerank failed: {e}", cause=e) from e
+
+        finally:
+            units = response.meta.billed_units if response and response.meta else None
+            logger.info(
+                "Provider call completed",
+                extra={
+                    "custom_dimensions": {
+                        "provider": "cohere",
+                        "model": COHERE_RERANK_MODEL,
+                        "operation": "rerank",
+                        "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+                        "outcome": "acknowledged" if response is not None else "failed",
+                        "billed_units": units.model_dump(
+                            mode="json",
+                            include={
+                                "images",
+                                "input_tokens",
+                                "image_tokens",
+                                "output_tokens",
+                                "search_units",
+                                "classifications",
+                            },
+                        )
+                        if units is not None
+                        else None,
+                    }
+                },
+            )
 
         return [
             RerankerResult(index=r.index, relevance_score=r.relevance_score)
