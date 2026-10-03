@@ -829,6 +829,34 @@ async def test_exact_refresh_real_client_rejects_returned_message_identity():
 
 
 @pytest.mark.asyncio
+async def test_exact_refresh_not_found_raises_without_tombstone_or_media_acquisition():
+    capture = source()
+    requests = []
+
+    def response(request):
+        requests.append(request.url.path)
+        return httpx.Response(404, json={"object": "Error", "status": 404})
+
+    files = Files()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as raw:
+        capture.client = UnipileWhatsAppClient(
+            AirweaveHttpClient(raw, uuid4(), "whatsapp", feature_flag_enabled=False),
+            account_id="acc_bound",
+            api_key="synthetic-test-key",
+        )
+        with pytest.raises(SourceError):
+            await capture.acquire_message_refresh(
+                event_account_id="acc_bound",
+                event_chat_id="group@lid",
+                event_message_id="msg",
+                parent=parent(),
+                files=files,
+            )
+    assert requests == ["/v2/acc_bound/chats/group@lid/messages/msg"]
+    assert files.content is None
+
+
+@pytest.mark.asyncio
 async def test_exact_refresh_uses_identity_hint_and_retains_full_native_body_and_original_media():
     capture = source()
     native = MESSAGE | {
