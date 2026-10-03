@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from airweave.core.logging import logger
 from airweave.domains.converters.txt import TxtConverter
 from airweave.domains.entities.canonical.blob_materializer import BlobIntegrityError
+from airweave.domains.entities.canonical.content_models import ContentProvenance, MatchedPart
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_mappers import map_record
 from airweave.domains.entities.canonical.projection_models import ProjectionBinding, ProjectionWork
@@ -317,6 +318,16 @@ async def test_map_record_entrypoint_prepares_native_text_and_verified_file(tmp_
         body, document = built.representations
         assert body.kind == "native_text"
         assert body.text[body.content_start :] == record.payload["text"]
+        provenance = ContentProvenance(
+            part=MatchedPart(part_index=0, key="/text", kind="body", title="WhatsApp message"),
+            content_start=body.content_start,
+            content_end=len(body.text),
+        ).chunk_preview(body.text, body.text, 0, len(body.text))
+        assert provenance.preview == record.payload["text"]
+        assert provenance.original_chunk_start == body.content_start
+        assert provenance.original_chunk_end == len(body.text)
+        assert body.text[provenance.preview_start : provenance.preview_end] == provenance.preview
+        assert provenance.preview_truncated is False
         assert document.text[document.content_start :] == content.decode()
         assert document.kind == "extracted_text"
         local_path = Path(mapped.parts[1].entity.local_path)
