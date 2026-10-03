@@ -45,10 +45,12 @@ class PreviousCleanupWorkflow:
             )
 
 
-async def test_previous_maintenance_history_replays_without_recovery_commands():
+@pytest.mark.parametrize("failed", [False, True])
+async def test_previous_maintenance_history_replays_without_recovery_commands(failed):
     @activity.defn(name="cleanup_stuck_sync_jobs_activity")
     async def cleanup():
-        pass
+        if failed:
+            raise ApplicationError("Previous cleanup failed", non_retryable=True)
 
     @activity.defn(name="cleanup_projection_generations_activity")
     async def generations():
@@ -65,7 +67,11 @@ async def test_previous_maintenance_history_replays_without_recovery_commands():
             handle = await env.client.start_workflow(
                 PreviousCleanupWorkflow.run, id=uuid4().hex, task_queue=queue
             )
-            await handle.result()
+            if failed:
+                with pytest.raises(WorkflowFailureError):
+                    await handle.result()
+            else:
+                await handle.result()
             history = await handle.fetch_history()
         await Replayer(workflows=[CleanupStuckSyncJobsWorkflow]).replay_workflow(history)
 
@@ -73,7 +79,7 @@ async def test_previous_maintenance_history_replays_without_recovery_commands():
 async def test_recovery_walks_later_page_despite_active_source_and_cleanup_failure():
     organization = str(uuid4())
     sources = [str(UUID(int=i)) for i in range(1, 22)]
-    calls, cursors = [], []
+    calls, cursors, cleanup_calls = [], [], []
     started, release = asyncio.Event(), asyncio.Event()
 
     @activity.defn(name="project_canonical_records_activity")
@@ -100,7 +106,7 @@ async def test_recovery_walks_later_page_despite_active_source_and_cleanup_failu
 
     @activity.defn(name="cleanup_projection_generations_activity")
     async def generations():
-        pass
+        cleanup_calls.append("generations")
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         queue = "native-recovery-" + uuid4().hex
@@ -135,6 +141,7 @@ async def test_recovery_walks_later_page_despite_active_source_and_cleanup_failu
                     ).result()
             finally:
                 release.set()
+    assert cleanup_calls == ["generations"]
     assert cursors == [None, sources[19]]
     assert sorted(calls) == sorted(sources)
 

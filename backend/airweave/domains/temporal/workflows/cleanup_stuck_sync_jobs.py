@@ -6,7 +6,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
-from temporalio.exceptions import WorkflowAlreadyStartedError
+from temporalio.exceptions import ActivityError, WorkflowAlreadyStartedError
 
 with workflow.unsafe.imports_passed_through():
     from airweave.domains.temporal.activities import cleanup_stuck_sync_jobs_activity
@@ -38,11 +38,22 @@ class CleanupStuckSyncJobsWorkflow:
     async def run(self) -> None:
         """Preserve cleanup failures while independently dispatching native recovery."""
         try:
-            await workflow.execute_activity(
-                cleanup_stuck_sync_jobs_activity,  # type: ignore[arg-type]
-                start_to_close_timeout=_CLEANUP_TIMEOUT,
-                retry_policy=_CLEANUP_RETRY,
-            )
+            try:
+                await workflow.execute_activity(
+                    cleanup_stuck_sync_jobs_activity,  # type: ignore[arg-type]
+                    start_to_close_timeout=_CLEANUP_TIMEOUT,
+                    retry_policy=_CLEANUP_RETRY,
+                )
+            except ActivityError:
+                # Old failed histories never issued a GC command. Preserve replay
+                # while new runs maintain the index despite unrelated cleanup failure.
+                if workflow.patched("canonical-generation-gc-independent-v1"):
+                    await workflow.execute_activity(
+                        CleanupProjectionGenerationsActivity.run,
+                        start_to_close_timeout=_CLEANUP_TIMEOUT,
+                        retry_policy=_CLEANUP_RETRY,
+                    )
+                raise
             if workflow.patched("canonical-generation-gc-v1"):
                 await workflow.execute_activity(
                     CleanupProjectionGenerationsActivity.run,
