@@ -5,9 +5,10 @@ from uuid import UUID
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Load, selectinload
 
 from airweave import schemas
+from airweave.core.config import settings
 from airweave.core.context import BaseContext
 from airweave.core.exceptions import NotFoundException, PermissionException
 from airweave.core.logging import logger
@@ -22,6 +23,16 @@ from airweave.schemas.organization import (
     OrganizationUpdate,
     OrganizationWithRole,
 )
+
+
+def _organization_loads() -> tuple[Load, ...]:
+    """Owned auth needs feature authority, not inherited subscription data."""
+    flags = selectinload(Organization.feature_flags)
+    return (
+        (flags,)
+        if settings.owned_control_configured
+        else (flags, selectinload(Organization.billing))
+    )
 
 
 class CRUDOrganization:
@@ -58,10 +69,10 @@ class CRUDOrganization:
                 logger.warning(f"Skipping unknown feature flag in database: {ff.flag}")
         return enabled
 
-    async def _enrich_with_billing_and_period(
+    async def _enrich_organization(
         self, db: AsyncSession, org: Organization
     ) -> schemas.Organization:
-        """Enrich organization with billing info and current period.
+        """Enrich feature authority and optional non-owned subscription information.
 
         This method loads the billing relationship and current period, then returns
         a fully enriched schemas.Organization object suitable for caching.
@@ -77,6 +88,8 @@ class CRUDOrganization:
 
         # Convert to schema first (this handles feature flags via model_validator)
         org_schema = schemas.Organization.model_validate(org, from_attributes=True)
+        if settings.owned_control_configured:
+            return org_schema.model_copy(update={"billing": None})
 
         # Load billing if present (OSS installs may not have billing)
         if "billing" in org.__dict__ and org.__dict__["billing"]:
@@ -120,15 +133,14 @@ class CRUDOrganization:
             select(Organization)
             .where(Organization.auth0_org_id == auth0_org_id)
             .options(
-                selectinload(Organization.feature_flags),
-                selectinload(Organization.billing),
+                *_organization_loads(),
             )
         )
         result = await db.execute(stmt)
         db_obj = result.scalar_one_or_none()
 
         if db_obj and enrich:
-            return await self._enrich_with_billing_and_period(db, db_obj)
+            return await self._enrich_organization(db, db_obj)
 
         return db_obj
 
@@ -294,8 +306,7 @@ class CRUDOrganization:
             select(self.model)
             .where(self.model.id == id)
             .options(
-                selectinload(Organization.feature_flags),
-                selectinload(Organization.billing),
+                *_organization_loads(),
             )
         )
         result = await db.execute(query)
@@ -305,7 +316,7 @@ class CRUDOrganization:
 
         # Return enriched schema with billing and current period if requested
         if enrich:
-            return await self._enrich_with_billing_and_period(db, db_obj)
+            return await self._enrich_organization(db, db_obj)
 
         return db_obj
 

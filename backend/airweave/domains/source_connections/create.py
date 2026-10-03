@@ -24,6 +24,9 @@ from airweave.domains.connections.protocols import ConnectionRepositoryProtocol
 from airweave.domains.credentials.protocols import IntegrationCredentialServiceProtocol
 from airweave.domains.oauth.protocols import OAuthFlowServiceProtocol
 from airweave.domains.owned_provisioning.guard import require_provider_source
+from airweave.domains.owned_provisioning.models import ManagedSource
+from airweave.domains.owned_provisioning.settings import OwnedComposioSettings
+from airweave.domains.owned_provisioning.store import owned_creation_spec
 from airweave.domains.source_connections.protocols import (
     ResponseBuilderProtocol,
     SourceConnectionCreateServiceProtocol,
@@ -81,6 +84,7 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
         event_bus: EventBus,
         auth_provider_service: AuthProviderServiceProtocol,
         sync_job_repo: SyncJobRepositoryProtocol,
+        shared_composio: OwnedComposioSettings | None = None,
     ) -> None:
         """Initialize with injected repositories, validators, and orchestration services."""
         self._sc_repo = sc_repo
@@ -97,6 +101,7 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
         self._event_bus = event_bus
         self._auth_provider_service = auth_provider_service
         self._sync_job_repo = sync_job_repo
+        self._shared_composio = shared_composio
 
     async def create(
         self, db: AsyncSession, *, obj_in: SourceConnectionCreate, ctx: ApiContext
@@ -165,23 +170,51 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
         )
         return result
 
-    async def create_deferred(
+    async def create_owned_deferred(
         self,
         db: AsyncSession,
         *,
         obj_in: SourceConnectionCreate,
         ctx: ApiContext,
         uow: UnitOfWork,
+        intent_id: UUID,
     ) -> SourceConnectionSchema:
-        """Persist managed source in caller transaction without Temporal side effects."""
-        if obj_in.sync_immediately:
-            raise ValueError("Deferred creation cannot start a job before native verification")
+        """Admit shared infrastructure only from the existing persisted owned intent."""
+        spec = await owned_creation_spec(db, ctx, intent_id)
+        if self._shared_composio is None:
+            raise HTTPException(503, "Owned Composio deployment configuration is unavailable")
+        self._shared_composio.verify(spec)
+        if (
+            obj_in.authentication is not None
+            or obj_in.sync_immediately
+            or obj_in.short_name != spec.provider
+            or obj_in.readable_collection_id != spec.collection
+            or obj_in.config
+            != self._source_validation.validate_config(spec.provider, spec.source_config(), ctx)
+            or obj_in.schedule is None
+            or obj_in.schedule.cron != spec.cron
+        ):
+            raise HTTPException(409, "Owned creation disagrees with its intent")
         entry = self._get_source_entry(obj_in.short_name)
         self._validate_auth_compatibility(
-            entry.source_class_ref, entry.short_name, AuthenticationMethod.AUTH_PROVIDER
+            entry.source_class_ref,
+            entry.short_name,
+            AuthenticationMethod.AUTH_PROVIDER,
         )
-        return await self._create_with_auth_provider(
-            db, obj_in=obj_in, entry=entry, ctx=ctx, transaction=uow
+        if "composio" not in entry.supported_auth_providers:
+            raise HTTPException(400, "Source does not support owned Composio authentication")
+        config = self._auth_provider_service.validate_provider_config(
+            "composio", spec.auth_config()
+        )
+        return await self._persist_auth_provider(
+            db,
+            obj_in=obj_in,
+            entry=entry,
+            ctx=ctx,
+            transaction=uow,
+            readable_auth_provider_id=None,
+            validated_auth_provider_config=config,
+            owned_spec=spec,
         )
 
     async def reinitiate_oauth(
@@ -452,6 +485,29 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
                 obj_in.authentication.provider_config,
             )
 
+        return await self._persist_auth_provider(
+            db,
+            obj_in=obj_in,
+            entry=entry,
+            ctx=ctx,
+            transaction=transaction,
+            readable_auth_provider_id=auth_provider_conn.readable_id,
+            validated_auth_provider_config=validated_auth_provider_config,
+        )
+
+    async def _persist_auth_provider(
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: SourceConnectionCreate,
+        entry,
+        ctx: ApiContext,
+        transaction: UnitOfWork | None,
+        readable_auth_provider_id: str | None,
+        validated_auth_provider_config: dict | None,
+        owned_spec: ManagedSource | None = None,
+    ) -> SourceConnectionSchema:
+        """Reuse ordinary source/sync persistence for both explicit auth authorities."""
         validated_config = self._source_validation.validate_config(
             obj_in.short_name, obj_in.config, ctx
         )
@@ -479,7 +535,13 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
             )
             sync_result = None
             if bool(obj_in.sync_immediately) or has_schedule:
-                destination_ids = await self._sync_service.resolve_destination_ids(uow.session, ctx)
+                # Owned canonical acquisition retains originals; its independent
+                # projector owns the physical index destination.
+                destination_ids = (
+                    []
+                    if owned_spec is not None
+                    else await self._sync_service.resolve_destination_ids(uow.session, ctx)
+                )
                 sync_result = await self._sync_service.create(
                     uow.session,
                     name=obj_in.name or entry.name,
@@ -508,7 +570,7 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
                     "readable_collection_id": collection.readable_id,
                     "sync_id": sync_result.sync_id if sync_result else None,
                     "is_authenticated": True,
-                    "readable_auth_provider_id": auth_provider_conn.readable_id,
+                    "readable_auth_provider_id": readable_auth_provider_id,
                     "auth_provider_config": validated_auth_provider_config,
                 },
                 ctx=ctx,

@@ -6,7 +6,7 @@ from uuid import UUID
 from temporalio import activity
 
 from airweave.core.logging import logger
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.domains.entities.canonical.projection_models import ProjectionBatchResult
 from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
 from airweave.domains.entities.canonical.projector import CanonicalProjector
@@ -33,7 +33,7 @@ class ProjectCanonicalRecordsActivity:
         """Resolve tenant collection scope fresh; never receive OAuth credentials."""
         organization = UUID(organization_id)
         sync = UUID(sync_id)
-        async with get_db_context() as db:
+        async with get_tenant_db_context(organization) as db:
             binding = await CanonicalProjectionStore().binding(db, organization, sync)
             if binding is None:
                 return ProjectionBatchResult().model_dump(mode="json")

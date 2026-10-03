@@ -11,8 +11,9 @@ from airweave.domains.entities.canonical.requests import CompletedScope, parent_
 from airweave.domains.entities.canonical.scan_models import BeginScan
 from airweave.domains.entities.canonical.scan_store import ScanConflict
 from airweave.domains.entities.canonical.tests.helpers import capture
-from airweave.domains.entities.canonical.tests.test_cycles import finish, page
+from airweave.domains.entities.canonical.tests.test_cycles import complete, finish, page
 from airweave.domains.entities.canonical.tests.test_forest_scans import collect, item, work
+from airweave.models.capture_scan import CaptureScan
 from airweave.models.entity import Entity
 
 CONFIG = CycleConfiguration(
@@ -212,7 +213,7 @@ async def test_stale_writer_cannot_apply_observation(database, source):
         assert current.record_revision == owner.revision
 
 
-async def test_new_writer_reverifies_completed_children_without_recapture(database, source):
+async def test_new_writer_reuses_completed_children_after_fresh_root(database, source):
     service, fence = source
     cycle, message, _, request = await setup(database, source)
     async with database() as db:
@@ -248,24 +249,35 @@ async def test_new_writer_reverifies_completed_children_without_recapture(databa
         )
     root = await page(database, service, newer, root, item("channel", "C"), final=True)
     await finish(database, service, newer, root)
-    pending = await work(database, service, newer, cycle)
-    assert pending.record_type == "file"  # Completed history survives; receipt does not.
-    async with database() as db:
-        refreshed = await service.admit_scan(
-            db,
-            request.model_copy(
-                update={
-                    "fence": newer,
-                    "expected": state.version,
-                    "expected_parent_revision": pending.parent.revision,
-                    "expected_parent_epoch": pending.parent_visibility_epoch,
-                }
-            ),
-        )
-    assert refreshed.state.phase == "complete"
-    assert refreshed.state.version.sweep_id == state.version.sweep_id
-    assert refreshed.state.parent_verified_attempt_id == newer.attempt_id
     assert await work(database, service, newer, cycle) is None
+    terminal = await complete(database, service, newer)
+    assert terminal.phase == "complete"
     async with database() as db:
         current = await db.scalar(select(Entity).where(Entity.native_id == "F"))
         assert (current.record_revision, current.source_payload) == (revision, payload)
+
+
+@pytest.mark.parametrize("invalidated", ["receipt", "revision", "visibility"])
+async def test_completed_child_proof_requires_valid_owner_generation(database, source, invalidated):
+    service, fence = source
+    cycle, _, owner, request = await setup(database, source)
+    async with database() as db:
+        admitted = await service.admit_scan(db, request)
+    state = await page(database, service, fence, admitted.state, final=True)
+    state = await finish(database, service, fence, state)
+    async with database() as db:
+        if invalidated == "receipt":
+            scan = await db.scalar(
+                select(CaptureScan).where(CaptureScan.parent_record_id == owner.id)
+            )
+            scan.parent_verified_attempt_id = None
+        else:
+            parent = await db.get(Entity, owner.id)
+            if invalidated == "revision":
+                parent.record_revision += 1
+            else:
+                parent.visibility_epoch += 1
+        await db.commit()
+    assert (await work(database, service, fence, cycle)).record_type == "file"
+    with pytest.raises(CycleConflict, match="incomplete child"):
+        await complete(database, service, fence)

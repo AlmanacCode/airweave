@@ -68,6 +68,10 @@ class FakeSourceConnectionRepository(SourceConnectionRepositoryProtocol):
         self._calls.append(("get", db, id, ctx))
         return self._store.get(id)
 
+    async def get_owned_source(self, db, source, ctx):
+        """Ordinary test sources have no owned provisioning relationship."""
+        return None
+
     async def get_by_sync_id(
         self, db: AsyncSession, sync_id: UUID, ctx: ApiContext
     ) -> Optional[SourceConnection]:

@@ -82,7 +82,7 @@ async def test_excluded_originals_publish_zero_documents(database, source, kind)
         )
     processor, storage = MagicMock(), MagicMock()
     destination = MagicMock(collection_id=work.binding.collection_id)
-    projector = CanonicalProjector(store, database, processor, storage)
+    projector = CanonicalProjector(store, lambda _organization: database(), processor, storage)
     assert (await projector.project_one(work, provider, destination, MagicMock())).published
     processor.build_text.assert_not_called()
     destination.feed_prepared.assert_not_called()
@@ -129,7 +129,9 @@ async def test_unknown_empty_projection_remains_an_error(
     monkeypatch.setattr(
         "airweave.domains.entities.canonical.projection_mappers.map_record", empty_mapper
     )
-    projector = CanonicalProjector(store, database, MagicMock(), MagicMock())
+    projector = CanonicalProjector(
+        store, lambda _organization: database(), MagicMock(), MagicMock()
+    )
     with pytest.raises(ValueError, match="no required content"):
         await projector.project_one(
             work, "wispr", MagicMock(collection_id=binding.collection_id), MagicMock()

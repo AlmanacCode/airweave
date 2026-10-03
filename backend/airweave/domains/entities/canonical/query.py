@@ -13,6 +13,10 @@ from airweave.domains.entities.canonical.query_models import (
     DocumentRead,
     MailThreadCursor,
     MailThreadPage,
+    RecordBrowseCoverage,
+    RecordBrowseCursor,
+    RecordBrowsePage,
+    RecordBrowseQuery,
     RecordChangePage,
     RecordCursor,
     RecordListQuery,
@@ -20,6 +24,8 @@ from airweave.domains.entities.canonical.query_models import (
     SpreadsheetRead,
 )
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
+from airweave.domains.entities.canonical.status_models import SourceStatus
+from airweave.domains.entities.canonical.status_store import source_status
 from airweave.domains.entities.canonical.store import (
     CanonicalRecordStore,
     CanonicalStoreError,
@@ -92,7 +98,11 @@ class CanonicalQueryService:
         self.queries = queries
         self.signing_key = signing_key
 
-    def _encode(self, cursor: RecordCursor | MailThreadCursor) -> str:
+    async def status(self, db: AsyncSession, organization_id: UUID, sync_id: UUID) -> SourceStatus:
+        """Read capture and preparation facts without provider or model work."""
+        return await source_status(db, organization_id, sync_id)
+
+    def _encode(self, cursor: RecordCursor | MailThreadCursor | RecordBrowseCursor) -> str:
         return jwt.encode(cursor.model_dump(mode="json"), self.signing_key, algorithm="HS256")
 
     def _decode(self, token: str, organization_id: UUID, sync_id: UUID, mode: str) -> RecordCursor:
@@ -161,6 +171,66 @@ class CanonicalQueryService:
             raise SourceNotFound("Source is unavailable in this organization")
         return RecordPage(
             records=page, next_cursor=next_cursor, has_more=more, capture=coverage.get(sync_id)
+        )
+
+    async def browse(
+        self, db: AsyncSession, organization_id: UUID, query: RecordBrowseQuery
+    ) -> RecordBrowsePage:
+        """Traverse authorized retained metadata, including originals not yet prepared."""
+        position = None
+        if query.cursor is not None:
+            try:
+                position = RecordBrowseCursor.model_validate(
+                    jwt.decode(query.cursor, self.signing_key, algorithms=["HS256"])
+                )
+            except (JWTError, ValidationError, ValueError):
+                raise InvalidRecordCursor("Invalid browse cursor; restart traversal") from None
+            if (
+                position.organization_id != organization_id
+                or position.filters != query.filters
+                or position.limit != query.limit
+            ):
+                raise InvalidRecordCursor("Preserve the original browse scope and filters")
+        sources = await self.queries.browse_sources(db, organization_id, query.filters.sync_ids)
+        if position is not None and position.sources != sources:
+            raise InvalidRecordCursor("Browse source inventory changed; restart traversal")
+        rows = await self.queries.browse(db, organization_id, query, sources, position)
+        coverage = await capture_coverage(
+            db, organization_id, query.filters.sync_ids, include_scope_summary=False
+        )
+        current = await self.queries.browse_sources(db, organization_id, query.filters.sync_ids)
+        if current != sources:
+            raise SourceNotFound("Selected source authority changed during traversal")
+        more = len(rows) > query.limit
+        items = rows[: query.limit]
+        token = None
+        if more:
+            last = items[-1]
+            after_time = (
+                last.source_created_at
+                if query.filters.basis == "source_created"
+                else last.source_updated_at
+            )
+            token = self._encode(
+                RecordBrowseCursor(
+                    organization_id=organization_id,
+                    filters=query.filters,
+                    limit=query.limit,
+                    sources=sources,
+                    after_time=after_time,
+                    after_id=last.record_id,
+                )
+            )
+        return RecordBrowsePage(
+            items=items,
+            next_cursor=token,
+            has_more=more,
+            basis=query.filters.basis,
+            order=query.filters.order,
+            sources=tuple(
+                RecordBrowseCoverage(sync_id=s.sync_id, capture=coverage.get(s.sync_id))
+                for s in sources
+            ),
         )
 
     async def changes(

@@ -286,6 +286,8 @@ async def database(request):
             await connection.run_sync(migrate, "0014_retained_gmail_query.py")
             await connection.run_sync(migrate, "0015_retained_wispr_meetings.py")
             await connection.run_sync(migrate, "0016_owned_personal_tenants.py")
+            await connection.run_sync(migrate, "0019_record_observation_times.py")
+            await connection.run_sync(migrate, "0021_preparation_recipe.py")
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()
@@ -312,3 +314,11 @@ async def source(database):
             db, organization_id, sync_id, job_id, attempt_id=uuid4(), attempt_number=1
         )
     return service, fence
+
+
+@pytest.fixture
+async def worker_discovery(database):
+    """Install real worker ID capabilities only in this disposable schema."""
+    async with database.kw["bind"].begin() as db:
+        await db.run_sync(migrate, "0017_owned_tenant_rls.py")
+        await db.run_sync(migrate, "0018_owned_worker_discovery.py")

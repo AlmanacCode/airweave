@@ -15,6 +15,7 @@ from airweave.domains.collections.repository import CollectionRepository
 from airweave.domains.connections.repository import ConnectionRepository
 from airweave.domains.owned_provisioning.models import EnsureSource, ManagedSource, native_principal
 from airweave.domains.owned_provisioning.service import OwnedProvisioningService
+from airweave.domains.owned_provisioning.settings import OwnedComposioSettings
 from airweave.domains.owned_provisioning.store import ProvisioningStore
 from airweave.domains.source_connections.repository import SourceConnectionRepository
 from airweave.domains.source_connections.tests.test_create import _ctx, _entry, _service
@@ -34,7 +35,11 @@ async def setup(database):
     ctx.auth_method = AuthMethod.API_KEY
     metadata_id = uuid4()
     async with database() as db:
-        db.add(Organization(id=ctx.organization.id, name="Synthetic provisioning"))
+        db.add(
+            Organization(
+                id=ctx.organization.id, name="Synthetic provisioning", owned_owner_user_id="owner"
+            )
+        )
         db.add(
             VectorDbDeploymentMetadata(
                 id=metadata_id,
@@ -50,15 +55,6 @@ async def setup(database):
                 readable_id="owned",
                 organization_id=ctx.organization.id,
                 vector_db_deployment_metadata_id=metadata_id,
-            )
-        )
-        db.add(
-            Connection(
-                name="Composio",
-                readable_id="composio",
-                short_name="composio",
-                organization_id=ctx.organization.id,
-                integration_type=IntegrationType.AUTH_PROVIDER,
             )
         )
         await db.commit()
@@ -77,7 +73,26 @@ async def setup(database):
     )
     entry = _entry()
     entry.short_name = "gmail"
+    shared = OwnedComposioSettings(
+        project_key="project",
+        api_key="synthetic-project-key",
+        auth_config_ids={
+            "gmail": "ac_test",
+            "google_drive": "ac_test",
+            "google_calendar": "ac_test",
+            "slack": "ac_test",
+            "wispr": "ac_wispr",
+            "outlook_mail": "ac_test",
+            "outlook_calendar": "ac_test",
+            "stripe": "ac_test",
+            "linear": "ac_test",
+            "attio": "ac_test",
+            "github": "ac_test",
+            "notion": "ac_test",
+        },
+    )
     creator = _service(entry)
+    creator._shared_composio = shared
     creator._sc_repo = SourceConnectionRepository(creator._source_registry)
     creator._collection_repo = CollectionRepository(creator._source_registry, creator._sc_repo)
     creator._connection_repo = ConnectionRepository()
@@ -95,7 +110,7 @@ async def setup(database):
     )
     service = OwnedProvisioningService(
         ProvisioningStore(
-            creator, SimpleNamespace(validate_config=Mock(side_effect=lambda p, c, ctx: c))
+            creator, SimpleNamespace(validate_config=Mock(side_effect=lambda p, c, ctx: c)), shared
         ),
         lifecycle,
         jobs,
@@ -110,7 +125,7 @@ async def setup(database):
             provider="gmail",
             expected_identity="owner@example.test",
             collection="owned",
-            auth_provider="composio",
+            project_key="project",
             connected_account_id="ca_first",
             auth_config_id="ac_test",
             user_id="owner",
@@ -244,6 +259,11 @@ async def test_rotation_timeout_retains_cleanup_and_original_source(database, se
         )
         assert row.cancellation_job_ids == [str(original_job)]
         assert row.generation == 2 and row.observed_generation == 1
+        from airweave.domains.entities.canonical.read_authority import source_is_readable
+
+        # Acquisition generation advanced, but the original acknowledged scope
+        # remains readable through a failed/uncertain remote acknowledgement.
+        assert await db.scalar(select(source_is_readable(ctx.organization.id, first.sync_id)))
         assert (
             row.sync_id == first.sync_id and row.source_connection_id == first.source_connection_id
         )
@@ -288,7 +308,9 @@ async def test_http_boundary_and_legacy_edit_cannot_bypass_generation(database, 
             yield db
 
     app.dependency_overrides[get_db] = session
+    app.dependency_overrides[deps.get_tenant_db] = session
     app.dependency_overrides[deps.get_context] = lambda: ctx
+    app.dependency_overrides[deps.get_owned_context] = lambda: ctx
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(
         owned_provisioning=service
     )
@@ -695,7 +717,7 @@ def test_stripe_provisioning_requires_explicit_typed_mode_and_version(config):
             provider="stripe",
             expected_identity="acct_selected",
             collection="owned",
-            auth_provider="composio",
+            project_key="project",
             connected_account_id="ca_selected",
             auth_config_id="ac_selected",
             user_id="owner",
@@ -816,7 +838,7 @@ def test_workspace_provisioning_rejects_invalid_intent(provider, identity, confi
             expected_identity=identity,
             config=config,
             collection="owned",
-            auth_provider="composio",
+            project_key="project",
             connected_account_id="ca_test",
             auth_config_id="ac_test",
             user_id="owner",
@@ -934,7 +956,7 @@ def test_github_provisioning_rejects_invalid_principal_or_missing_selection(iden
             expected_identity=identity,
             config=config,
             collection="owned",
-            auth_provider="composio",
+            project_key="project",
             connected_account_id="ca_test",
             auth_config_id="ac_test",
             user_id="owner",
@@ -1015,7 +1037,7 @@ def test_notion_provisioning_requires_native_uuid_pair(workspace, bot):
             expected_identity=workspace,
             expected_user_identity=bot,
             collection="owned",
-            auth_provider="composio",
+            project_key="project",
             connected_account_id="ca_test",
             auth_config_id="ac_test",
             user_id="owner",
@@ -1071,7 +1093,7 @@ async def test_wispr_broker_assurance_initial_retry_stop_and_no_inplace_grant(da
     creator = service.store.create
     creator._source_registry.get.return_value.short_name = "wispr"
     proof = BrokerConnection(
-        project_key="primary",
+        project_key="project",
         user_id="owner",
         connected_account_id="ca_initial",
         auth_config_id="ac_wispr",
@@ -1083,7 +1105,7 @@ async def test_wispr_broker_assurance_initial_retry_stop_and_no_inplace_grant(da
         auth_config_id=proof.auth_config_id,
         user_id=proof.user_id,
         collection="owned",
-        auth_provider="composio",
+        project_key="project",
         cron="0 * * * *",
         config={"assurance": {"kind": "broker_connection", "project_key": "wrong"}},
     )
@@ -1101,7 +1123,7 @@ async def test_wispr_broker_assurance_initial_retry_stop_and_no_inplace_grant(da
             "account_id": "ca_initial",
             "user_id": "owner",
             "auth_config_id": "ac_wispr",
-            "project_key": "primary",
+            "project_key": "project",
         }
     async with database() as db:
         assert await service.ensure(db, ctx, account, request) == first
@@ -1143,7 +1165,7 @@ def test_wispr_provisioning_cannot_fabricate_native_or_mismatch_broker(changes):
     from airweave.domains.auth_provider.assurance import BrokerConnection
 
     proof = BrokerConnection(
-        project_key="primary",
+        project_key="project",
         user_id="owner",
         connected_account_id="ca_initial",
         auth_config_id="ac_wispr",
@@ -1155,8 +1177,31 @@ def test_wispr_provisioning_cannot_fabricate_native_or_mismatch_broker(changes):
         "auth_config_id": proof.auth_config_id,
         "user_id": proof.user_id,
         "collection": "owned",
-        "auth_provider": "composio",
+        "project_key": "project",
         "cron": "0 * * * *",
     }
     with pytest.raises(ValueError):
         ManagedSource.model_validate({**data, **changes})
+
+
+async def test_changed_scope_prepare_withdraws_old_read_authority(database, setup):
+    from airweave.domains.entities.canonical.read_authority import source_is_readable
+
+    ctx, service, request, account, *_ = setup
+    async with database() as db:
+        first = await service.ensure(db, ctx, account, request)
+    narrowed = request.model_copy(
+        update={
+            "generation": 2,
+            "source": request.source.model_copy(update={"config": {"query": "is:unread"}}),
+        }
+    )
+    # Commit desired scope without executing provider validation or scheduling.
+    async with database() as db:
+        await service.store.ensure(db, ctx, account, narrowed)
+    async with database() as db:
+        assert not await db.scalar(select(source_is_readable(ctx.organization.id, first.sync_id)))
+        row = await db.scalar(
+            select(OwnedProvisioning).where(OwnedProvisioning.account_id == account)
+        )
+        assert row.generation == 2 and row.observed_generation == 1

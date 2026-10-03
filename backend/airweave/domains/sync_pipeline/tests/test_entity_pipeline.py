@@ -73,7 +73,7 @@ async def test_identify_orphans_uses_entity_repo():
     sync_context.sync = MagicMock()
     sync_context.sync.id = sync_id
 
-    with patch("airweave.db.session.get_db_context") as mock_db_ctx:
+    with patch("airweave.db.session.get_tenant_db_context") as mock_db_ctx:
         mock_db = AsyncMock()
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -109,7 +109,7 @@ async def test_identify_orphans_empty_when_all_encountered():
     sync_context.sync = MagicMock()
     sync_context.sync.id = uuid4()
 
-    with patch("airweave.db.session.get_db_context") as mock_db_ctx:
+    with patch("airweave.db.session.get_tenant_db_context") as mock_db_ctx:
         mock_db = AsyncMock()
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)

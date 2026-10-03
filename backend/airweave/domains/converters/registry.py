@@ -9,6 +9,7 @@ from airweave.domains.converters.code import CodeConverter
 from airweave.domains.converters.doc import DocConverter
 from airweave.domains.converters.docx import DocxConverter
 from airweave.domains.converters.html import HtmlConverter
+from airweave.domains.converters.package_limits import PackageTextLimits
 from airweave.domains.converters.pdf import PdfConverter
 from airweave.domains.converters.pptx import PptxConverter
 from airweave.domains.converters.protocols import ConverterRegistryProtocol
@@ -16,6 +17,7 @@ from airweave.domains.converters.strict_text import StrictTextConverter
 from airweave.domains.converters.txt import TxtConverter
 from airweave.domains.converters.web import WebConverter
 from airweave.domains.converters.xlsx import XlsxConverter
+from airweave.domains.converters.xlsx_limits import XlsxLimits
 from airweave.domains.ocr.protocols import OcrProvider
 
 
@@ -29,12 +31,14 @@ class ConverterRegistry(ConverterRegistryProtocol):
         """Build all converter instances and the extension mapping."""
         pdf = PdfConverter(ocr_provider=ocr_provider)
         doc = DocConverter(ocr_provider=ocr_provider)
-        docx = DocxConverter(ocr_provider=ocr_provider)
-        pptx = PptxConverter(ocr_provider=ocr_provider)
+        self.office_limits = PackageTextLimits()
+        docx = DocxConverter(ocr_provider=ocr_provider, limits=self.office_limits)
+        pptx = PptxConverter(ocr_provider=ocr_provider, limits=self.office_limits)
         html = HtmlConverter()
         txt = TxtConverter()
         strict_text = StrictTextConverter()
         xlsx = XlsxConverter()
+        self.xlsx_limits: XlsxLimits = xlsx.limits
         code = CodeConverter()
         self._web = WebConverter()
 
@@ -92,6 +96,10 @@ class ConverterRegistry(ConverterRegistryProtocol):
                     ".png": ocr_adapter,
                 }
             )
+
+    def supported_extensions(self) -> tuple[str, ...]:
+        """Report actual composed capability, including optional image conversion."""
+        return tuple(sorted(self._extension_map))
 
     def for_extension(self, ext: str) -> Optional[BaseTextConverter]:
         """Return the converter for a given file extension, or None."""

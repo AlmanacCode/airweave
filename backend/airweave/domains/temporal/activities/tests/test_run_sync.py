@@ -31,7 +31,7 @@ MODULE = "airweave.domains.temporal.activities.run_sync"
 
 
 @asynccontextmanager
-async def _fake_db():
+async def _fake_db(_organization):
     yield AsyncMock()
 
 
@@ -249,7 +249,7 @@ async def test_run_sync_happy_path():
     )
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         patch(f"{MODULE}.worker_metrics") as mock_metrics,
         patch.object(activity, "_execute_with_heartbeat", new_callable=AsyncMock),
     ):
@@ -281,7 +281,7 @@ async def test_resolve_from_db_sync_not_found():
 
     ctx = BaseContext(organization=_make_org())
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         pytest.raises(ValueError, match="not found"),
     ):
         await activity._resolve_from_db(
@@ -303,7 +303,7 @@ async def test_resolve_from_db_collection_not_found():
 
     ctx = BaseContext(organization=_make_org())
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         pytest.raises(ValueError, match="Collection .* not found"),
     ):
         await activity._resolve_from_db(
@@ -332,7 +332,7 @@ async def test_run_sync_orphaned_sync_error():
     sync_job = _make_sync_job()
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         pytest.raises(ApplicationError) as exc_info,
     ):
         await activity._run_sync(
@@ -363,7 +363,7 @@ async def test_run_sync_non_orphan_not_found_error_propagates():
     ctx = BaseContext(organization=_make_org())
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         pytest.raises(NotFoundException, match="Some other not found"),
     ):
         await activity._run_sync(
@@ -394,7 +394,7 @@ async def test_load_execution_config_with_config():
     ctx = BaseContext(organization=_make_org())
     sync_job = _make_sync_job()
 
-    with patch(f"{MODULE}.get_db_context", _fake_db):
+    with patch(f"{MODULE}.get_tenant_db_context", _fake_db):
         result = await activity._load_execution_config(sync_job, ctx)
 
     assert result is not None
@@ -413,7 +413,7 @@ async def test_load_execution_config_failure_returns_none():
     sync_job = _make_sync_job()
 
     with (
-        patch(f"{MODULE}.get_db_context", side_effect=RuntimeError("db error")),
+        patch(f"{MODULE}.get_tenant_db_context", side_effect=RuntimeError("db error")),
     ):
         result = await activity._load_execution_config(sync_job, ctx)
 
@@ -434,7 +434,7 @@ async def test_load_execution_config_no_model():
     ctx = BaseContext(organization=_make_org())
     sync_job = _make_sync_job()
 
-    with patch(f"{MODULE}.get_db_context", _fake_db):
+    with patch(f"{MODULE}.get_tenant_db_context", _fake_db):
         result = await activity._load_execution_config(sync_job, ctx)
 
     assert result is None

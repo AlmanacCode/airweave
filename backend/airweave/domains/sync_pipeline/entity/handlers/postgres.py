@@ -11,7 +11,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave import schemas
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.domains.entities.protocols import EntityRepositoryProtocol
 from airweave.domains.sync_pipeline.entity.actions import (
     EntityActionBatch,
@@ -64,7 +64,7 @@ class EntityPostgresHandler(EntityActionHandler):
         """Handle inserts - create entity records."""
         if not actions:
             return
-        async with get_db_context() as db:
+        async with get_tenant_db_context(sync_context.organization_id) as db:
             await self._do_inserts(actions, sync_context, db)
             await db.commit()
         sync_context.logger.debug(f"[EntityPostgres] Inserted {len(actions)} entities")
@@ -78,7 +78,7 @@ class EntityPostgresHandler(EntityActionHandler):
         """Handle updates - update entity hashes."""
         if not actions:
             return
-        async with get_db_context() as db:
+        async with get_tenant_db_context(sync_context.organization_id) as db:
             existing_map = await self._fetch_existing_map(actions, sync_context, db)
             await self._do_updates(actions, existing_map, sync_context, db)
             await db.commit()
@@ -92,7 +92,7 @@ class EntityPostgresHandler(EntityActionHandler):
         """Handle deletes - remove entity records."""
         if not actions:
             return
-        async with get_db_context() as db:
+        async with get_tenant_db_context(sync_context.organization_id) as db:
             existing_map = await self._fetch_existing_map(actions, sync_context, db)
             await self._do_deletes(actions, existing_map, sync_context, db)
             await db.commit()
@@ -141,7 +141,7 @@ class EntityPostgresHandler(EntityActionHandler):
         sync_context: "SyncContext",
     ) -> None:
         """Execute INSERT, UPDATE, DELETE in single transaction."""
-        async with get_db_context() as db:
+        async with get_tenant_db_context(sync_context.organization_id) as db:
             if batch.inserts:
                 await self._do_inserts(batch.inserts, sync_context, db)
             if batch.updates:
@@ -248,7 +248,7 @@ class EntityPostgresHandler(EntityActionHandler):
         """Delete orphaned entity records."""
         sync_context.logger.info(f"[EntityPostgres] Cleaning {len(orphan_entity_ids)} orphans")
 
-        async with get_db_context() as db:
+        async with get_tenant_db_context(sync_context.organization_id) as db:
             entity_map = await self._entity_repo.bulk_get_by_entity_and_sync(
                 db=db,
                 entity_ids=orphan_entity_ids,

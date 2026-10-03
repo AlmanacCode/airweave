@@ -7,11 +7,10 @@ from fastapi import Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api import deps
-from airweave.api.backend_actor import backend_actor
+from airweave.api.backend_actor import backend_owned_actor
 from airweave.api.context import ApiContext
 from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
-from airweave.db.session import get_db
 from airweave.domains.native_ingestion.errors import NativeAdmissionError
 from airweave.domains.native_ingestion.publication_models import (
     NativeInventoryPage,
@@ -29,8 +28,8 @@ router = TrailingSlashRouter()
 @router.put("", response_model=NativeSource)
 async def ensure_native_source(
     request: EnsureNativeSource,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeSource:
     """Ensure one immutable owner/dataset binding in the authenticated organization."""
@@ -40,8 +39,8 @@ async def ensure_native_source(
 @router.get("/{source_id}", response_model=NativeSource)
 async def read_native_source(
     source_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeSource:
     """Read the existing binding without starting synchronization."""
@@ -52,8 +51,8 @@ async def read_native_source(
 async def read_native_publication(
     source_id: UUID,
     owner_id: Annotated[str, Query(min_length=1)],
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativePublication:
     """Read current writer intent and terminal ACK under an explicit owner binding."""
@@ -72,8 +71,8 @@ async def list_native_inventory(
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
     after: UUID | None = None,
     roots_only: bool = False,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeInventoryPage:
     """Read bounded retained identities/access; never infer upstream absence from this page."""
@@ -95,8 +94,8 @@ async def list_native_inventory(
 async def withdraw_native_source(
     source_id: UUID,
     request: WithdrawNativeSource,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeSource:
     """Attest explicit owner loss without scanning or rewriting retained originals."""

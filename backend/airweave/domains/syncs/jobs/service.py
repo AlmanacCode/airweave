@@ -12,7 +12,7 @@ from airweave.api.context import ApiContext
 from airweave.core.datetime_utils import utc_now_naive
 from airweave.core.logging import logger
 from airweave.core.shared_models import SourceConnectionErrorCategory, SyncJobStatus
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.domains.sync_pipeline.pipeline.entity_tracker import SyncStats
 from airweave.domains.syncs.jobs.protocols import SyncJobRepositoryProtocol, SyncJobServiceProtocol
 from airweave.domains.syncs.jobs.types import StatsUpdate, TimestampUpdate
@@ -79,7 +79,7 @@ class SyncJobService(SyncJobServiceProtocol):
         may not carry a usable session.
         """
         try:
-            async with get_db_context() as db:
+            async with get_tenant_db_context(ctx.organization.id) as db:
                 db_sync_job = await self._sync_job_repo.get(db=db, id=sync_job_id, ctx=ctx)
                 if not db_sync_job:
                     logger.error(f"Sync job {sync_job_id} not found")

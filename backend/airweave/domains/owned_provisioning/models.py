@@ -43,7 +43,7 @@ class ManagedSource(BaseModel):
     assurance: AccountAssurance | None = None
     expected_user_identity: str | None = Field(default=None, min_length=1, max_length=512)
     collection: str = Field(min_length=1, max_length=255)
-    auth_provider: str = Field(min_length=1, max_length=255)
+    project_key: str = Field(min_length=1, max_length=255)
     connected_account_id: str = Field(min_length=1, max_length=255)
     auth_config_id: str = Field(min_length=1, max_length=255)
     user_id: str = Field(min_length=1, max_length=255)
@@ -53,10 +53,13 @@ class ManagedSource(BaseModel):
     @model_validator(mode="after")
     def native_principal(self):
         """Workspace-scoped grants retain the native member or bot, not broker user_id."""
+        if {"node_selection", "node_selections"} & self.config.keys():
+            raise ValueError("Owned sources use their persisted scope, not node selection")
         if self.provider == "wispr":
             if not isinstance(self.assurance, BrokerConnection) or (
                 self.expected_identity is not None
                 or self.expected_user_identity is not None
+                or self.assurance.project_key != self.project_key
                 or self.assurance.user_id != self.user_id
                 or self.assurance.connected_account_id != self.connected_account_id
                 or self.assurance.auth_config_id != self.auth_config_id
@@ -184,9 +187,8 @@ class ManagedSource(BaseModel):
             "account_id": self.connected_account_id,
             "auth_config_id": self.auth_config_id,
             "user_id": self.user_id,
+            "project_key": self.project_key,
         }
-        if self.provider == "wispr":
-            result["project_key"] = self.assurance.project_key
         return result
 
 

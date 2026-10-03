@@ -150,7 +150,10 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
 
     from airweave.domains.sync_pipeline.pipeline.text_models import BuiltText, BuiltTextBatch
 
-    async def build_text(entities, context, runtime, *, native_bodies=None):
+    async def build_text(
+        entities, context, runtime, *, native_bodies=None, strict_conversion=False
+    ):
+        assert strict_conversion
         for entity in entities:
             entity.textual_representation = "Synthetic complete text"
         return BuiltTextBatch(
@@ -189,7 +192,9 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
 
     destination.feed_prepared = AsyncMock(side_effect=feed_prepared)
     storage = MagicMock(write_file=AsyncMock())
-    projector = CanonicalProjector(CanonicalProjectionStore(), database, processor, storage)
+    projector = CanonicalProjector(
+        CanonicalProjectionStore(), lambda _organization: database(), processor, storage
+    )
     assert (await projector.project_one(work, "slack", destination, MagicMock())).published
     destination.feed_prepared.assert_awaited_once()
     assert not await pending(database, fence)

@@ -33,7 +33,7 @@ def create_activities() -> list:
     if container is None:
         raise RuntimeError("Container not initialized — cannot wire activities")
 
-    from airweave.db.session import get_db_context
+    from airweave.db.session import get_tenant_db_context
     from airweave.domains.entities.canonical.projection_store import CanonicalProjectionStore
     from airweave.domains.entities.canonical.projector import CanonicalProjector
     from airweave.domains.sync_pipeline.processors.chunk_embed import ChunkEmbedProcessor
@@ -69,13 +69,14 @@ def create_activities() -> list:
         ProjectCanonicalRecordsActivity(
             projector=CanonicalProjector(
                 CanonicalProjectionStore(),
-                get_db_context,
+                get_tenant_db_context,
                 ChunkEmbedProcessor(
                     container.converter_registry,
                     container.dense_embedder,
                     container.sparse_embedder,
                 ),
                 container.storage_backend,
+                recipe=container.preparation_recipe,
             ),
             source_registry=container.source_registry,
         ).run,
@@ -99,7 +100,6 @@ def create_activities() -> list:
         CleanupStuckSyncJobsActivity(
             temporal_workflow_service=temporal_workflow_service,
             state_machine=state_machine,
-            sync_job_repo=sync_job_repo,
             entity_repo=entity_repo,
             org_repo=crud.organization,
         ).run,

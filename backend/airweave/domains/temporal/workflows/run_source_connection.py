@@ -45,6 +45,7 @@ with workflow.unsafe.imports_passed_through():
 
 _CREATE_JOB_TIMEOUT = timedelta(seconds=30)
 _CREATE_JOB_FORCE_TIMEOUT = timedelta(hours=1, minutes=5)
+_CREATE_JOB_RETRY_TIMEOUT = timedelta(minutes=2)
 _CREATE_JOB_HEARTBEAT_TIMEOUT = timedelta(minutes=1)
 
 _SYNC_TIMEOUT = timedelta(days=7)
@@ -151,18 +152,40 @@ class RunSourceConnectionWorkflow:
         if sync_job_dict is not None:
             return sync_job_dict
 
+        fair_admission = workflow.patched("bounded-sync-job-admission-v1")
         try:
-            timeout = _CREATE_JOB_FORCE_TIMEOUT if force_full_sync else _CREATE_JOB_TIMEOUT
-            heartbeat = _CREATE_JOB_HEARTBEAT_TIMEOUT if force_full_sync else None
-
             result: CreateSyncJobResult = await workflow.execute_activity(
                 create_sync_job_activity,
                 args=[sync_id, ctx_dict, force_full_sync],
-                start_to_close_timeout=timeout,
-                heartbeat_timeout=heartbeat,
-                retry_policy=_NO_RETRY,
+                start_to_close_timeout=(
+                    _CREATE_JOB_TIMEOUT
+                    if fair_admission or not force_full_sync
+                    else _CREATE_JOB_FORCE_TIMEOUT
+                ),
+                schedule_to_close_timeout=(
+                    (_CREATE_JOB_FORCE_TIMEOUT if force_full_sync else _CREATE_JOB_RETRY_TIMEOUT)
+                    if fair_admission
+                    else None
+                ),
+                heartbeat_timeout=(
+                    _CREATE_JOB_HEARTBEAT_TIMEOUT
+                    if force_full_sync and not fair_admission
+                    else None
+                ),
+                retry_policy=(
+                    RetryPolicy(
+                        initial_interval=timedelta(seconds=30),
+                        backoff_coefficient=1,
+                        maximum_interval=timedelta(seconds=30),
+                        maximum_attempts=0 if force_full_sync else 3,
+                    )
+                    if fair_admission
+                    else _NO_RETRY
+                ),
             )
         except Exception as e:
+            if fair_admission:
+                raise
             workflow.logger.warning(f"Skipping scheduled run for sync {sync_id}: {e}")
             return None
 

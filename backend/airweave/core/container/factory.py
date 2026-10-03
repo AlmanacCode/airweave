@@ -48,6 +48,7 @@ from airweave.adapters.webhooks.endpoint_verifier import HttpEndpointVerifier
 from airweave.adapters.webhooks.svix import SvixAdapter
 from airweave.core.config import Settings
 from airweave.core.container.container import Container
+from airweave.core.container.preparation import preparation_recipe
 from airweave.core.health.service import HealthService
 from airweave.core.logging import logger
 from airweave.core.metrics_service import PrometheusMetricsService
@@ -57,7 +58,7 @@ from airweave.core.protocols.identity import IdentityProvider
 from airweave.core.protocols.payment import PaymentGatewayProtocol
 from airweave.core.protocols.webhooks import WebhookPublisher
 from airweave.core.redis_client import redis_client
-from airweave.db.session import health_check_engine
+from airweave.db.session import get_tenant_engine, health_check_engine
 from airweave.domains.access_control.broker import AccessBroker
 from airweave.domains.access_control.repository import AccessControlMembershipRepository
 from airweave.domains.arf.service import ArfService
@@ -85,6 +86,11 @@ from airweave.domains.embedders.registry import DenseEmbedderRegistry, SparseEmb
 from airweave.domains.embedders.sparse.fastembed import (
     FastEmbedSparseEmbedder as DomainFastEmbedSparseEmbedder,
 )
+from airweave.domains.entities.canonical.preparation_recipe import (
+    LocalOcrLimits,
+    ModelIdentity,
+    OcrPolicy,
+)
 from airweave.domains.entities.canonical.store import CanonicalRecordStore
 from airweave.domains.entities.entity_count_repository import EntityCountRepository
 from airweave.domains.entities.entity_repository import EntityRepository
@@ -101,11 +107,12 @@ from airweave.domains.oauth.repository import (
     OAuthInitSessionRepository,
     OAuthRedirectSessionRepository,
 )
+from airweave.domains.ocr import local_worker
 from airweave.domains.ocr.docling import DoclingOcrAdapter
 from airweave.domains.ocr.fallback import FallbackOcrProvider
 from airweave.domains.ocr.local import LocalOcrProvider
 from airweave.domains.ocr.mistral.converter import MistralOCR
-from airweave.domains.ocr.protocols import OcrProvider
+from airweave.domains.ocr.mistral.ocr_client import OCR_MODEL
 from airweave.domains.organizations.protocols import UserOrganizationRepositoryProtocol
 from airweave.domains.organizations.repository import OrganizationRepository as OrgRepo
 from airweave.domains.organizations.repository import UserOrganizationRepository
@@ -177,6 +184,8 @@ def create_container(settings: Settings) -> Container:
 
         container = create_container(settings)
     """
+    if settings.owned_control_configured and settings.TENANT_DATABASE_URI is None:
+        raise RuntimeError("Owned product service requires explicit TENANT_DATABASE_URI")
     # -----------------------------------------------------------------
     # Webhooks (Svix adapter)
     # SvixAdapter implements both WebhookPublisher and WebhookAdmin
@@ -365,6 +374,16 @@ def create_container(settings: Settings) -> Container:
     acl_membership_repo = AccessControlMembershipRepository()
     access_broker = AccessBroker(acl_repo=acl_membership_repo)
     converter_registry = ConverterRegistry(ocr_provider=ocr_provider)
+    recipe = preparation_recipe(
+        artifact_sha256=settings.PREPARATION_ARTIFACT_SHA256,
+        converter_extensions=converter_registry.supported_extensions(),
+        xlsx_limits=converter_registry.xlsx_limits,
+        office_limits=converter_registry.office_limits,
+        configured_ocr=ocr_provider.configured_policy if ocr_provider is not None else (),
+        dense=dense_embedder_registry.get(DENSE_EMBEDDER),
+        sparse=sparse_embedder_registry.get(SPARSE_EMBEDDER),
+        dimensions=EMBEDDING_DIMENSIONS,
+    )
     chunk_embed_processor = ChunkEmbedProcessor(
         converter_registry=converter_registry,
         dense_embedder=dense_embedder,
@@ -459,6 +478,7 @@ def create_container(settings: Settings) -> Container:
         event_bus=event_bus,
         auth_provider_service=auth_provider_service,
         sync_job_repo=source_deps["sync_job_repo"],
+        shared_composio=settings.OWNED_COMPOSIO,
     )
     source_connection_service = SourceConnectionService(
         sc_repo=source_deps["sc_repo"],
@@ -615,6 +635,7 @@ def create_container(settings: Settings) -> Container:
         access_broker=access_broker,
         converter_registry=converter_registry,
         temporal_workflow_service=sync_deps["temporal_workflow_service"],
+        preparation_recipe=recipe,
         temporal_schedule_service=sync_deps["temporal_schedule_service"],
         usage_checker=usage_checker,
         usage_ledger=usage_ledger,
@@ -628,7 +649,7 @@ def create_container(settings: Settings) -> Container:
             NativeImportStore(NativeSourceStore(), CanonicalRecordStore())
         ),
         owned_provisioning=OwnedProvisioningService(
-            store=ProvisioningStore(create_service, source_validation),
+            store=ProvisioningStore(create_service, source_validation, settings.OWNED_COMPOSIO),
             lifecycle=source_deps["source_lifecycle_service"],
             jobs=source_deps["sync_job_repo"],
             syncs=source_deps["sync_repo"],
@@ -661,6 +682,10 @@ def _create_health_service(settings: Settings) -> HealthService:
         "redis": RedisHealthProbe(redis_client.client),
         "temporal": TemporalHealthProbe(get_cached_temporal_client),
     }
+
+    if settings.owned_control_configured:
+        probes["tenant_postgres"] = PostgresHealthProbe(get_tenant_engine(), name="tenant_postgres")
+        critical_names = critical_names | {"tenant_postgres"}
 
     unknown = critical_names - probes.keys()
     if unknown:
@@ -767,7 +792,7 @@ def _create_circuit_breaker() -> CircuitBreaker:
 
 def _create_ocr_provider(
     circuit_breaker: CircuitBreaker, settings: Settings
-) -> Optional[OcrProvider]:
+) -> Optional[FallbackOcrProvider]:
     """Create OCR provider with fallback chain.
 
     Chain order: local Tesseract (if configured) -> Mistral -> Docling.
@@ -776,13 +801,30 @@ def _create_ocr_provider(
     Returns None with a warning when no providers are available.
     """
     providers = []
+    policies = []
     if settings.LOCAL_OCR_TESSDATA_PATH:
+        local = LocalOcrProvider(
+            tessdata_path=settings.LOCAL_OCR_TESSDATA_PATH,
+            languages=settings.LOCAL_OCR_LANGUAGES,
+        )
         providers.append(
             (
                 "local-tesseract",
-                LocalOcrProvider(
-                    tessdata_path=settings.LOCAL_OCR_TESSDATA_PATH,
-                    languages=settings.LOCAL_OCR_LANGUAGES,
+                local,
+            )
+        )
+        policies.append(
+            OcrPolicy(
+                provider="local-tesseract",
+                models=local.model_artifacts,
+                languages=settings.LOCAL_OCR_LANGUAGES,
+                policy="pymupdf-partial-tesseract-v1",
+                local_limits=LocalOcrLimits(
+                    dpi=local_worker.DPI,
+                    maximum_pages=local_worker.MAX_PAGES,
+                    maximum_page_pixels=local_worker.MAX_PAGE_PIXELS,
+                    maximum_input_bytes=local_worker.MAX_INPUT_BYTES,
+                    maximum_output_bytes=local_worker.MAX_OUTPUT_BYTES,
                 ),
             )
         )
@@ -794,11 +836,19 @@ def _create_ocr_provider(
 
     if mistral_ocr:
         providers.append(("mistral-ocr", mistral_ocr))
+        policies.append(
+            OcrPolicy(
+                provider="mistral-ocr",
+                policy="mistral-document-v1",
+                models=(ModelIdentity(identifier=OCR_MODEL, resolution="mutable_alias"),),
+            )
+        )
 
     if settings.DOCLING_BASE_URL:
         try:
             docling_ocr = DoclingOcrAdapter(base_url=settings.DOCLING_BASE_URL)
             providers.append(("docling", docling_ocr))
+            policies.append(OcrPolicy(provider="docling", policy="docling-md-ocr-v1"))
         except Exception as e:
             logger.error(f"Error creating Docling OCR adapter: {e}")
             docling_ocr = None
@@ -812,7 +862,9 @@ def _create_ocr_provider(
 
     logger.info(f"Creating FallbackOcrProvider with {len(providers)} providers: {providers}")
 
-    return FallbackOcrProvider(providers=providers, circuit_breaker=circuit_breaker)
+    return FallbackOcrProvider(
+        providers=providers, circuit_breaker=circuit_breaker, configured_policy=tuple(policies)
+    )
 
 
 def _create_dense_embedder(
@@ -924,6 +976,7 @@ def _create_source_services(settings: Settings) -> dict:
         conn_repo=conn_repo,
         credential_service=credential_service,
         oauth2_service=oauth2_svc,
+        shared_composio=settings.OWNED_COMPOSIO,
     )
 
     return {
@@ -949,7 +1002,7 @@ def _create_source_services(settings: Settings) -> dict:
 
 def _create_payment_gateway(settings: Settings) -> PaymentGatewayProtocol:
     """Create payment gateway: Stripe if enabled, otherwise a null implementation."""
-    if settings.STRIPE_ENABLED:
+    if settings.STRIPE_ENABLED and not settings.owned_control_configured:
         from airweave.adapters.payment.stripe import StripePaymentGateway
 
         return StripePaymentGateway()
@@ -1090,7 +1143,7 @@ def _create_usage_checker(
     """Create the singleton UsageLimitChecker."""
     from airweave.domains.usage.limit_checker import AlwaysAllowLimitChecker
 
-    if settings.LOCAL_DEVELOPMENT:
+    if settings.owned_control_configured or settings.LOCAL_DEVELOPMENT:
         return AlwaysAllowLimitChecker()
 
     return UsageLimitChecker(
@@ -1107,7 +1160,7 @@ def _create_usage_ledger(settings: Settings, billing_deps: dict) -> UsageLedgerP
     from airweave.domains.usage.ledger import NullUsageLedger
     from airweave.domains.usage.repository import UsageRepository
 
-    if settings.LOCAL_DEVELOPMENT:
+    if settings.owned_control_configured or settings.LOCAL_DEVELOPMENT:
         return NullUsageLedger()
 
     return UsageLedger(

@@ -32,12 +32,21 @@ class ExtractionOutcome(ExtractionPart):
     outcome: Literal["indexed", "unsupported", "unavailable_original", "failed"]
     reason: (
         Literal[
-            "unsupported_format", "original_not_captured", "conversion_failed", "ocr_unavailable"
+            "unsupported_format",
+            "original_not_captured",
+            "conversion_failed",
+            "preparation_limit",
+            "ocr_unavailable",
+            "embedded_content_unprocessed",
+            "export_size_limit",
+            "read_size_limit",
+            "unsupported",
+            "download_not_permitted",
         ]
         | None
     ) = None
 
-    gaps: tuple[Literal["ocr_unavailable"], ...] = ()
+    gaps: tuple[Literal["ocr_unavailable", "embedded_content_unprocessed"], ...] = ()
 
     @model_validator(mode="after")
     def reason_matches(self):
@@ -51,7 +60,16 @@ class ExtractionOutcome(ExtractionPart):
         if self.gaps and (self.outcome != "indexed" or len(set(self.gaps)) != len(self.gaps)):
             raise ValueError("Only indexed content may carry distinct extraction gaps")
         if self.reason != expected[self.outcome] and not (
-            self.outcome == "unsupported" and self.reason == "ocr_unavailable"
+            (
+                self.outcome == "unsupported"
+                and self.reason in {"ocr_unavailable", "embedded_content_unprocessed"}
+            )
+            or (self.outcome == "failed" and self.reason == "preparation_limit")
+            or (
+                self.outcome == "unavailable_original"
+                and self.reason
+                in {"export_size_limit", "read_size_limit", "unsupported", "download_not_permitted"}
+            )
         ):
             raise ValueError("Extraction outcome requires its exact bounded reason")
         return self

@@ -17,6 +17,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings
 
 from airweave.core.config.enums import AuthMode, Environment, StorageBackendType
+from airweave.domains.owned_provisioning.settings import OwnedComposioSettings
 
 _BANNED_PASSWORDS: frozenset[str] = frozenset(
     {
@@ -119,8 +120,19 @@ class Settings(BaseSettings):
 
     AUTH_MODE: AuthMode = AuthMode.API_KEY
     # Existing org-scoped key auth; only the enrollment endpoint accepts this pair.
+    OWNED_COMPOSIO: OwnedComposioSettings | None = Field(default=None, repr=False)
     OWNED_TENANT_CONTROL_ORGANIZATION_ID: UUID | None = None
     OWNED_TENANT_CONTROL_API_KEY_IDS: tuple[UUID, ...] = ()
+
+    @property
+    def owned_control_configured(self) -> bool:
+        """Validate the complete existing boundary for the owned product service."""
+        organization = self.OWNED_TENANT_CONTROL_ORGANIZATION_ID is not None
+        keys = bool(self.OWNED_TENANT_CONTROL_API_KEY_IDS)
+        if organization != keys:
+            raise ValueError("Owned control requires both organization and allowed API key IDs")
+        return organization
+
     AUTH_ENABLED: Optional[bool] = None  # Deprecated migration input; use AUTH_MODE.
     AUTH0_DOMAIN: Optional[str] = None
     AUTH0_AUDIENCE: Optional[str] = None
@@ -231,6 +243,8 @@ class Settings(BaseSettings):
     # Optional local OCR; models are provisioned at build/setup time, never during inference.
     LOCAL_OCR_TESSDATA_PATH: Optional[str] = None
     LOCAL_OCR_LANGUAGES: tuple[str, ...] = ("eng",)
+    # Optional immutable build manifest digest; absent builds have unknown identity.
+    PREPARATION_ARTIFACT_SHA256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     # Docling OCR fallback service (None = disabled)
     DOCLING_BASE_URL: Optional[str] = None
@@ -240,6 +254,8 @@ class Settings(BaseSettings):
     TEMPORAL_PORT: int = 7233
     TEMPORAL_NAMESPACE: str = "default"
     TEMPORAL_TASK_QUEUE: str = "airweave-sync-queue"
+    TEMPORAL_MAX_CONCURRENT_ACTIVITIES: int = Field(default=4, ge=1)
+    TEMPORAL_MAX_CONCURRENT_WORKFLOW_TASKS: int = Field(default=8, ge=2)
     TEMPORAL_DISABLE_SANDBOX: bool = False
     TEMPORAL_SDK_METRICS_PORT: int = 9090
 
@@ -284,7 +300,10 @@ class Settings(BaseSettings):
     ANALYTICS_ENABLED: bool = True
 
     # Sync configuration
-    SYNC_MAX_WORKERS: int = 20
+    # SQL capacity is per process and independent of per-sync record concurrency.
+    DB_POOL_SIZE: int = Field(default=8, ge=1)
+    DB_POOL_MAX_OVERFLOW: int = Field(default=0, ge=0)
+    SYNC_MAX_WORKERS: int = Field(default=20, ge=1)
     SYNC_THREAD_POOL_SIZE: int = 100
     WEB_FETCHER_MAX_CONCURRENT: int = 10  # Max concurrent web scraping requests
     OPENAI_MAX_CONCURRENT: int = 20  # Max concurrent OpenAI API requests
@@ -384,6 +403,13 @@ class Settings(BaseSettings):
                 raise ValueError("AUTH_ENABLED conflicts with AUTH_MODE; remove AUTH_ENABLED")
             values["AUTH_MODE"] = inferred
         return values
+
+    @model_validator(mode="after")
+    def validate_pool_capacity(self):
+        """Tenant mode reserves one configured application slot for control."""
+        if self.TENANT_DATABASE_URI is not None and self.DB_POOL_SIZE < 2:
+            raise ValueError("Tenant/control isolation requires DB_POOL_SIZE >= 2")
+        return self
 
     @model_validator(mode="after")
     def validate_auth_mode(self):
@@ -628,13 +654,13 @@ class Settings(BaseSettings):
 
     @property
     def db_pool_size(self) -> int:
-        """Base SQLAlchemy pool size derived from worker count."""
-        return min(100, max(20, self.SYNC_MAX_WORKERS))
+        """Explicit per-process application pool capacity."""
+        return self.DB_POOL_SIZE
 
     @property
     def db_pool_max_overflow(self) -> int:
-        """SQLAlchemy pool max overflow derived from worker count."""
-        return max(20, int(self.SYNC_MAX_WORKERS * 2))
+        """Finite overflow shared by the tenant/control application budget."""
+        return self.DB_POOL_MAX_OVERFLOW
 
     @property
     def temporal_address(self) -> str:

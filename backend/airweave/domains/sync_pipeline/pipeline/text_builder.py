@@ -133,7 +133,7 @@ class TextualRepresentationBuilder:
                     text=entity.textual_representation or "",
                     content_start=content_starts.get(entity.entity_id),
                     kind=(
-                        "native_text"
+                        native_bodies[entity.entity_id].kind
                         if entity.entity_id in native_bodies
                         else "extracted_text"
                         if entity.entity_id in content_starts
@@ -145,6 +145,11 @@ class TextualRepresentationBuilder:
             failed_entity_ids=tuple(entity.entity_id for entity in failed_entities),
             conversion_gaps={
                 key: value.gap for key, value in conversion_gaps.items() if value.gap is not None
+            },
+            conversion_failures={
+                key: value.failure_reason
+                for key, value in conversion_gaps.items()
+                if value.failure_reason is not None
             },
         )
 
@@ -527,6 +532,8 @@ class TextualRepresentationBuilder:
         """Record a known gap without fabricating content or masking failed conversion."""
         if result is None:
             return False
+        if result.failure_reason is not None:
+            conversion_gaps[entity.entity_id] = result
         if result.gap is not None:
             conversion_gaps[entity.entity_id] = result
             if result.text is None:

@@ -40,9 +40,9 @@ async def build_activity_context(ctx_dict: Dict[str, Any], **log_dimensions: Any
 async def _fetch_organization(org_id: UUID) -> schemas.Organization:
     """Fetch an enriched Organization schema from DB by ID."""
     from airweave import crud
-    from airweave.db.session import get_db_context
+    from airweave.db.session import get_tenant_db_context
 
-    async with get_db_context() as db:
+    async with get_tenant_db_context(org_id) as db:
         org = await crud.organization.get(db, org_id, skip_access_validation=True, enrich=True)
         if isinstance(org, schemas.Organization):
             return org

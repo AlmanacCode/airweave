@@ -28,7 +28,7 @@ def _make_org_schema():
 
 
 @asynccontextmanager
-async def _fake_db():
+async def _fake_db(_organization):
     yield AsyncMock()
 
 
@@ -64,7 +64,7 @@ async def test_fetch_organization_returns_schema_directly():
     mock_crud.organization.get = AsyncMock(return_value=org)
 
     with (
-        patch("airweave.db.session.get_db_context", _fake_db),
+        patch("airweave.db.session.get_tenant_db_context", _fake_db),
         patch("airweave.crud", mock_crud),
     ):
         result = await _fetch_organization(UUID(ORG_ID))
@@ -91,7 +91,7 @@ async def test_fetch_organization_validates_orm_model():
     mock_crud.organization.get = AsyncMock(return_value=orm_org)
 
     with (
-        patch("airweave.db.session.get_db_context", _fake_db),
+        patch("airweave.db.session.get_tenant_db_context", _fake_db),
         patch("airweave.crud", mock_crud),
     ):
         result = await _fetch_organization(UUID(ORG_ID))

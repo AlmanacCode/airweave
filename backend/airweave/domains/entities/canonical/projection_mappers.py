@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 
 from pydantic import BaseModel, ConfigDict, JsonValue, StrictBool, TypeAdapter, ValidationError
 
+from airweave.domains.entities.canonical.blob_materializer import read_blob
 from airweave.domains.entities.canonical.extraction_models import ExtractionPart
 from airweave.domains.entities.canonical.file_metadata import with_file_metadata
 from airweave.domains.entities.canonical.models import SourceRecord
@@ -28,6 +29,7 @@ from airweave.platform.entities.google_calendar import (
 from airweave.platform.entities.google_drive import GoogleDriveFileEntity, GoogleDriveFolderEntity
 from airweave.platform.entities.slack import SlackChannelEntity, SlackMessageEntity
 from airweave.platform.entities.wispr import WisprMeetingEntity, WisprNoteEntity
+from airweave.platform.sources.records.export_manifest import parse_export_manifest
 from airweave.platform.sources.records.sheets_manifest import GridGap
 
 
@@ -117,6 +119,38 @@ async def _drive_document(
     return ProjectionInputs(parts=(body, *_drive_omissions(missing)))
 
 
+async def _drive_export_coverage(
+    record: SourceRecord, storage: StorageBackend
+) -> ProjectionInputs | None:
+    """Read export omission evidence, preserving native representation contracts."""
+    if record.completeness != "metadata_only":
+        return None
+    marked = [blob for blob in record.blobs if blob.role == "representation_manifest"]
+    if not marked:
+        return None
+    manifest = parse_export_manifest(
+        await read_blob(record, marked[0], storage),
+        file_id=record.identity.native_id,
+        drive_version=_string(record.payload.get("version")),
+        media_type=_string(record.payload.get("mimeType")),
+        blobs=record.blobs,
+    )
+    return ProjectionInputs(
+        parts=(
+            ProjectionInput(
+                part=ExtractionPart(
+                    part_index=0,
+                    key="/export",
+                    kind="file",
+                    media_type=manifest.media_type,
+                ),
+                entity=None,
+                omission=manifest.export.reason,
+            ),
+        )
+    )
+
+
 async def _drive(
     record: SourceRecord,
     storage: StorageBackend,
@@ -155,6 +189,9 @@ async def _drive(
                 ),
             )
         )
+    export_coverage = await _drive_export_coverage(record, storage)
+    if export_coverage is not None:
+        return export_coverage
     omissions: tuple[ProjectionInput, ...] = ()
     if any(blob.role == "representation_manifest" for blob in record.blobs):
         if data.get("mimeType") == "application/vnd.google-apps.spreadsheet":
@@ -178,31 +215,35 @@ async def _drive(
         else:
             return await _drive_document(record, storage, directory)
     else:
-        # Historical Drive records retain their export-only contract.
-        if len(record.blobs) != 1:
-            raise ProjectionMappingError("Drive content requires exactly one captured blob")
-        blob = record.blobs[0]
-        content = await read_blob(record, blob, storage)
-        media_type = blob.media_type or _string(data.get("mimeType"))
-        suffix = mimetypes.guess_extension(media_type) or Path(_string(data.get("name"))).suffix
-        if not suffix:
-            return ProjectionInputs(
-                parts=(
-                    ProjectionInput(
-                        part=ExtractionPart(
-                            part_index=0,
-                            key=record.identity.native_id,
-                            kind="file",
-                            media_type=media_type or None,
-                        ),
-                        entity=None,
-                        omission="unsupported_format",
-                    ),
-                )
-            )
-        suffix = suffix.lower()
+        return ProjectionInputs(parts=(await _drive_historical_export(record, storage, directory),))
     body = await _drive_file(record, content, media_type, suffix, directory)
     return ProjectionInputs(parts=(body, *omissions))
+
+
+async def _drive_historical_export(
+    record: SourceRecord, storage: StorageBackend, directory: Path
+) -> ProjectionInput:
+    """Historical export-only originals retain their exact single-blob contract."""
+    if len(record.blobs) != 1:
+        raise ProjectionMappingError("Drive content requires exactly one captured blob")
+    blob = record.blobs[0]
+    content = await read_blob(record, blob, storage)
+    media_type = blob.media_type or _string(record.payload.get("mimeType"))
+    suffix = (
+        mimetypes.guess_extension(media_type) or Path(_string(record.payload.get("name"))).suffix
+    )
+    if not suffix:
+        return ProjectionInput(
+            part=ExtractionPart(
+                part_index=0,
+                key=record.identity.native_id,
+                kind="file",
+                media_type=media_type or None,
+            ),
+            entity=None,
+            omission="unsupported_format",
+        )
+    return await _drive_file(record, content, media_type, suffix.lower(), directory)
 
 
 async def _drive_file(
@@ -244,6 +285,25 @@ def _calendar(record: SourceRecord) -> tuple[BaseEntity, ...]:
             breadcrumbs=[],
         ),
     )
+
+
+async def _calendar_inputs(record: SourceRecord) -> ProjectionInputs:
+    """Calendar descriptions can contain HTML; preserve original JSON separately."""
+    from airweave.domains.converters.html import html_to_text
+    from airweave.domains.sync_pipeline.async_helpers import run_in_thread_pool
+
+    (entity,) = _calendar(record)
+    part = _projection_input(0, entity)
+    if record.identity.record_type != "event" or record.payload.get("description") is None:
+        return ProjectionInputs(parts=(part,))
+    # The provider has no contentType flag. Parse every present description using
+    # its documented HTML-capable semantics, without guessing from tag patterns.
+    body = NativeTextBody(
+        text=await run_in_thread_pool(html_to_text, _string(record.payload["description"])),
+        kind="extracted_text",
+        metadata_fields=("description",),
+    )
+    return ProjectionInputs(parts=(part.model_copy(update={"native_body": body}),))
 
 
 def _slack(record: SourceRecord) -> tuple[BaseEntity, ...]:
@@ -531,6 +591,9 @@ async def map_record(  # noqa: C901 -- explicit provider dispatch keeps mapper o
             )
 
             yield await map_notion_property(record, storage)
+            return
+        elif source_name == "google_calendar":
+            yield await _calendar_inputs(record)
             return
         elif source_name == "wispr":
             yield _wispr_inputs(record)

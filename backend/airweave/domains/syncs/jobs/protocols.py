@@ -64,16 +64,6 @@ class SyncJobRepositoryProtocol(Protocol):
         """Update an existing sync job."""
         ...
 
-    async def get_stuck_jobs_by_status(
-        self,
-        db: AsyncSession,
-        status: List[str],
-        modified_before: Optional[datetime] = None,
-        started_before: Optional[datetime] = None,
-    ) -> List[SyncJob]:
-        """Get sync jobs stuck in specific statuses based on timestamps."""
-        ...
-
 
 class SyncJobServiceProtocol(Protocol):
     """Sync job status management."""

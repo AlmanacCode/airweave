@@ -123,6 +123,9 @@ def source_record(entity: Entity) -> SourceRecord:
         content_hash=entity.content_hash,
         completeness=entity.completeness,
         observed_at=entity.observed_at,
+        first_observed_at=entity.first_observed_at,
+        revision_observed_at=entity.revision_observed_at,
+        first_stored_at=entity.first_stored_at,
         source_created_at=entity.source_created_at,
         source_updated_at=entity.source_updated_at,
         deleted_at=entity.deleted_at,
@@ -522,6 +525,10 @@ class CanonicalRecordStore:
             )
             entity.source_payload = observation.payload
             entity.payload_schema_version = observation.payload_schema_version
+            entity.first_observed_at = (
+                observation.observed_at if entity.record_revision == 0 else entity.first_observed_at
+            )
+            entity.revision_observed_at = observation.observed_at
             entity.record_revision += 1
             entity.capture_hash = fingerprint
             entity.content_hash = observation.content_hash
@@ -544,17 +551,26 @@ class CanonicalRecordStore:
             change = ObservedChange(
                 sequence=sync.observed_change_sequence, kind=observation.kind, record=record
             )
-            db.add(
-                EntityChange(
-                    organization_id=batch.fence.organization_id,
-                    sync_id=sync.id,
-                    entity_record_id=entity.id,
-                    sequence=change.sequence,
-                    record_revision=record.revision,
-                    kind=observation.kind,
-                    snapshot=record.model_dump(mode="json"),
-                )
+            journal = EntityChange(
+                organization_id=batch.fence.organization_id,
+                sync_id=sync.id,
+                entity_record_id=entity.id,
+                sequence=change.sequence,
+                record_revision=record.revision,
+                kind=observation.kind,
+                snapshot=record.model_dump(mode="json"),
+                created_at=func.timezone("UTC", func.transaction_timestamp()),
             )
+            db.add(journal)
+            if record.revision == 1:
+                # The journal's DB transaction time is authoritative, not the
+                # legacy Entity/Python clock or the collector's observation time.
+                await db.flush()
+                await db.refresh(journal, attribute_names=["created_at"])
+                entity.first_stored_at = journal.created_at.replace(tzinfo=timezone.utc)
+                record = source_record(entity)
+                journal.snapshot = record.model_dump(mode="json")
+                change = change.model_copy(update={"record": record})
             changes.append(change)
         await db.flush()
         return CaptureResult(

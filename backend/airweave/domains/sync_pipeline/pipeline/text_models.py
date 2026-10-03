@@ -8,10 +8,11 @@ from airweave.platform.entities._base import BaseEntity
 
 
 class NativeTextBody(BaseModel):
-    """Source-selected body; an empty string is present content, not missing content."""
+    """Source-selected body with explicit conversion provenance; empty is present content."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     text: str
+    kind: Literal["native_text", "extracted_text"] = "native_text"
     metadata_fields: tuple[str, ...] = ()
 
 
@@ -32,4 +33,7 @@ class BuiltTextBatch(BaseModel):
     entities: list[BaseEntity]
     representations: tuple[BuiltText, ...]
     failed_entity_ids: tuple[str, ...] = ()
-    conversion_gaps: dict[str, Literal["ocr_unavailable"]] = Field(default_factory=dict)
+    conversion_gaps: dict[str, Literal["ocr_unavailable", "embedded_content_unprocessed"]] = Field(
+        default_factory=dict
+    )
+    conversion_failures: dict[str, Literal["preparation_limit"]] = Field(default_factory=dict)

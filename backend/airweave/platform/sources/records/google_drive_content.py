@@ -3,7 +3,6 @@
 from urllib.parse import quote, urlencode
 
 import httpx
-
 from airweave.core.logging import ContextualLogger
 from airweave.domains.entities.canonical.requests import BlobReference, CaptureRecord
 from airweave.domains.sources.token_providers.protocol import SourceAuthProvider
@@ -11,11 +10,20 @@ from airweave.domains.storage.exceptions import FileSkippedException
 from airweave.domains.storage.file_service import FileService
 from airweave.platform.entities.google_drive import GOOGLE_EXPORT_FORMATS
 from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+from airweave.platform.sources.records.export_manifest import (
+    ExportManifestV3,
+    parse_export_manifest,
+)
 from airweave.platform.sources.records.google_docs_content import capture_document_parts
 from airweave.platform.sources.records.google_drive import BASE, GetJSON
 from airweave.platform.sources.records.google_sheets_content import capture_spreadsheet_parts
 from airweave.platform.sources.records.sheets_manifest import SHEETS_MIME
-from airweave.platform.sources.records.workspace_manifest import DOCS_MIME, ExportState
+from airweave.platform.sources.records.workspace_manifest import (
+    DOCS_MIME,
+    MANIFEST_MIME,
+    ExportState,
+    canonical_json,
+)
 
 
 async def capture_file_content(
@@ -37,19 +45,16 @@ async def capture_file_content(
     if not isinstance(mime, str) or not isinstance(version, str):
         return record
     capabilities = payload.get("capabilities")
-    if isinstance(capabilities, dict) and capabilities.get("canDownload") is False:
-        return record
     url = f"{BASE}/files/{quote(record.identity.native_id, safe='')}"
-    target = _download_target(url, mime)
-    if target is None:
-        return record
-    download_url, media_type = target
-    blob, export_state = await _download_representation(
-        download_url, media_type, mime, files=files, client=client, auth=auth, logger=logger
+    blob, export_state = await _capture_representation(
+        url, mime, capabilities, files=files, client=client, auth=auth, logger=logger
     )
     blob = _label_representation(blob, payload.get("name"), mime)
     has_native_parts = False
-    if mime == DOCS_MIME:
+    if export_state.reason in {"unsupported", "download_not_permitted"}:
+        record = await _capture_export_coverage(record, export_state, files=files)
+        has_native_parts = True
+    elif mime == DOCS_MIME:
         record = await capture_document_parts(
             record,
             export=export_state,
@@ -65,7 +70,8 @@ async def capture_file_content(
         )
         has_native_parts = True
     elif blob is None:
-        return record
+        record = await _capture_export_coverage(record, export_state, files=files)
+        has_native_parts = True
     latest = await get(url, params={"fields": "version", "supportsAllDrives": "true"})
     if latest.get("version") != version:
         raise ValueError(
@@ -75,6 +81,60 @@ async def capture_file_content(
         return record
     return record.model_copy(
         update={"blobs": (blob,), "content_hash": blob.sha256, "completeness": "complete"}
+    )
+
+
+async def _capture_representation(
+    url: str,
+    mime: str,
+    capabilities: object,
+    *,
+    files: FileService,
+    client: AirweaveHttpClient,
+    auth: SourceAuthProvider,
+    logger: ContextualLogger,
+) -> tuple[BlobReference | None, ExportState]:
+    """Distinguish declared acquisition limitations from provider or storage failures."""
+    target = _download_target(url, mime)
+    if isinstance(capabilities, dict) and capabilities.get("canDownload") is False:
+        blob, export_state = (
+            None,
+            ExportState(status="unavailable", reason="download_not_permitted"),
+        )
+    elif target is None:
+        blob, export_state = None, ExportState(status="unavailable", reason="unsupported")
+    else:
+        download_url, media_type = target
+        blob, export_state = await _download_representation(
+            download_url, media_type, mime, files=files, client=client, auth=auth, logger=logger
+        )
+    return blob, export_state
+
+
+async def _capture_export_coverage(
+    record: CaptureRecord, export: ExportState, *, files: FileService
+) -> CaptureRecord:
+    """Retain omission evidence without mutating the original provider observation."""
+    manifest = ExportManifestV3(
+        file_id=record.identity.native_id,
+        drive_version=record.payload["version"],
+        media_type=record.payload["mimeType"],
+        export=export,
+    )
+    content = canonical_json(manifest.model_dump(mode="json"))
+    blob = (await files.store_canonical_blob(content, media_type=MANIFEST_MIME)).model_copy(
+        update={"role": "representation_manifest"}
+    )
+    parse_export_manifest(
+        content,
+        file_id=manifest.file_id,
+        drive_version=manifest.drive_version,
+        media_type=manifest.media_type,
+        blobs=(blob,),
+    )
+    return CaptureRecord.model_validate(
+        record.model_dump()
+        | {"blobs": (blob,), "content_hash": blob.sha256, "completeness": "metadata_only"}
     )
 
 

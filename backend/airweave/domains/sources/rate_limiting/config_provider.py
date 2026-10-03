@@ -10,7 +10,7 @@ import redis.asyncio as aioredis
 
 from airweave.core.logging import logger
 from airweave.crud.crud_source_rate_limit import source_rate_limit as rate_limit_crud
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.domains.sources.rate_limiting.protocols import RateLimitConfigProvider
 from airweave.domains.sources.rate_limiting.types import RateLimitConfig
 
@@ -71,14 +71,10 @@ class DatabaseRateLimitConfigProvider(RateLimitConfigProvider):
     @staticmethod
     async def _fetch_from_db(org_id: UUID, source_short_name: str) -> Optional[RateLimitConfig]:
         """Query the DB for rate limit configuration."""
-        try:
-            async with get_db_context() as db:
-                obj = await rate_limit_crud.get_limit(
-                    db, org_id=org_id, source_short_name=source_short_name
-                )
-                if not obj:
-                    return None
-                return RateLimitConfig(limit=obj.limit, window_seconds=obj.window_seconds)
-        except Exception as e:
-            logger.error(f"Failed to fetch rate limit config from DB: {e}")
-            return None
+        async with get_tenant_db_context(org_id) as db:
+            obj = await rate_limit_crud.get_limit(
+                db, org_id=org_id, source_short_name=source_short_name
+            )
+            if obj is None:
+                return None
+            return RateLimitConfig(limit=obj.limit, window_seconds=obj.window_seconds)

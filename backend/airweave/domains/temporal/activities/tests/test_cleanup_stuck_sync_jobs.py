@@ -2,7 +2,7 @@
 
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
@@ -10,12 +10,9 @@ import pytest
 
 from airweave.core.shared_models import SyncJobStatus
 from airweave.domains.temporal.activities.cleanup_stuck_sync_jobs import (
-    CleanupStuckSyncJobsActivity,
-    _CANCELLING_PENDING_CUTOFF,
-    _REDIS_SNAPSHOT_KEY_PREFIX,
-    _RUNNING_CUTOFF,
     _STUCK_CANCEL_REASON,
     _STUCK_RUNNING_REASON,
+    CleanupStuckSyncJobsActivity,
 )
 
 from .conftest import ORG_ID, SYNC_ID, SYNC_JOB_ID
@@ -24,7 +21,7 @@ MODULE = "airweave.domains.temporal.activities.cleanup_stuck_sync_jobs"
 
 
 @asynccontextmanager
-async def _fake_db():
+async def _fake_db(_organization):
     yield AsyncMock()
 
 
@@ -74,9 +71,7 @@ class FakeStateMachine:
         self.calls: list[dict] = []
 
     async def transition(self, *, sync_job_id, target, ctx, error=None, **kwargs):
-        self.calls.append(
-            {"sync_job_id": sync_job_id, "target": target, "error": error}
-        )
+        self.calls.append({"sync_job_id": sync_job_id, "target": target, "error": error})
         return MagicMock(applied=True)
 
 
@@ -101,11 +96,6 @@ def workflow_service():
 
 
 @pytest.fixture
-def sync_job_repo():
-    return MagicMock()
-
-
-@pytest.fixture
 def entity_repo():
     return MagicMock()
 
@@ -116,11 +106,10 @@ def org_repo():
 
 
 @pytest.fixture
-def act(workflow_service, state_machine, sync_job_repo, entity_repo, org_repo):
+def act(workflow_service, state_machine, entity_repo, org_repo):
     return CleanupStuckSyncJobsActivity(
         temporal_workflow_service=workflow_service,
         state_machine=state_machine,
-        sync_job_repo=sync_job_repo,
         entity_repo=entity_repo,
         org_repo=org_repo,
     )
@@ -131,9 +120,9 @@ def act(workflow_service, state_machine, sync_job_repo, entity_repo, org_repo):
 
 @pytest.mark.unit
 async def test_run_no_stuck_jobs(act):
-    act.sync_job_repo.get_stuck_jobs_by_status = AsyncMock(return_value=[])
+    act._find_stuck_jobs = AsyncMock(return_value=[])
 
-    with patch(f"{MODULE}.get_db_context", _fake_db):
+    with patch(f"{MODULE}.get_tenant_db_context", _fake_db):
         await act.run()
 
 
@@ -141,16 +130,11 @@ async def test_run_no_stuck_jobs(act):
 async def test_run_cancelling_pending_jobs(act, state_machine, workflow_service):
     stuck_job = _make_job(status="cancelling")
 
-    act.sync_job_repo.get_stuck_jobs_by_status = AsyncMock(
-        side_effect=[
-            [stuck_job],  # cancelling/pending query
-            [],  # running query
-        ]
-    )
+    act._find_stuck_jobs = AsyncMock(return_value=[stuck_job])
     act.org_repo.get = AsyncMock(return_value=_make_org())
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         patch(f"{MODULE}.asyncio.sleep", new_callable=AsyncMock),
     ):
         await act.run()
@@ -164,12 +148,7 @@ async def test_run_cancelling_pending_jobs(act, state_machine, workflow_service)
 async def test_run_running_stuck_job_transitions_to_failed(act, state_machine):
     stuck_job = _make_job(status="running")
 
-    act.sync_job_repo.get_stuck_jobs_by_status = AsyncMock(
-        side_effect=[
-            [],  # cancelling/pending query
-            [stuck_job],  # running query
-        ]
-    )
+    act._find_stuck_jobs = AsyncMock(return_value=[stuck_job])
     act.entity_repo.get_latest_entity_time_for_job = AsyncMock(return_value=None)
     act.org_repo.get = AsyncMock(return_value=_make_org())
 
@@ -180,7 +159,7 @@ async def test_run_running_stuck_job_transitions_to_failed(act, state_machine):
     mock_redis_client.client = mock_redis_inner
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         patch(f"{MODULE}.redis_client", mock_redis_client),
         patch(f"{MODULE}.asyncio.sleep", new_callable=AsyncMock),
     ):
@@ -193,12 +172,10 @@ async def test_run_running_stuck_job_transitions_to_failed(act, state_machine):
 
 @pytest.mark.unit
 async def test_run_handles_general_exception(act):
-    act.sync_job_repo.get_stuck_jobs_by_status = AsyncMock(
-        side_effect=RuntimeError("db error")
-    )
+    act._find_stuck_jobs = AsyncMock(side_effect=RuntimeError("db error"))
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         pytest.raises(RuntimeError, match="db error"),
     ):
         await act.run()
@@ -265,14 +242,16 @@ async def test_is_running_job_stuck_no_timestamp_entity_time_recent(act):
 async def test_is_running_job_stuck_old_timestamp(act):
     job = _make_job()
     old_time = datetime(2024, 1, 1).isoformat()
-    snapshot = json.dumps({
-        "last_update_timestamp": old_time,
-        "inserted": 5,
-        "updated": 3,
-        "deleted": 0,
-        "kept": 2,
-        "skipped": 1,
-    })
+    snapshot = json.dumps(
+        {
+            "last_update_timestamp": old_time,
+            "inserted": 5,
+            "updated": 3,
+            "deleted": 0,
+            "kept": 2,
+            "skipped": 1,
+        }
+    )
     mock_redis = AsyncMock()
     mock_redis.get.return_value = snapshot
 
@@ -302,10 +281,12 @@ async def test_is_running_job_stuck_recent_timestamp_healthy(act):
 async def test_is_running_job_stuck_timezone_aware_timestamp(act):
     job = _make_job()
     old_time = datetime(2024, 1, 1, tzinfo=None).isoformat() + "+00:00"
-    snapshot = json.dumps({
-        "last_update_timestamp": old_time,
-        "inserted": 1,
-    })
+    snapshot = json.dumps(
+        {
+            "last_update_timestamp": old_time,
+            "inserted": 1,
+        }
+    )
     mock_redis = AsyncMock()
     mock_redis.get.return_value = snapshot
 
@@ -339,7 +320,7 @@ async def test_cancel_stuck_job_org_fetch_fails(act):
     job = _make_job()
     act.org_repo.get = AsyncMock(side_effect=RuntimeError("org not found"))
 
-    with patch(f"{MODULE}.get_db_context", _fake_db):
+    with patch(f"{MODULE}.get_tenant_db_context", _fake_db):
         result = await act._cancel_stuck_job(job, MagicMock())
     assert result is False
 
@@ -357,7 +338,7 @@ async def test_cancel_stuck_job_cancel_raises(act, state_machine):
     state_machine.transition = fail_transition
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         patch(f"{MODULE}.asyncio.sleep", new_callable=AsyncMock),
     ):
         result = await act._cancel_stuck_job(job, MagicMock())
@@ -371,7 +352,7 @@ async def test_cancel_stuck_job_running_job_success(act, state_machine, workflow
     act.org_repo.get = AsyncMock(return_value=_make_org())
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         patch(f"{MODULE}.asyncio.sleep", new_callable=AsyncMock),
     ):
         result = await act._cancel_stuck_job(job, MagicMock())
@@ -387,7 +368,7 @@ async def test_cancel_stuck_job_cancel_returns_false(act, state_machine):
 
     act.org_repo.get = AsyncMock(return_value=_make_org())
 
-    with patch(f"{MODULE}.get_db_context", _fake_db):
+    with patch(f"{MODULE}.get_tenant_db_context", _fake_db):
         result = await act._cancel_stuck_job(job, MagicMock())
 
     assert result is True
@@ -397,19 +378,10 @@ async def test_cancel_stuck_job_cancel_returns_false(act, state_machine):
 @pytest.mark.unit
 async def test_run_mixed_stuck_jobs_counts(act, state_machine):
     """Test run counts cancelled/failed jobs correctly."""
-    cancelling_job = _make_job(
-        job_id="00000000-0000-0000-0000-000000000021", status="cancelling"
-    )
-    running_job = _make_job(
-        job_id="00000000-0000-0000-0000-000000000022", status="running"
-    )
+    cancelling_job = _make_job(job_id="00000000-0000-0000-0000-000000000021", status="cancelling")
+    running_job = _make_job(job_id="00000000-0000-0000-0000-000000000022", status="running")
 
-    act.sync_job_repo.get_stuck_jobs_by_status = AsyncMock(
-        side_effect=[
-            [cancelling_job],  # cancelling/pending query
-            [running_job],  # running query
-        ]
-    )
+    act._find_stuck_jobs = AsyncMock(return_value=[cancelling_job, running_job])
     act.entity_repo.get_latest_entity_time_for_job = AsyncMock(return_value=None)
     act.org_repo.get = AsyncMock(return_value=_make_org())
 
@@ -417,7 +389,7 @@ async def test_run_mixed_stuck_jobs_counts(act, state_machine):
     mock_redis.get.return_value = json.dumps({"inserted": 10})
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         patch(f"{MODULE}.redis_client", _mock_redis(mock_redis)),
         patch(f"{MODULE}.asyncio.sleep", new_callable=AsyncMock),
     ):
@@ -431,16 +403,11 @@ async def test_run_failed_count_incremented(act, state_machine):
     """When _cancel_stuck_job returns False, failed_count is incremented."""
     job = _make_job(status="cancelling")
 
-    act.sync_job_repo.get_stuck_jobs_by_status = AsyncMock(
-        side_effect=[
-            [job],  # cancelling/pending query
-            [],  # running query
-        ]
-    )
+    act._find_stuck_jobs = AsyncMock(return_value=[job])
     act.org_repo.get = AsyncMock(side_effect=RuntimeError("org not found"))
 
     with (
-        patch(f"{MODULE}.get_db_context", _fake_db),
+        patch(f"{MODULE}.get_tenant_db_context", _fake_db),
         patch(f"{MODULE}.asyncio.sleep", new_callable=AsyncMock),
     ):
         await act.run()

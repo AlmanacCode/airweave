@@ -13,6 +13,6 @@ def backend_actor(ctx: ApiContext = Depends(deps.get_context)) -> ApiContext:
     return ctx
 
 
-def backend_search_actor(ctx: ApiContext = Depends(deps.get_owned_search_context)) -> ApiContext:
-    """Apply the same backend gate after search authentication closes its SQL session."""
+def backend_owned_actor(ctx: ApiContext = Depends(deps.get_owned_context)) -> ApiContext:
+    """Apply the same backend gate after owned authentication closes its SQL session."""
     return backend_actor(ctx)

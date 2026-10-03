@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from airweave.core.logging import logger
+from airweave.domains.entities.canonical.preparation_recipe import OcrPolicy
 
 if TYPE_CHECKING:
     from airweave.core.protocols import CircuitBreaker
@@ -38,6 +39,8 @@ class FallbackOcrProvider:
         self,
         providers: List[Tuple[str, "OcrProvider"]],
         circuit_breaker: "CircuitBreaker",
+        *,
+        configured_policy: tuple[OcrPolicy, ...] = (),
     ) -> None:
         """Initialize the fallback provider.
 
@@ -45,11 +48,13 @@ class FallbackOcrProvider:
             providers: Ordered list of (provider_key, provider) pairs.
                 Tried first-to-last; first available wins.
             circuit_breaker: Tracks provider health and cooldowns.
+            configured_policy: Composition provenance; never actual execution evidence.
         """
         if not providers:
             raise ValueError("At least one OCR provider is required")
         self._providers = providers
         self._circuit_breaker = circuit_breaker
+        self.configured_policy = configured_policy
 
     async def convert_batch(self, file_paths: List[str]) -> Dict[str, Optional[str]]:
         """Convert files to markdown, trying providers in order.

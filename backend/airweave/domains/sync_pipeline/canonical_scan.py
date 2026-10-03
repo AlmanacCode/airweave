@@ -90,7 +90,6 @@ class CanonicalScanDriver:
             expected = None
         if (
             self.force_full
-            and isinstance(self.source, (CheckpointedPageSource, ScopedPageSource))
             and current is not None
             and current.phase == "active"
             and (
@@ -147,9 +146,11 @@ class CanonicalScanDriver:
 
     async def fresh_full(self, previous: CaptureCycle) -> CaptureCycle:
         """Explicit full requests and native expiry share the same exact-cycle restart."""
-        if not isinstance(self.source, (CheckpointedPageSource, ScopedPageSource)):
-            raise CycleConflict("Source has no checkpoint recovery contract")
-        plan = await self.source.prepare_cycle(None)
+        plan = (
+            await self.source.prepare_cycle(None)
+            if isinstance(self.source, (CheckpointedPageSource, ScopedPageSource))
+            else CapturePlan()
+        )
         if plan.mode != "full" and not (
             plan.mode == "mixed" and isinstance(self.source, ScopedPageSource)
         ):
@@ -223,8 +224,19 @@ class CanonicalScanDriver:
                 raise
 
     async def advance_children(self, cycle: CaptureCycle, scope: CompletedScope) -> None:
-        """Give freshly observed, exactly verified owners one child page of progress."""
-        if scope.record_type not in cycle.configuration.exact_parent_validation:
+        """Give admitted fresh owners one child page before continuing their inventory."""
+        discovery_root = (
+            cycle.mode == "full"
+            and scope.parent is None
+            and scope.container_id is None
+            and scope.record_type in cycle.configuration.root_record_types
+            and cycle.configuration.policy(scope.record_type) == "discovery_only"
+            and bool(cycle.configuration.children_of(scope.record_type))
+        )
+        if (
+            not discovery_root
+            and scope.record_type not in cycle.configuration.exact_parent_validation
+        ):
             return
         async with self.sessions() as db:
             work = await self.service.next_scope_work(
