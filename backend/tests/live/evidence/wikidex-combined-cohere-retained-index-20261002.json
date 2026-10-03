@@ -1,0 +1,248 @@
+{
+  "qualification": "Wikidex isolated retained-corpus indexing, not deployed or provider-sync completeness",
+  "runtime_commit": "a8d091c",
+  "embedding": {
+    "model": "embed-v5.0-pro",
+    "dimensions": 1024,
+    "truncate": "NONE",
+    "sdk_retries": 0,
+    "purpose": "search_document",
+    "reranker": null
+  },
+  "corpus": [
+    {
+      "source": "gmail",
+      "pipeline_version": 5,
+      "counts": {
+        "retained_rows": 2034,
+        "not_deleted": 2034,
+        "current_publications": 2034,
+        "current_documents": 4216,
+        "current_searchable_records": 2034
+      },
+      "record_types": {
+        "message": 2034
+      },
+      "extraction_status": {
+        "complete": 1796,
+        "partial": 238
+      },
+      "part_outcomes": {
+        "indexed": 2125,
+        "unsupported": 279
+      },
+      "gap_reasons": {
+        "ocr_unavailable": 20,
+        "unsupported_format": 278
+      }
+    },
+    {
+      "source": "google_calendar",
+      "pipeline_version": 5,
+      "counts": {
+        "retained_rows": 234,
+        "not_deleted": 234,
+        "current_publications": 234,
+        "current_documents": 185,
+        "current_searchable_records": 163,
+        "current_zero_document": 71
+      },
+      "record_types": {
+        "calendar": 1,
+        "event": 163,
+        "event_occurrence": 70
+      },
+      "extraction_status": {
+        "complete": 163,
+        "excluded": 71
+      },
+      "part_outcomes": {
+        "indexed": 163
+      },
+      "gap_reasons": {}
+    },
+    {
+      "source": "google_drive",
+      "pipeline_version": 5,
+      "counts": {
+        "retained_rows": 55,
+        "not_deleted": 55,
+        "current_publications": 55,
+        "current_documents": 143,
+        "current_searchable_records": 55
+      },
+      "record_types": {
+        "file": 55
+      },
+      "extraction_status": {
+        "unavailable": 13,
+        "partial": 1,
+        "complete": 41
+      },
+      "part_outcomes": {
+        "unsupported": 10,
+        "indexed": 84,
+        "unavailable_original": 3
+      },
+      "gap_reasons": {
+        "unsupported_format": 10,
+        "ocr_unavailable": 1,
+        "original_not_captured": 3
+      }
+    },
+    {
+      "source": "slack",
+      "pipeline_version": 5,
+      "counts": {
+        "retained_rows": 1935,
+        "not_deleted": 1935,
+        "current_publications": 1935,
+        "current_documents": 2018,
+        "current_searchable_records": 1935
+      },
+      "record_types": {
+        "message": 1855,
+        "channel": 80
+      },
+      "extraction_status": {
+        "complete": 1824,
+        "partial": 111
+      },
+      "part_outcomes": {
+        "indexed": 1935,
+        "unavailable_original": 124
+      },
+      "gap_reasons": {
+        "original_not_captured": 124
+      }
+    },
+    {
+      "source": "wispr",
+      "pipeline_version": 5,
+      "counts": {
+        "retained_rows": 564,
+        "not_deleted": 564,
+        "current_publications": 564,
+        "current_documents": 2188,
+        "current_zero_document": 282,
+        "current_searchable_records": 282
+      },
+      "record_types": {
+        "meeting_listing": 260,
+        "meeting": 260,
+        "scratchpad_listing": 22,
+        "scratchpad_note": 22
+      },
+      "extraction_status": {
+        "excluded": 282,
+        "complete": 282
+      },
+      "part_outcomes": {
+        "indexed": 802
+      },
+      "gap_reasons": {}
+    },
+    {
+      "source": "almanac",
+      "pipeline_version": 3,
+      "counts": {
+        "retained_rows": 3,
+        "tombstones": 2,
+        "not_deleted": 1,
+        "current_publications": 1,
+        "current_documents": 1,
+        "current_searchable_records": 1
+      },
+      "record_types": {
+        "knowledge": 3
+      },
+      "extraction_status": {
+        "complete": 1
+      },
+      "part_outcomes": {
+        "indexed": 1
+      },
+      "gap_reasons": {}
+    },
+    {
+      "source": "almanac",
+      "pipeline_version": 3,
+      "counts": {
+        "retained_rows": 2,
+        "not_deleted": 2,
+        "current_publications": 2,
+        "current_documents": 2,
+        "current_searchable_records": 2
+      },
+      "record_types": {
+        "message": 1,
+        "session": 1
+      },
+      "extraction_status": {
+        "complete": 2
+      },
+      "part_outcomes": {
+        "indexed": 2
+      },
+      "gap_reasons": {}
+    }
+  ],
+  "original_preservation": {
+    "provider_copies": 4822,
+    "provider_payload_native_identity_timestamps_exact": true,
+    "source_originals_cursors_scans_unchanged": true,
+    "blob_bytes_verified": 337539339,
+    "physical_blob_keys_intentionally_rescoped": true,
+    "copy_record_ids_revisions_are_derived_identity": true
+  },
+  "projection": {
+    "corrected_provider_pass_seconds": 1484.3,
+    "corrected_provider_new_publications": 4819,
+    "prior_current_provider_publications": 3,
+    "record_failures_after_correction": 0,
+    "native_active_synthetic_records": 3,
+    "native_historical_tombstones": 2,
+    "current_chunks": 8753,
+    "initial_fixture_failures": {
+      "schema_guard_assertions": 229,
+      "blob_namespace_failures": 35
+    },
+    "initial_attempt_not_hidden": true,
+    "automatic_retry_sweeps": false
+  },
+  "inference_cumulative_including_initial_failed_attempt": {
+    "requests": 4713,
+    "texts": 9207,
+    "input_utf8_bytes": 27427078,
+    "billed_input_tokens": 7064374.0,
+    "estimated_usd_at_0_12_per_million": 0.84772488,
+    "uncertain_requests": 0,
+    "query_requests": 0
+  },
+  "resources": {
+    "vespa_limit_bytes": 4294967296,
+    "peak_observed_memory_percent": 82.58504867553711,
+    "older_evaluation_containers_temporarily_stopped_by_operator": true,
+    "docker_vm_changed": false,
+    "hosted_sizing_qualified": false
+  },
+  "calendar_historical_replay": {
+    "scope": "historical occurrence snapshot only",
+    "records": 70,
+    "original_provider_completed_at": "2026-10-02 13:08:11.636679+00:00",
+    "evaluation_replay_completed_at": "2026-10-03 03:14:13.335423+00:00",
+    "provider_requests": 0,
+    "paid_requests": 0,
+    "revisions_and_publications_unchanged": true,
+    "new_provider_freshness": false,
+    "whole_capture_cycle_complete": false
+  },
+  "limitations": [
+    "No provider recapture or new provider freshness.",
+    "Original capture coverage remains bounded and incomplete where previously declared.",
+    "Wispr identity remains broker-bound.",
+    "Slack124file parts remain uncaptured in this corpus.",
+    "Native knowledge/session originals are controlled synthetic publisher fixtures.",
+    "Retrieval relevance and browser workflows are separate gates; query inference remained disabled at this snapshot."
+  ]
+}
