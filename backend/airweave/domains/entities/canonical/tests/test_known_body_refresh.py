@@ -1,5 +1,6 @@
 """New cycles refresh old content; incomplete omission cannot erase retained state."""
 
+import asyncio
 import hashlib
 import json
 from collections import Counter
@@ -217,3 +218,42 @@ async def test_slack_legacy_active_cycle_cannot_resume_without_exact_omission_po
         current = await source[0].read_cycle(db, pipeline._writer())
         assert current == prior
         assert not list((await db.scalars(select(Entity))).all())
+
+
+async def test_explicit_full_restarts_changed_slack_policy_without_losing_originals(
+    database, source, monkeypatch
+):
+    first, connector, _ = await runner(database, source, [ROOT, HISTORY, asyncio.CancelledError()])
+    current_config = connector.capture_cycle_configuration
+    old_config = current_config.model_copy(
+        update={
+            "fingerprint": hashlib.sha256(b"old-policy").hexdigest(),
+            "known_object_validation": (),
+        }
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            type(connector), "capture_cycle_configuration", property(lambda self: old_config)
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await run(first)
+    rows, before, _ = await saved(database)
+    preserved = {row.native_id: (row.id, row.record_revision) for row in rows}
+    assert set(preserved) == {"C1", "1"}
+
+    second, _, pipeline = await runner(database, source, [ROOT, HISTORY, REPLIES], attempt=2)
+    second.sync_context.force_full_sync = True
+    await run(second)
+    rows, after, _ = await saved(database)
+    assert after["canonical_cycle"]["phase"] == "complete"
+    assert (
+        after["canonical_cycle"]["version"]["cycle_id"]
+        != before["canonical_cycle"]["version"]["cycle_id"]
+    )
+    assert {row.native_id for row in rows} == {"C1", "1", "1.1"}
+    for row in rows:
+        if row.native_id in preserved:
+            assert (row.id, row.record_revision) == preserved[row.native_id]
+    async with database() as db:
+        cycle = await source[0].read_cycle(db, pipeline._writer())
+        assert cycle.configuration == current_config

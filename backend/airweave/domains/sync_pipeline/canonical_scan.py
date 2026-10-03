@@ -90,7 +90,6 @@ class CanonicalScanDriver:
             expected = None
         if (
             self.force_full
-            and isinstance(self.source, (CheckpointedPageSource, ScopedPageSource))
             and current is not None
             and current.phase == "active"
             and (
@@ -147,9 +146,11 @@ class CanonicalScanDriver:
 
     async def fresh_full(self, previous: CaptureCycle) -> CaptureCycle:
         """Explicit full requests and native expiry share the same exact-cycle restart."""
-        if not isinstance(self.source, (CheckpointedPageSource, ScopedPageSource)):
-            raise CycleConflict("Source has no checkpoint recovery contract")
-        plan = await self.source.prepare_cycle(None)
+        plan = (
+            await self.source.prepare_cycle(None)
+            if isinstance(self.source, (CheckpointedPageSource, ScopedPageSource))
+            else CapturePlan()
+        )
         if plan.mode != "full" and not (
             plan.mode == "mixed" and isinstance(self.source, ScopedPageSource)
         ):
