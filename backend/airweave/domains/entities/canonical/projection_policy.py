@@ -3,6 +3,10 @@
 from airweave.domains.entities.canonical.calendar import is_cancelled_recurring_event
 from airweave.domains.entities.canonical.models import SourceRecord
 
+# Numeric publication authority. Existing sources change only through reviewed
+# expected-version reprojection; build/recipe fingerprints do not invalidate rows.
+CURRENT_PROJECTION_PIPELINE_VERSION = 4
+
 
 def excluded_from_search(record: SourceRecord, source_name: str) -> bool:
     """Records retained for authority/navigation that intentionally have no search text."""

@@ -18,7 +18,7 @@ class ConversionResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     text: str | None
-    gap: Literal["ocr_unavailable"] | None = None
+    gap: Literal["ocr_unavailable", "embedded_content_unprocessed"] | None = None
     failure_reason: Literal["preparation_limit"] | None = None
 
     @model_validator(mode="after")
@@ -130,7 +130,7 @@ class HybridDocumentConverter(BaseTextConverter):
 
         for path in file_paths:
             local = await self._extract_with_fallback(path)
-            if (local.text is not None and local.gap is None) or (
+            if (local.text is not None and local.gap != "ocr_unavailable") or (
                 local.gap is not None and self._ocr_provider is None
             ):
                 results[path] = local
@@ -152,7 +152,10 @@ class HybridDocumentConverter(BaseTextConverter):
                 for path, local in needs_ocr.items():
                     text = ocr_results.get(path)
                     results[path] = (
-                        ConversionResult(text=text)
+                        ConversionResult(
+                            text=text,
+                            gap=local.gap if local.gap != "ocr_unavailable" else None,
+                        )
                         if text
                         else local
                         if local.gap is not None

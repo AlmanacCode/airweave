@@ -31,7 +31,9 @@ from airweave.core.shared_models import (
 from airweave.db.session import get_tenant_db_context
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.page_source import CanonicalPageSource
-from airweave.domains.entities.canonical.search_metadata import SEARCH_METADATA_PIPELINE_VERSION
+from airweave.domains.entities.canonical.projection_policy import (
+    CURRENT_PROJECTION_PIPELINE_VERSION,
+)
 from airweave.domains.entities.canonical.source import CanonicalSource
 from airweave.domains.owned_provisioning.guard import require_provider_sync
 from airweave.domains.sources.exceptions.classifier import classify_error
@@ -155,7 +157,7 @@ class SyncService(SyncServiceProtocol):
             destination_connection_ids=destination_connection_ids,
             cron_schedule=cron,
             run_immediately=run_immediately,
-            initial_pipeline_version=(SEARCH_METADATA_PIPELINE_VERSION if canonical else 1),
+            initial_pipeline_version=(CURRENT_PROJECTION_PIPELINE_VERSION if canonical else 1),
             ctx=ctx,
             uow=uow,
         )

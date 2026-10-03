@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from airweave.domains.converters._base import HybridDocumentConverter
-from airweave.domains.converters.text_extractors.pptx import extract_pptx_text
+from airweave.domains.converters._base import ConversionResult, HybridDocumentConverter
+from airweave.domains.converters.text_extractors.pptx import extract_pptx, extract_pptx_text
 
 
 class PptxConverter(HybridDocumentConverter):
@@ -13,3 +13,6 @@ class PptxConverter(HybridDocumentConverter):
 
     async def _try_extract(self, path: str) -> Optional[str]:
         return await extract_pptx_text(path)
+
+    async def _extract_local(self, path: str) -> ConversionResult:
+        return await extract_pptx(path)

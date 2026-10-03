@@ -32,5 +32,7 @@ class BuiltTextBatch(BaseModel):
     entities: list[BaseEntity]
     representations: tuple[BuiltText, ...]
     failed_entity_ids: tuple[str, ...] = ()
-    conversion_gaps: dict[str, Literal["ocr_unavailable"]] = Field(default_factory=dict)
+    conversion_gaps: dict[str, Literal["ocr_unavailable", "embedded_content_unprocessed"]] = Field(
+        default_factory=dict
+    )
     conversion_failures: dict[str, Literal["preparation_limit"]] = Field(default_factory=dict)

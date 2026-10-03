@@ -57,7 +57,7 @@ async def test_concurrent_same_identity_and_immutable_collection(database, nativ
     assert all(result == results[0] for result in results)
     async with database() as db:
         assert await db.scalar(select(func.count()).select_from(Sync)) == 1
-        assert await db.scalar(select(Sync.index_pipeline_version)) == 3
+        assert await db.scalar(select(Sync.index_pipeline_version)) == 4
         await db.execute(update(Sync).values(index_pipeline_version=2))
         await db.commit()
         assert await db.scalar(select(func.count()).select_from(SourceConnection)) == 1

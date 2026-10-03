@@ -1076,8 +1076,8 @@ async def test_create_no_cron_no_run_immediately():
     "source_kind, source_config, expected_version",
     [
         ("legacy", None, 1),
-        ("gmail", None, 2),
-        ("slack", None, 2),
+        ("gmail", None, 4),
+        ("slack", None, 4),
         ("outlook_mail", None, 1),
         ("stripe", None, 1),
         (
@@ -1089,9 +1089,9 @@ async def test_create_no_cron_no_run_immediately():
                     "api_version": "2025-06-30.basil",
                 }
             },
-            2,
+            4,
         ),
-        ("outlook_mail", {"capture_originals": True, "expected_principal_id": "native-owner"}, 2),
+        ("outlook_mail", {"capture_originals": True, "expected_principal_id": "native-owner"}, 4),
     ],
 )
 async def test_create_with_cron_calls_temporal_schedule(

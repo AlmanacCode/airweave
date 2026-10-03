@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 from airweave.core.logging import logger
+from airweave.domains.converters._base import ConversionResult
 from airweave.domains.sync_pipeline.exceptions import SyncFailureError
+
+if TYPE_CHECKING:
+    from docx.document import Document as DocumentObject
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
 MIN_TOTAL_CHARS = 50
 
@@ -19,7 +25,7 @@ _HEADING_MAP = (
 )
 
 
-def _format_paragraph(para: Any) -> Optional[str]:
+def _format_paragraph(para: Paragraph) -> Optional[str]:
     text = para.text.strip()
     if not text:
         return None
@@ -36,7 +42,7 @@ def _format_paragraph(para: Any) -> Optional[str]:
     return text
 
 
-def _format_table(table: Any) -> str:
+def _format_table(table: Table) -> str:
     rows: list[str] = []
     for row in table.rows:
         cells = [cell.text.strip() for cell in row.cells]
@@ -51,20 +57,25 @@ def _format_table(table: Any) -> str:
 
 
 async def extract_docx_text(path: str) -> Optional[str]:
-    """Extract text from a DOCX and return markdown."""
+    """Return local text for consumers that do not own extraction coverage."""
+    return (await extract_docx(path)).text
+
+
+async def extract_docx(path: str) -> ConversionResult:
+    """Preserve text and disclose related content that this extractor cannot interpret."""
     try:
         from docx import Document
     except ImportError:
         raise SyncFailureError("python-docx required for DOCX text extraction but not installed")
 
-    def _extract() -> Optional[str]:
+    def _extract() -> ConversionResult:
         name = os.path.basename(path)
 
         try:
             doc = Document(path)
         except Exception as exc:
             logger.warning(f"Failed to open DOCX {name}: {exc}")
-            return None
+            return ConversionResult(text=None)
 
         parts: list[str] = []
 
@@ -83,9 +94,34 @@ async def extract_docx_text(path: str) -> Optional[str]:
         total_chars = len(markdown.strip())
         if total_chars < MIN_TOTAL_CHARS:
             logger.debug(f"DOCX {name}: only {total_chars} chars extracted, insufficient")
-            return None
+            markdown = None
 
         logger.debug(f"DOCX {name}: extracted {total_chars} chars")
-        return markdown
+        return ConversionResult(
+            text=markdown,
+            gap="embedded_content_unprocessed" if _has_embedded_content(doc) else None,
+        )
 
     return await asyncio.to_thread(_extract)
+
+
+def _has_embedded_content(document: DocumentObject) -> bool:
+    """Relationship evidence is conservative; it does not establish visibility or meaning."""
+    from docx.opc.constants import CONTENT_TYPE as CT
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    stories = {
+        CT.WML_DOCUMENT_MAIN,
+        CT.WML_HEADER,
+        CT.WML_FOOTER,
+        CT.WML_FOOTNOTES,
+        CT.WML_ENDNOTES,
+        CT.WML_COMMENTS,
+    }
+    unprocessed = {RT.IMAGE, RT.CHART, RT.DIAGRAM_DATA, RT.OLE_OBJECT, RT.AUDIO, RT.VIDEO}
+    return any(
+        relationship.reltype in unprocessed
+        for part in document.part.package.iter_parts()
+        if part.content_type in stories
+        for relationship in part.rels.values()
+    )

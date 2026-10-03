@@ -80,3 +80,23 @@ class TestTryReadAsText:
     def test_nonexistent_file_returns_none(self):
         result = HybridDocumentConverter._try_read_as_text("/nonexistent/file.docx")
         assert result is None
+
+
+@pytest.mark.parametrize("ocr_text", ["Recovered visual text", None])
+async def test_non_ocr_gap_survives_existing_no_text_fallback(tmp_path, ocr_text):
+    from docx import Document
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    from airweave.domains.converters.docx import DocxConverter
+
+    document = Document()
+    document.part.relate_to("https://never-fetch.invalid/image", RT.IMAGE, is_external=True)
+    path = tmp_path / "no-text.docx"
+    document.save(path)
+    fallback = AsyncMock()
+    fallback.convert_batch.return_value = {str(path): ocr_text}
+    result = (await DocxConverter(fallback).convert_batch([str(path)]))[str(path)]
+    fallback.convert_batch.assert_awaited_once_with([str(path)])
+    assert result.text == ocr_text and result.gap == "embedded_content_unprocessed"
+    no_ocr = (await DocxConverter().convert_batch([str(path)]))[str(path)]
+    assert no_ocr.text is None and no_ocr.gap == "embedded_content_unprocessed"

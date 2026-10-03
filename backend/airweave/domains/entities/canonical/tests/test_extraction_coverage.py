@@ -635,3 +635,77 @@ async def test_xlsx_limit_keeps_published_mail_body_and_captured_original(
                    .scalar_subquery()).select_from(Entity).join(Sync, Sync.id == Entity.sync_id)
         )
         assert "intact fundraising email body with useful context" in body.lower()
+
+
+async def test_embedded_content_gap_reaches_partial_mail_coverage_offline(tmp_path):
+    """Actual MIME mapping/converters/coverage; no SQL, embedding, OCR or remote feed."""
+    from io import BytesIO
+    from types import SimpleNamespace
+
+    from docx import Document
+    from PIL import Image
+
+    from airweave.domains.entities.canonical.gmail_projection import map_gmail
+    from airweave.domains.entities.canonical.projection_models import (
+        ProjectionBinding,
+        ProjectionWork,
+    )
+    from airweave.domains.entities.canonical.projector import (
+        ProjectionConversionTracker,
+        _conversion_coverage,
+        _select_inputs,
+    )
+    from airweave.domains.entities.canonical.tests.test_gmail_projection import record
+    from airweave.domains.sync_pipeline.pipeline.text_builder import TextualRepresentationBuilder
+
+    document = Document()
+    text = "नमस्ते — اردو — 中文. Retained attachment paragraph with useful source context."
+    document.add_paragraph(text)
+    image = BytesIO()
+    Image.new("RGB", (10, 10), "blue").save(image, format="PNG")
+    document.add_picture(image)
+    content = BytesIO()
+    document.save(content)
+    item = record(
+        {
+            "mimeType": "multipart/mixed",
+            "parts": [
+                part(b"Intact readable parent email body with enough useful source context."),
+                part(
+                    content.getvalue(),
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    filename="mixed.docx",
+                ),
+            ],
+        }
+    )
+    before = item.model_dump()
+    mapped = await map_gmail(item, AsyncMock(), tmp_path)
+    work = ProjectionWork(
+        binding=ProjectionBinding(
+            source_connection_id=uuid4(), source_name="gmail", collection_id=uuid4()
+        ),
+        organization_id=uuid4(),
+        record=item,
+        pipeline_version=1,
+        previous_generation=None,
+    )
+    selected, coverage = _select_inputs(mapped, work, "gmail", uuid4(), lambda _: True)
+    batch = await TextualRepresentationBuilder(ConverterRegistry()).build_with_text(
+        selected,
+        SimpleNamespace(source_short_name="gmail", logger=MagicMock()),
+        SimpleNamespace(entity_tracker=ProjectionConversionTracker()),
+        strict_conversion=True,
+        native_bodies={
+            p.entity.entity_id: p.native_body
+            for p in mapped.parts
+            if p.entity is not None and p.native_body is not None
+        },
+    )
+    covered = _conversion_coverage(batch, coverage)
+    assert covered.status == "partial"
+    assert [p.outcome for p in covered.parts] == ["indexed", "indexed"]
+    assert covered.parts[1].gaps == ("embedded_content_unprocessed",)
+    assert text in batch.representations[1].text
+    assert "readable parent email body" in batch.representations[0].text.lower()
+    assert item.model_dump() == before
