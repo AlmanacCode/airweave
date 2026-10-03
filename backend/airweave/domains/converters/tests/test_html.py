@@ -21,6 +21,26 @@ def temp_dir():
 
 class TestHtmlConverterEncodingValidation:
     @pytest.mark.asyncio
+    async def test_metadata_is_not_body_but_body_literals_and_languages_survive(
+        self, converter, tmp_path
+    ):
+        path = tmp_path / "meeting.html"
+        original = (
+            '<html><head><title>Mail export</title>'
+            '<meta name="description" content="Tracking boilerplate"></head>'
+            '<body><h1>Meeting</h1><p>हाँ مرحبا</p>'
+            '<pre>meta-description: useful body</pre></body></html>'
+        ).encode("utf-8")
+        path.write_bytes(original)
+
+        results = await converter.convert_batch([str(path)])
+
+        assert results[str(path)].text == (
+            '# Meeting\n\nहाँ مرحبا\n\n```\nmeta-description: useful body\n```'
+        )
+        assert path.read_bytes() == original
+
+    @pytest.mark.asyncio
     async def test_convert_clean_html(self, converter, temp_dir):
         file_path = os.path.join(temp_dir, "clean.html")
         html = """<!DOCTYPE html>

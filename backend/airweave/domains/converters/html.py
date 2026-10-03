@@ -15,7 +15,7 @@ class HtmlConverter(BaseTextConverter):
     async def convert_batch(self, file_paths: List[str]) -> Dict[str, ConversionResult]:
         """Convert HTML files to markdown text."""
         try:
-            from html_to_markdown import convert
+            from html_to_markdown import ConversionOptions, convert
         except ImportError:
             logger.error("html-to-markdown package not installed for HTML conversion")
             raise EntityProcessingError(
@@ -53,7 +53,11 @@ class HtmlConverter(BaseTextConverter):
                         if not html_content.strip():
                             return ""
 
-                        markdown = convert(html_content)
+                        # Keep generated head metadata out of body chunks/snippets.
+                        # The retained HTML remains the authoritative original.
+                        markdown = convert(
+                            html_content, ConversionOptions(extract_metadata=False)
+                        )
 
                         return markdown.strip() if markdown else ""
 
