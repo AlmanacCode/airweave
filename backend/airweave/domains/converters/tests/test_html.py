@@ -5,7 +5,30 @@ import tempfile
 
 import pytest
 
-from airweave.domains.converters.html import HtmlConverter
+from airweave.domains.converters.html import HtmlConverter, html_to_text
+
+
+@pytest.mark.parametrize("prefix", ["<br><span></span>", "x <br><span>हाँ</span>"])
+def test_visitor_offsets_preserve_hidden_languages_padding_and_original(prefix, tmp_path):
+    """Empty output and an offset inside a UTF-8 character must not panic."""
+    language = "Meaningful preview हाँ اردو क\u034fि"
+    padding = "&#847;&nbsp;" * 5
+    original = (
+        prefix
+        + f'<div style="display:none">{padding}{language}</div>'
+        + '<div hidden="">Accessible context اَلْعَرَبِيَّة</div>'
+    ).encode("utf-8")
+    path = tmp_path / "offset.html"
+    path.write_bytes(original)
+
+    text = html_to_text(path.read_text(encoding="utf-8"))
+
+    assert language in text
+    assert "Accessible context اَلْعَرَبِيَّة" in text
+    assert text.count("\u034f") == 1  # Preserve the Hindi combining character, not empty padding.
+    if "हाँ" in prefix:
+        assert "x" in text and text.count("हाँ") == 2
+    assert path.read_bytes() == original
 
 
 @pytest.fixture

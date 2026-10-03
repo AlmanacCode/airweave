@@ -5,7 +5,8 @@ from airweave.domains.entities.canonical.models import SourceRecord
 
 # Numeric publication authority. Existing sources change only through reviewed
 # expected-version reprojection; build/recipe fingerprints do not invalidate rows.
-CURRENT_PROJECTION_PIPELINE_VERSION = 5
+# Version 6 prepares HTML with corrected visitor offsets while preserving hidden text.
+CURRENT_PROJECTION_PIPELINE_VERSION = 6
 
 
 def excluded_from_search(record: SourceRecord, source_name: str) -> bool:
