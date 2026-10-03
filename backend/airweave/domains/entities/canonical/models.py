@@ -27,6 +27,9 @@ class SourceRecord(BaseModel):
     content_hash: str | None
     completeness: str
     observed_at: datetime
+    first_observed_at: datetime | None = None
+    revision_observed_at: datetime | None = None
+    first_stored_at: datetime | None = None
     source_created_at: datetime | None
     source_updated_at: datetime | None
     deleted_at: datetime | None
