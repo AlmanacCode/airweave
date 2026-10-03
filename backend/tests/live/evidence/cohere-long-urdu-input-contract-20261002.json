@@ -1,0 +1,106 @@
+{
+  "model": "embed-v5.0-pro",
+  "dimensions": 1024,
+  "truncate": "NONE",
+  "request_cap": 2,
+  "input_byte_cap": 60000,
+  "requests_started": 2,
+  "input_bytes_sent": 19150,
+  "sdk_retries": 0,
+  "index_writes": 0,
+  "source_provider_calls": 0,
+  "stages": [
+    {
+      "purpose": "document",
+      "input_type": "search_document",
+      "vectors": 4,
+      "finite": true,
+      "seconds": 0.489
+    },
+    {
+      "purpose": "query",
+      "input_type": "search_query",
+      "vectors": 3,
+      "finite": true,
+      "seconds": 0.18
+    }
+  ],
+  "provider_usage": [
+    {
+      "stage": "document",
+      "billed_units": {
+        "input_tokens": 2582.0,
+        "image_tokens": 0.0
+      },
+      "tokens": null
+    },
+    {
+      "stage": "query",
+      "billed_units": {
+        "input_tokens": 78.0,
+        "image_tokens": 0.0
+      },
+      "tokens": null
+    }
+  ],
+  "monthly_user_budget_usd": 50,
+  "budget_enforced_by_probe": false,
+  "dollar_cost": null,
+  "pricing_url": "https://cohere.com/pricing",
+  "pricing_note": "Public page lists Model Vault per-instance pricing; no verified Embed5Pro pay-as-you-go unit price.",
+  "input_bytes_planned": 19150,
+  "long_original_characters": 7395,
+  "long_original_utf8_bytes": 18433,
+  "long_original_sha256": "9911a63aa23051f04dc6bad7eb19ad78b7fabb2850ba951461fa47a378d9e0c9",
+  "long_manifest_ordinal": 784,
+  "synthetic_document_count": 3,
+  "synthetic_query_languages": [
+    "English",
+    "Urdu",
+    "Roman Urdu"
+  ],
+  "synthetic_diagnostics": [
+    {
+      "language": "English",
+      "synthetic_positive_rank": 1,
+      "positive_cosine": 0.41374100962867266,
+      "ordered_document_indices": [
+        1,
+        0,
+        3,
+        2
+      ]
+    },
+    {
+      "language": "Urdu",
+      "synthetic_positive_rank": 1,
+      "positive_cosine": 0.6366831630934374,
+      "ordered_document_indices": [
+        1,
+        3,
+        0,
+        2
+      ]
+    },
+    {
+      "language": "Roman Urdu",
+      "synthetic_positive_rank": 1,
+      "positive_cosine": 0.4696877693497346,
+      "ordered_document_indices": [
+        1,
+        0,
+        3,
+        2
+      ]
+    }
+  ],
+  "status": "success",
+  "limits": [
+    "Synthetic known-positive diagnostic, not a human-judged or full-corpus benchmark.",
+    "The real long input was accepted with truncate NONE; its semantic coverage was not measured.",
+    "Durations are two observed calls, not latency percentiles.",
+    "The monthly user budget was not independently checked or enforced by this probe."
+  ],
+  "runtime_adapter": "airweave.domains.embedders.dense.cohere.CohereDenseEmbedder",
+  "private_evidence_directory": "/tmp/cohere-long-urdu-6d772w4o"
+}
