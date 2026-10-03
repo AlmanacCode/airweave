@@ -344,16 +344,13 @@ async def test_mixed_coverage_wire_from_sql(database, source, tmp_path, monkeypa
                 "airweave.domains.entities.canonical.coverage.mixed_scope_summary",
                 no_forest_query,
             )
-            lightweight = (
-                await capture_coverage(
-                    db,
-                    source[1].organization_id,
-                    (source[1].sync_id,),
-                    include_scope_summary=False,
-                )
-            )[source[1].sync_id]
-        assert lightweight.phase == "complete" and lightweight.scope_summary is None
-        assert lightweight.discovery == "pending"
+            lightweight = await capture_coverage(
+                db,
+                source[1].organization_id,
+                (source[1].sync_id,),
+                include_scope_summary=False,
+            )
+        assert source[1].sync_id not in lightweight
     assert complete.scope_summary.completed_changes == 0
     source = await next_job(database, source)
     delta = MixedSource(fail_window=True, window="next-window")

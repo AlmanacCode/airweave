@@ -178,7 +178,8 @@ async def capture_coverage(
             and discovery == "scope_enumeration_complete"
         ):
             # Persisted phase does not re-attest today's mutable scope forest.
-            discovery = "pending"
+            # Omitted validation is unknown, not evidence that capture is pending.
+            continue
         result[row.sync_id] = CaptureCoverage(
             phase=cycle.phase,
             policies=policies,
