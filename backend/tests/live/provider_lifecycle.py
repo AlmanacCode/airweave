@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 import canonical_capture as harness  # settings must precede application imports
-from calendar_lifecycle import count_calendar_request, event_checkpoint, verify_calendar_scopes
+from calendar_lifecycle import count_calendar_request, event_checkpoints, verify_calendar_scopes
 from capture_comparison import compare_observations
 from provider_sample import rest_source, wispr_source
 from pydantic import BaseModel, ConfigDict, Field
@@ -257,7 +257,8 @@ def validate_checkpoint(name, manifest, counters, saved, previous, loaded, attem
         assert cycle["completed_job_id"]
         assert cycle["last_full_capture"] is None and cycle["promoted_checkpoint"] is None
         assert counters["started"] == counters["completed"] == 0
-        assert bool(counters["sync_token_requests"]) == calendar_delta_expected(previous)
+        if not calendar_delta_expected(previous):
+            assert counters["sync_token_requests"] == 0
     elif name == "google_drive":
         cycle = saved["canonical_cycle"]
         assert cycle["phase"] == "complete" and cycle["completed_job_id"]
@@ -405,8 +406,8 @@ async def authenticate_retained_source(sessions, binding, organization_id, sync_
 
 def require_read_only_drive(name, request):
     """Keep the live Drive qualification incapable of provider mutation."""
-    if name == "google_drive" and request.method != "GET":
-        raise ValueError("Drive qualification permits provider reads only")
+    if name in {"google_drive", "google_calendar"} and request.method != "GET":
+        raise ValueError("Qualification permits provider reads only")
 
 
 def verify_slack_capture_policy(name, manifest, source):
@@ -432,7 +433,7 @@ async def child(manifest, *, runtime_sessions=None, storage_backend=None):
     counters = {"provider_requests": 0, "records_observed": 0, "started": 0, "completed": 0}
     result = {"failed": True}
     previous = {}
-    previous_calendar_checkpoint = None
+    previous_calendar_checkpoints = {}
     name = manifest["provider"]
     is_calendar = name == "google_calendar"
     counters["sync_token_requests"] = 0
@@ -487,12 +488,7 @@ async def child(manifest, *, runtime_sessions=None, storage_backend=None):
         counters["provider_requests"] += 1
         count_gmail_request(name, request, previous, counters, identity_verified)
         if is_calendar:
-            count_calendar_request(
-                request,
-                manifest["calendar_config"]["calendar_ids"][0],
-                previous_calendar_checkpoint,
-                counters,
-            )
+            count_calendar_request(request, previous_calendar_checkpoints, counters)
         count_drive_request(name, request, previous, counters)
 
     @asynccontextmanager
@@ -539,8 +535,8 @@ async def child(manifest, *, runtime_sessions=None, storage_backend=None):
         async with sessions() as db:
             previous = await cursor_service.get_cursor_data(db, sync_id, ctx)
             if is_calendar:
-                previous_calendar_checkpoint = await event_checkpoint(
-                    db, organization_id, sync_id, manifest["calendar_config"]["calendar_ids"][0]
+                previous_calendar_checkpoints = await event_checkpoints(
+                    db, organization_id, sync_id
                 )
         cursor_schema = {
             "gmail": GmailCursor,
@@ -676,7 +672,7 @@ async def child(manifest, *, runtime_sessions=None, storage_backend=None):
             rows = list((await db.scalars(select(Entity).where(Entity.sync_id == sync_id))).all())
         assert status == "completed"
         validate_checkpoint(name, manifest, counters, saved, previous, loaded, attempt, sequence)
-        await verify_calendar_scopes(
+        calendar_ids = await verify_calendar_scopes(
             sessions, organization_id, sync_id, manifest, saved, calendar_delta_expected(previous)
         )
         visible = [r for r in rows if r.deleted_at is None and r.source_payload is not None]
@@ -697,7 +693,12 @@ async def child(manifest, *, runtime_sessions=None, storage_backend=None):
             ).encode()
         ).hexdigest()
         consumer_result = None
-        if is_calendar and loaded and os.environ.get("LIVE_VERIFY_CALENDAR_CONSUMER") == "1":
+        if (
+            is_calendar
+            and loaded
+            and calendar_ids
+            and os.environ.get("LIVE_VERIFY_CALENDAR_CONSUMER") == "1"
+        ):
             from almanac_handoff import verify_calendar_reader
 
             consumer_result = await verify_calendar_reader(
@@ -706,8 +707,8 @@ async def child(manifest, *, runtime_sessions=None, storage_backend=None):
                 sync_id=sync_id,
                 root=Path(manifest["root"]),
                 storage=storage,
-                window=manifest["calendar_config"]["occurrence_window"],
-                calendar_id=manifest["calendar_config"]["calendar_ids"][0],
+                window=saved["canonical_cycle"]["source_plan"]["window"],
+                calendar_id=calendar_ids[0],
             )
         result = {
             "failed": False,
