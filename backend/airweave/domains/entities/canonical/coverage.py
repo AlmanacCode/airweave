@@ -116,7 +116,11 @@ async def mixed_scope_summary(
 
 
 async def capture_coverage(
-    db: AsyncSession, organization_id: UUID, sync_ids: tuple[UUID, ...]
+    db: AsyncSession,
+    organization_id: UUID,
+    sync_ids: tuple[UUID, ...],
+    *,
+    include_scope_summary: bool = True,
 ) -> dict[UUID, CaptureCoverage]:
     """Read only existing tenant-scoped cycle metadata, never create an authority."""
     rows = await db.scalars(
@@ -155,15 +159,26 @@ async def capture_coverage(
             discovery = evidence.discovery
         summary = (
             await mixed_scope_summary(db, organization_id, row.sync_id, cycle)
-            if cycle.mode == "mixed"
+            if cycle.mode == "mixed" and include_scope_summary
             else None
         )
         if cycle.mode == "mixed" and (
             evidence is not None
             or promoted is not None
-            or (cycle.phase == "complete" and (summary is None or summary.unfinished != 0))
+            or (
+                include_scope_summary
+                and cycle.phase == "complete"
+                and (summary is None or summary.unfinished != 0)
+            )
         ):
             continue  # Withhold unknown/incompatible coverage instead of emitting a false promise.
+        if (
+            cycle.mode == "mixed"
+            and not include_scope_summary
+            and discovery == "scope_enumeration_complete"
+        ):
+            # Persisted phase does not re-attest today's mutable scope forest.
+            discovery = "pending"
         result[row.sync_id] = CaptureCoverage(
             phase=cycle.phase,
             policies=policies,

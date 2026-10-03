@@ -38,6 +38,8 @@ from airweave.domains.entities.canonical.query_models import (
     DocumentRead,
     IndexedRecordRead,
     MailThreadPage,
+    RecordBrowsePage,
+    RecordBrowseQuery,
     RecordChangePage,
     RecordFilters,
     RecordListQuery,
@@ -76,6 +78,17 @@ async def _search_disconnected(request: Request) -> None:
     # FastAPI has consumed this read-only search POST's body before entering the route.
     while (await request.receive())["type"] != "http.disconnect":
         pass
+
+
+@router.post("/browse", response_model=RecordBrowsePage)
+async def browse_records(
+    request: RecordBrowseQuery,
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> RecordBrowsePage:
+    """Browse retained source clocks without reading bodies, vectors or provider APIs."""
+    return await service.browse(db, ctx.organization.id, request)
 
 
 @router.post("/search", response_model=OwnedSearchResponse)
@@ -139,6 +152,7 @@ async def record_error_response(request: Request, error: CanonicalStoreError) ->
     status = {
         "source_not_found": 404,
         "record_not_found": 404,
+        "record_metadata_unavailable": 409,
         "blob_not_found": 404,
         "stale_record_revision": 409,
         "blob_unavailable": 503,

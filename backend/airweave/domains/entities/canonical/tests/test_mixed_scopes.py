@@ -300,7 +300,7 @@ async def test_forced_mixed_cycle_resumes_intent_across_attempts_and_jobs(databa
     assert resumed.prepared == 0
 
 
-async def test_mixed_coverage_wire_from_sql(database, source, tmp_path):
+async def test_mixed_coverage_wire_from_sql(database, source, tmp_path, monkeypatch):
     import json
 
     from airweave.domains.entities.canonical.cycle_models import BeginCycle
@@ -335,6 +335,25 @@ async def test_mixed_coverage_wire_from_sql(database, source, tmp_path):
             source[1].sync_id
         ]
         assert complete.scope_summary.unfinished == 0 and complete.phase == "complete"
+        with monkeypatch.context() as patch:
+
+            async def no_forest_query(*args):
+                raise AssertionError("Lightweight coverage must not query the scope forest")
+
+            patch.setattr(
+                "airweave.domains.entities.canonical.coverage.mixed_scope_summary",
+                no_forest_query,
+            )
+            lightweight = (
+                await capture_coverage(
+                    db,
+                    source[1].organization_id,
+                    (source[1].sync_id,),
+                    include_scope_summary=False,
+                )
+            )[source[1].sync_id]
+        assert lightweight.phase == "complete" and lightweight.scope_summary is None
+        assert lightweight.discovery == "pending"
     assert complete.scope_summary.completed_changes == 0
     source = await next_job(database, source)
     delta = MixedSource(fail_window=True, window="next-window")
