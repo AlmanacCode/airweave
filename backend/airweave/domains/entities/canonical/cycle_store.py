@@ -161,7 +161,7 @@ async def attest_cycle(
 
 
 def inventory_complete(subject, fence: WriterFence, state: CaptureCycle):
-    """Exact inventory that captured a parent must be fresh for this writer attempt."""
+    """Completed same-cycle inventory proves capture-time state, not present-time state."""
     owner = aliased(Entity)
     parent_id = (
         select(owner.id)
@@ -202,7 +202,7 @@ def inventory_complete(subject, fence: WriterFence, state: CaptureCycle):
                 subject.parent_record_type.is_(None),
                 subject.parent_record_type.not_in(state.configuration.exact_parent_validation),
                 and_(
-                    CaptureScan.parent_verified_attempt_id == fence.attempt_id,
+                    CaptureScan.parent_verified_attempt_id.is_not(None),
                     CaptureScan.parent_verified_revision
                     == select(owner.record_revision)
                     .where(owner.id == parent_id)
@@ -395,7 +395,7 @@ async def attest_scope(
 
 
 def child_scope_complete(fence: WriterFence, state: CaptureCycle, record_type: str):
-    """A completed child scope belongs to this exact owner generation."""
+    """Completed capture-time proof survives retries only for the same owner generation."""
     predicates = [
         CaptureScan.organization_id == fence.organization_id,
         CaptureScan.sync_id == fence.sync_id,
@@ -411,7 +411,7 @@ def child_scope_complete(fence: WriterFence, state: CaptureCycle, record_type: s
         or_(
             Entity.entity_definition_short_name.not_in(state.configuration.exact_parent_validation),
             and_(
-                CaptureScan.parent_verified_attempt_id == fence.attempt_id,
+                CaptureScan.parent_verified_attempt_id.is_not(None),
                 CaptureScan.parent_verified_revision == Entity.record_revision,
             ),
         )
