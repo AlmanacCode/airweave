@@ -1,0 +1,73 @@
+{
+  "runtime": "6b1092c",
+  "provider_calls": 0,
+  "paid_calls": 0,
+  "shared_schema_deployment": false,
+  "fixture_authentication": true,
+  "cleanup_performed": false,
+  "terminal": "completed",
+  "results": [
+    {
+      "mode": "keyword",
+      "cards": 1,
+      "expected_native_ranks": [
+        1
+      ],
+      "excluded": 0,
+      "engine_partial": false
+    },
+    {
+      "mode": "hybrid",
+      "cards": 1,
+      "expected_native_ranks": [
+        1
+      ],
+      "excluded": 0,
+      "engine_partial": false
+    }
+  ],
+  "retained_originals": 2,
+  "searchable_records": 1,
+  "listing_exclusions": 1,
+  "source_hash_unchanged": true,
+  "source_payloads_exact_in_copy": true,
+  "elapsed_seconds": 10.053,
+  "counts": {
+    "feed_bytes": 313330,
+    "derived_bytes": 101358,
+    "feed_documents": 10,
+    "local_dense": 11,
+    "vespa": 12,
+    "forbidden": 0
+  },
+  "date": "2026-10-02",
+  "qualification": "Actual OwnedSearchService against isolated Vespa collection; real retained source originals, synthetic local account binding",
+  "limits": {
+    "wall_seconds": 120,
+    "derived_and_feed_bytes": 16777216,
+    "free_floor_bytes": 2147483648
+  },
+  "pipeline_transition": {
+    "expected": 3,
+    "target": 4,
+    "operator": "plan_reprojection"
+  },
+  "preflight_correction": {
+    "error": "Wrong snapshot table name cursor; corrected to sync_cursor before fixture creation or inference",
+    "effects_before_correction": 0
+  },
+  "query_preserved": true,
+  "no_query_rewriting": true,
+  "native_principal_attested": false,
+  "full_corpus_reprojected": false,
+  "scoped_collection_retained_for_review": true,
+  "old_fixture_listeners_unchanged": true,
+  "limitations": [
+    "One searchable meeting cannot establish full-corpus ranking quality or recall.",
+    "Original fixed quote query now matches actual Vespa despite native whitespace differences; no query rewriting.",
+    "No provider account completeness, hosted authentication or native principal qualification.",
+    "Existing full Wispr v3 corpus has not been updated with overlap."
+  ],
+  "private_proof_sha256": "40d8cda769f8dfb3e6f93c283e25ae2c5c48c8fefe138a5db1cfb218a220f875",
+  "private_feed_manifest_sha256": "693754a9e5b5e81ad58251c0ca40f025d26db563d6bf1ee6a6617543f5ccaea9"
+}
