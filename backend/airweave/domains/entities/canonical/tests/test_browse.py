@@ -132,11 +132,12 @@ async def test_unprepared_cross_source_keyset_half_open_and_live_updates(databas
                 )
     assert orders[0] == list(reversed(orders[1]))
     from airweave.api import deps
-    from airweave.api.v1.endpoints.records import record_error_response, router
+    from airweave.api.v1.api import api_router
+    from airweave.api.v1.endpoints.records import record_error_response
     from airweave.domains.entities.canonical.store import CanonicalStoreError
 
     app = FastAPI()
-    app.include_router(router, prefix="/records")
+    app.include_router(api_router)
     app.add_exception_handler(CanonicalStoreError, record_error_response)
 
     async def session():
@@ -150,11 +151,11 @@ async def test_unprepared_cross_source_keyset_half_open_and_live_updates(databas
     app.dependency_overrides[deps.get_canonical_query_service] = lambda: service
     async with AsyncClient(transport=ASGITransport(app), base_url="http://fixture") as client:
         result = await client.post(
-            "/records/browse", json=RecordBrowseQuery(filters=filters).model_dump(mode="json")
+            "/sync/browse", json=RecordBrowseQuery(filters=filters).model_dump(mode="json")
         )
         assert result.status_code == 200 and len(result.json()["items"]) == 2
         invalid = await client.post(
-            "/records/browse",
+            "/sync/browse",
             json={"filters": {"basis": "first_stored", "sync_ids": [str(fence.sync_id)]}},
         )
         assert invalid.status_code == 422
