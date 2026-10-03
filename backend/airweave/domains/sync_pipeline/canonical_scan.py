@@ -223,8 +223,19 @@ class CanonicalScanDriver:
                 raise
 
     async def advance_children(self, cycle: CaptureCycle, scope: CompletedScope) -> None:
-        """Give freshly observed, exactly verified owners one child page of progress."""
-        if scope.record_type not in cycle.configuration.exact_parent_validation:
+        """Give admitted fresh owners one child page before continuing their inventory."""
+        discovery_root = (
+            cycle.mode == "full"
+            and scope.parent is None
+            and scope.container_id is None
+            and scope.record_type in cycle.configuration.root_record_types
+            and cycle.configuration.policy(scope.record_type) == "discovery_only"
+            and bool(cycle.configuration.children_of(scope.record_type))
+        )
+        if (
+            not discovery_root
+            and scope.record_type not in cycle.configuration.exact_parent_validation
+        ):
             return
         async with self.sessions() as db:
             work = await self.service.next_scope_work(

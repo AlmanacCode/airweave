@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import and_, exists, false, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -227,10 +227,40 @@ def membership_ready(fence: WriterFence, state: CaptureCycle):
     return and_(inventory_complete(Entity, fence, state), ~stale_ancestor)
 
 
+def observed_discovery_root(fence: WriterFence, state: CaptureCycle):
+    """A current-attempt root sighting permits work, never inventory completion."""
+    kinds = tuple(
+        kind
+        for kind in state.configuration.root_record_types
+        if state.configuration.policy(kind) == "discovery_only"
+        and state.configuration.children_of(kind)
+    )
+    if state.mode != "full" or not kinds:
+        return false()
+    return and_(
+        Entity.entity_definition_short_name.in_(kinds),
+        Entity.parent_record_type.is_(None),
+        Entity.container_id.is_(None),
+        exists(
+            select(CaptureScan.id).where(
+                CaptureScan.organization_id == fence.organization_id,
+                CaptureScan.sync_id == fence.sync_id,
+                CaptureScan.cycle_id == state.version.cycle_id,
+                CaptureScan.record_type == Entity.entity_definition_short_name,
+                CaptureScan.parent_record_id.is_(None),
+                CaptureScan.container_id.is_(None),
+                CaptureScan.membership_attempt_id == fence.attempt_id,
+                Entity.last_seen_run_id == CaptureScan.sweep_id,
+            )
+        ),
+    )
+
+
 def work_membership_ready(fence: WriterFence, state: CaptureCycle):
-    """Early work needs a seen exact-read owner; completion still requires full inventories."""
+    """Seen discovery roots or exact-read owners permit early work, not completion."""
+    root = observed_discovery_root(fence, state)
     if state.mode != "full" or not state.configuration.exact_parent_validation:
-        return membership_ready(fence, state)
+        return or_(root, membership_ready(fence, state))
     owner = aliased(Entity)
     early = exists(
         select(CaptureScan.id)
@@ -260,7 +290,7 @@ def work_membership_ready(fence: WriterFence, state: CaptureCycle):
         .join(ancestor, ancestor.id == chain.c.id)
         .where(~inventory_complete(ancestor, fence, state))
     )
-    return and_(or_(inventory_complete(Entity, fence, state), early), ~stale_ancestor)
+    return or_(root, and_(or_(inventory_complete(Entity, fence, state), early), ~stale_ancestor))
 
 
 async def root_ready(db: AsyncSession, fence: WriterFence, state: CaptureCycle) -> bool:
@@ -336,12 +366,12 @@ async def attest_scope(
         is None
     ):
         raise CycleConflict("Child scope no longer has a visible parent")
-    ready = await db.scalar(
-        select(Entity.id).where(
+    early_root = await db.scalar(
+        select(observed_discovery_root(fence, state)).where(
             Entity.id == parent.id, content_is_available(), work_membership_ready(fence, state)
         )
     )
-    if ready is None or not await root_ready(db, fence, state):
+    if early_root is None or (not early_root and not await root_ready(db, fence, state)):
         raise CycleConflict("Refresh and complete ancestor membership before child work")
     if (
         require_owner_receipt
