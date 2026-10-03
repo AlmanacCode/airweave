@@ -52,6 +52,7 @@ class MeetingPage(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     meetings: tuple[MeetingPreview, ...]
+    start_cursor: str
     next_cursor: str | None
     has_more: bool
     consistency: Literal["sequence_fenced"] = "sequence_fenced"
@@ -72,5 +73,12 @@ class MeetingCursor(BaseModel):
     sync_id: UUID
     filters: MeetingFilters
     sequence: int = Field(ge=0)
-    after_started_at: AwareDatetime
-    after_id: UUID
+    after_started_at: AwareDatetime | None = None
+    after_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def complete_position(self):
+        """Initial cursors omit both keyset coordinates; later cursors require both."""
+        if (self.after_started_at is None) != (self.after_id is None):
+            raise ValueError("Meeting cursor position must be a complete pair")
+        return self

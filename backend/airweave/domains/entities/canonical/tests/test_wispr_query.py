@@ -141,6 +141,11 @@ async def test_meetings_http_cursor_scope_sequence_and_post_read_revocation(
         assert first.headers["cache-control"] == "private, no-store"
         assert body["meetings"][0]["native_id"] == "b" and "capture" in body
         assert not any(key in body["meetings"][0] for key in ("content", "transcript", "payload"))
+        start_cursor = body["start_cursor"]
+        repeated = await client.get(base, params={"limit": 1, "cursor": start_cursor})
+        assert repeated.status_code == 200
+        assert repeated.json()["meetings"] == body["meetings"]
+        assert repeated.json()["start_cursor"] == start_cursor
         cursor = body["next_cursor"]
         assert (await client.get(base, params={"limit": 1, "cursor": cursor})).json()["meetings"][
             0
@@ -158,6 +163,7 @@ async def test_meetings_http_cursor_scope_sequence_and_post_read_revocation(
         owner[0] = fence.organization_id
         await capture(database, service, fence, *meeting("new"))
         assert (await client.get(base, params={"cursor": cursor})).status_code == 409
+        assert (await client.get(base, params={"cursor": start_cursor})).status_code == 409
         import airweave.domains.entities.canonical.wispr_query as module
 
         original = module.capture_coverage
