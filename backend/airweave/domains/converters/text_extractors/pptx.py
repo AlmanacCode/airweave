@@ -4,95 +4,101 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Iterator
+from itertools import chain
 from typing import TYPE_CHECKING, Optional, cast
 
 from airweave.core.logging import logger
 from airweave.domains.converters._base import ConversionResult
+from airweave.domains.converters.package_limits import (
+    PackageTextLimits,
+    PreparationLimit,
+    bounded_join,
+    check_package,
+)
 from airweave.domains.sync_pipeline.exceptions import SyncFailureError
 
 if TYPE_CHECKING:
     from pptx.shapes.base import BaseShape
     from pptx.slide import Slide
 
-MIN_TOTAL_CHARS = 50
 
-
-def _extract_shape_text(shape: BaseShape) -> list[str]:
+def _extract_shape_text(shape: BaseShape) -> Iterator[str]:
     from pptx.shapes.graphfrm import GraphicFrame
     from pptx.shapes.group import GroupShape
 
     if isinstance(shape, GroupShape):
-        return [line for child in shape.shapes for line in _extract_shape_text(child)]
-    lines: list[str] = []
+        for child in shape.shapes:
+            yield from _extract_shape_text(child)
+        return
 
     if shape.has_text_frame:
         for paragraph in shape.text_frame.paragraphs:
             text = paragraph.text.strip()
             if text:
-                lines.append(text)
+                yield text
 
     if shape.has_table:
         for row in cast(GraphicFrame, shape).table.rows:
             cells = [cell.text.strip() for cell in row.cells]
-            lines.append("| " + " | ".join(cells) + " |")
+            if any(cells):
+                yield "| " + " | ".join(cells) + " |"
 
-    return lines
 
-
-def _extract_slide(slide: Slide, slide_idx: int) -> str:
-    parts: list[str] = [f"## Slide {slide_idx}"]
-
+def _slide_content(slide: Slide) -> Iterator[str]:
     for shape in slide.shapes:
-        parts.extend(_extract_shape_text(shape))
-
+        yield from _extract_shape_text(shape)
     if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
         notes_text = slide.notes_slide.notes_text_frame.text.strip()
         if notes_text:
-            parts.append(f"\n> **Notes:** {notes_text}")
-
-    return "\n\n".join(parts)
+            yield f"> **Notes:** {notes_text}"
 
 
-async def extract_pptx_text(path: str) -> Optional[str]:
+def _extract_slide(slide: Slide, slide_idx: int, limits: PackageTextLimits) -> str:
+    content = _slide_content(slide)
+    first = next(content, None)
+    if first is None:
+        return ""
+    return bounded_join(chain((f"## Slide {slide_idx}", first), content), "\n\n", limits)
+
+
+async def extract_pptx_text(path: str, limits: PackageTextLimits | None = None) -> Optional[str]:
     """Keep the text-only consumer contract used by oversized-PPTX OCR fallback."""
-    return (await extract_pptx(path)).text
+    return (await extract_pptx(path, limits)).text
 
 
-async def extract_pptx(path: str) -> ConversionResult:
+async def extract_pptx(path: str, limits: PackageTextLimits | None = None) -> ConversionResult:
     """Extract local text with conservative disclosure of uninterpreted related content."""
     try:
         from pptx import Presentation
     except ImportError:
         raise SyncFailureError("python-pptx required for PPTX text extraction but not installed")
 
+    limits = limits or PackageTextLimits()
+
     def _extract() -> ConversionResult:
         name = os.path.basename(path)
 
         try:
+            check_package(path, limits)
             prs = Presentation(path)
+        except PreparationLimit:
+            raise
         except Exception as exc:
             logger.warning(f"Failed to open PPTX {name}: {exc}")
             return ConversionResult(text=None)
 
-        slide_markdowns = [
-            _extract_slide(slide, idx) for idx, slide in enumerate(prs.slides, start=1)
-        ]
-        markdown = "\n\n---\n\n".join(slide_markdowns)
-
-        total_chars = len(markdown.strip())
-        if total_chars < MIN_TOTAL_CHARS:
-            logger.debug(f"PPTX {name}: only {total_chars} chars extracted, insufficient")
-            markdown = None
-
-        logger.debug(f"PPTX {name}: extracted {total_chars} chars")
-        return ConversionResult(
-            text=markdown,
-            gap=(
-                "embedded_content_unprocessed"
-                if any(_has_embedded_content(slide) for slide in prs.slides)
-                else None
-            ),
+        slides = (
+            _extract_slide(slide, index, limits) for index, slide in enumerate(prs.slides, start=1)
         )
+        markdown = bounded_join((text for text in slides if text), "\n\n---\n\n", limits)
+        gap = (
+            "embedded_content_unprocessed"
+            if any(_has_embedded_content(slide) for slide in prs.slides)
+            else None
+        )
+        logger.debug(f"PPTX {name}: extracted {len(markdown)} chars")
+        return ConversionResult(text=markdown or (None if gap else ""), gap=gap)
 
     return await asyncio.to_thread(_extract)
 

@@ -38,6 +38,7 @@ def test_composition_facts_separate_embedding_from_extraction_without_loading_mo
         artifact_sha256=None,
         converter_extensions=ConverterRegistry().supported_extensions(),
         xlsx_limits=ConverterRegistry().xlsx_limits,
+        office_limits=ConverterRegistry().office_limits,
         configured_ocr=(),
         dense=dense.get("openai_text_embedding_3_small"),
         sparse=sparse.get("fastembed_bm25"),
@@ -46,13 +47,30 @@ def test_composition_facts_separate_embedding_from_extraction_without_loading_mo
     assert recipe.artifact_sha256 is None and ".png" not in recipe.extraction.converter_extensions
     assert recipe.extraction.actual_ocr_outcome == "unknown"
     assert recipe.extraction.xlsx_limits == ConverterRegistry().xlsx_limits
-    old_facts = recipe.extraction.model_dump(exclude={"xlsx_limits"})
-    assert type(recipe.extraction).model_validate(old_facts).xlsx_limits is None
-    limits_changed = recipe.model_copy(update={
-        "extraction": recipe.extraction.model_copy(update={
-            "xlsx_limits": recipe.extraction.xlsx_limits.model_copy(update={"maximum_rows": 100})
-        })
-    })
+    assert recipe.extraction.xlsx_limits.model_dump() == {
+        "maximum_package_members": 1024,
+        "maximum_expanded_bytes": 32 * 1024 * 1024,
+        "maximum_member_bytes": 16 * 1024 * 1024,
+        "maximum_output_bytes": 8 * 1024 * 1024,
+        "maximum_rows": 50_000,
+        "maximum_columns": 1024,
+        "maximum_cells": 250_000,
+    }
+    assert recipe.extraction.office_limits == ConverterRegistry().office_limits
+    old_facts = recipe.extraction.model_dump(exclude={"xlsx_limits", "office_limits"})
+    historical = type(recipe.extraction).model_validate(old_facts)
+    assert historical.xlsx_limits is None and historical.office_limits is None
+    limits_changed = recipe.model_copy(
+        update={
+            "extraction": recipe.extraction.model_copy(
+                update={
+                    "xlsx_limits": recipe.extraction.xlsx_limits.model_copy(
+                        update={"maximum_rows": 100}
+                    )
+                }
+            )
+        }
+    )
     assert recipe.component_digest("extraction") != limits_changed.component_digest("extraction")
     assert recipe.component_digest("embedding") == limits_changed.component_digest("embedding")
     assert recipe.chunking.semantic.boundary_model.sha256 is None

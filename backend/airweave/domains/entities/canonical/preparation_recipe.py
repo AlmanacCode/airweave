@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from airweave.domains.converters.package_limits import PackageTextLimits
 from airweave.domains.converters.xlsx_limits import XlsxLimits
 
 
@@ -52,6 +53,7 @@ class ExtractionRecipe(RecipeFact):
     configured_ocr: tuple[OcrPolicy, ...]
     actual_ocr_outcome: Literal["unknown"] = "unknown"
     xlsx_limits: XlsxLimits | None = None
+    office_limits: PackageTextLimits | None = None
 
 
 class SemanticRecipe(RecipeFact):

@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Optional
 
 from airweave.core.logging import logger
 from airweave.domains.converters._base import ConversionResult
+from airweave.domains.converters.package_limits import (
+    PackageTextLimits,
+    PreparationLimit,
+    bounded_join,
+    check_package,
+)
 from airweave.domains.sync_pipeline.exceptions import SyncFailureError
 
 if TYPE_CHECKING:
     from docx.document import Document as DocumentObject
     from docx.table import Table
     from docx.text.paragraph import Paragraph
-
-MIN_TOTAL_CHARS = 50
 
 _HEADING_MAP = (
     ("heading 1", "# "),
@@ -42,65 +47,65 @@ def _format_paragraph(para: Paragraph) -> Optional[str]:
     return text
 
 
-def _format_table(table: Table) -> str:
-    rows: list[str] = []
-    for row in table.rows:
-        cells = [cell.text.strip() for cell in row.cells]
-        rows.append("| " + " | ".join(cells) + " |")
+def _format_table(table: Table, limits: PackageTextLimits) -> str | None:
+    has_content = False
 
-    if len(rows) > 1:
-        col_count = len(table.rows[0].cells)
-        separator = "| " + " | ".join(["---"] * col_count) + " |"
-        rows.insert(1, separator)
+    def lines() -> Iterator[str]:
+        nonlocal has_content
+        for index, row in enumerate(table.rows):
+            cells = [cell.text.strip() for cell in row.cells]
+            has_content |= any(cells)
+            yield "| " + " | ".join(cells) + " |"
+            if index == 0 and len(table.rows) > 1:
+                yield "| " + " | ".join(["---"] * len(cells)) + " |"
 
-    return "\n".join(rows)
+    rendered = bounded_join(lines(), "\n", limits)
+    return rendered if has_content else None
 
 
-async def extract_docx_text(path: str) -> Optional[str]:
+def _document_parts(document: DocumentObject, limits: PackageTextLimits) -> Iterator[str]:
+    from docx.text.paragraph import Paragraph
+
+    for block in document.iter_inner_content():
+        text = (
+            _format_paragraph(block)
+            if isinstance(block, Paragraph)
+            else _format_table(block, limits)
+        )
+        if text:
+            yield text
+
+
+async def extract_docx_text(path: str, limits: PackageTextLimits | None = None) -> Optional[str]:
     """Return local text for consumers that do not own extraction coverage."""
-    return (await extract_docx(path)).text
+    return (await extract_docx(path, limits)).text
 
 
-async def extract_docx(path: str) -> ConversionResult:
+async def extract_docx(path: str, limits: PackageTextLimits | None = None) -> ConversionResult:
     """Preserve text and disclose related content that this extractor cannot interpret."""
     try:
         from docx import Document
     except ImportError:
         raise SyncFailureError("python-docx required for DOCX text extraction but not installed")
 
+    limits = limits or PackageTextLimits()
+
     def _extract() -> ConversionResult:
         name = os.path.basename(path)
 
         try:
+            check_package(path, limits)
             doc = Document(path)
+        except PreparationLimit:
+            raise
         except Exception as exc:
             logger.warning(f"Failed to open DOCX {name}: {exc}")
             return ConversionResult(text=None)
 
-        parts: list[str] = []
-
-        for para in doc.paragraphs:
-            line = _format_paragraph(para)
-            if line:
-                parts.append(line)
-
-        for table in doc.tables:
-            md_table = _format_table(table)
-            if md_table:
-                parts.append(md_table)
-
-        markdown = "\n\n".join(parts)
-
-        total_chars = len(markdown.strip())
-        if total_chars < MIN_TOTAL_CHARS:
-            logger.debug(f"DOCX {name}: only {total_chars} chars extracted, insufficient")
-            markdown = None
-
-        logger.debug(f"DOCX {name}: extracted {total_chars} chars")
-        return ConversionResult(
-            text=markdown,
-            gap="embedded_content_unprocessed" if _has_embedded_content(doc) else None,
-        )
+        markdown = bounded_join(_document_parts(doc, limits), "\n\n", limits)
+        gap = "embedded_content_unprocessed" if _has_embedded_content(doc) else None
+        logger.debug(f"DOCX {name}: extracted {len(markdown)} chars")
+        return ConversionResult(text=markdown or (None if gap else ""), gap=gap)
 
     return await asyncio.to_thread(_extract)
 

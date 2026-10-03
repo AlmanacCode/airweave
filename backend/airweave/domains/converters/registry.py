@@ -9,6 +9,7 @@ from airweave.domains.converters.code import CodeConverter
 from airweave.domains.converters.doc import DocConverter
 from airweave.domains.converters.docx import DocxConverter
 from airweave.domains.converters.html import HtmlConverter
+from airweave.domains.converters.package_limits import PackageTextLimits
 from airweave.domains.converters.pdf import PdfConverter
 from airweave.domains.converters.pptx import PptxConverter
 from airweave.domains.converters.protocols import ConverterRegistryProtocol
@@ -30,8 +31,9 @@ class ConverterRegistry(ConverterRegistryProtocol):
         """Build all converter instances and the extension mapping."""
         pdf = PdfConverter(ocr_provider=ocr_provider)
         doc = DocConverter(ocr_provider=ocr_provider)
-        docx = DocxConverter(ocr_provider=ocr_provider)
-        pptx = PptxConverter(ocr_provider=ocr_provider)
+        self.office_limits = PackageTextLimits()
+        docx = DocxConverter(ocr_provider=ocr_provider, limits=self.office_limits)
+        pptx = PptxConverter(ocr_provider=ocr_provider, limits=self.office_limits)
         html = HtmlConverter()
         txt = TxtConverter()
         strict_text = StrictTextConverter()

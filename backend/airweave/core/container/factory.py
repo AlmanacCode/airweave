@@ -378,6 +378,7 @@ def create_container(settings: Settings) -> Container:
         artifact_sha256=settings.PREPARATION_ARTIFACT_SHA256,
         converter_extensions=converter_registry.supported_extensions(),
         xlsx_limits=converter_registry.xlsx_limits,
+        office_limits=converter_registry.office_limits,
         configured_ocr=ocr_provider.configured_policy if ocr_provider is not None else (),
         dense=dense_embedder_registry.get(DENSE_EMBEDDER),
         sparse=sparse_embedder_registry.get(SPARSE_EMBEDDER),

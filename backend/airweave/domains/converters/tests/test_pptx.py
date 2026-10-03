@@ -86,3 +86,59 @@ async def test_pptx_mixed_and_grouped_content_preserves_text_notes_original(tmp_
     assert result.gap == (None if media == "none" else "embedded_content_unprocessed")
     ocr.convert_batch.assert_not_awaited()
     assert path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["नमस्ते", "اردو"])
+async def test_short_unicode_pptx_survives_without_ocr(tmp_path, text):
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(0, 0, Inches(5), Inches(1)).text = text
+    path = tmp_path / "short.pptx"
+    presentation.save(path)
+    ocr = AsyncMock()
+    result = (await PptxConverter(ocr).convert_batch([str(path)]))[str(path)]
+    assert text in result.text and result.failure_reason is None
+    ocr.convert_batch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slide_count", [1, 8])
+async def test_empty_slides_are_known_empty_without_generated_content_or_ocr(tmp_path, slide_count):
+    from pptx import Presentation
+
+    presentation = Presentation()
+    for _ in range(slide_count):
+        presentation.slides.add_slide(presentation.slide_layouts[6])
+    path = tmp_path / "empty.pptx"
+    presentation.save(path)
+    ocr = AsyncMock()
+    result = (await PptxConverter(ocr).convert_batch([str(path)]))[str(path)]
+    assert result.text == "" and result.gap is None and result.failure_reason is None
+    ocr.convert_batch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pptx_output_limit_includes_headings_and_preserves_original(tmp_path):
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from airweave.domains.converters.package_limits import PackageTextLimits
+
+    presentation = Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[6]).shapes.add_textbox(
+        0, 0, Inches(5), Inches(1)
+    ).text = "اردو"
+    path = tmp_path / "bounded.pptx"
+    presentation.save(path)
+    before = path.read_bytes()
+    ocr = AsyncMock()
+    ocr.convert_batch.side_effect = AssertionError("Output limit must not call OCR")
+    converter = PptxConverter(ocr, PackageTextLimits(maximum_output_bytes=12))
+    result = (await converter.convert_batch([str(path)]))[str(path)]
+    assert result.text is None and result.failure_reason == "preparation_limit"
+    assert path.read_bytes() == before
+    ocr.convert_batch.assert_not_awaited()

@@ -1,5 +1,6 @@
 """Compose provenance from the same concrete inputs used to construct preparation."""
 
+from airweave.domains.converters.package_limits import PackageTextLimits
 from airweave.domains.converters.xlsx_limits import XlsxLimits
 from airweave.domains.embedders.types import DenseEmbedderEntry, SparseEmbedderEntry
 from airweave.domains.entities.canonical.preparation_recipe import (
@@ -22,6 +23,7 @@ def preparation_recipe(
     converter_extensions: tuple[str, ...],
     configured_ocr: tuple[OcrPolicy, ...],
     xlsx_limits: XlsxLimits | None = None,
+    office_limits: PackageTextLimits | None = None,
     dense: DenseEmbedderEntry,
     sparse: SparseEmbedderEntry,
     dimensions: int,
@@ -35,6 +37,7 @@ def preparation_recipe(
             converter_extensions=converter_extensions,
             configured_ocr=configured_ocr,
             xlsx_limits=xlsx_limits,
+            office_limits=office_limits,
         ),
         chunking=ChunkingRecipe(
             semantic=SemanticRecipe(

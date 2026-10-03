@@ -637,7 +637,8 @@ async def test_xlsx_limit_keeps_published_mail_body_and_captured_original(
         assert "intact fundraising email body with useful context" in body.lower()
 
 
-async def test_embedded_content_gap_reaches_partial_mail_coverage_offline(tmp_path):
+@pytest.mark.parametrize("over_limit", [False, True])
+async def test_embedded_content_gap_reaches_partial_mail_coverage_offline(tmp_path, over_limit):
     """Actual MIME mapping/converters/coverage; no SQL, embedding, OCR or remote feed."""
     from io import BytesIO
     from types import SimpleNamespace
@@ -645,6 +646,8 @@ async def test_embedded_content_gap_reaches_partial_mail_coverage_offline(tmp_pa
     from docx import Document
     from PIL import Image
 
+    from airweave.domains.converters.docx import DocxConverter
+    from airweave.domains.converters.package_limits import PackageTextLimits
     from airweave.domains.entities.canonical.gmail_projection import map_gmail
     from airweave.domains.entities.canonical.projection_models import (
         ProjectionBinding,
@@ -691,10 +694,20 @@ async def test_embedded_content_gap_reaches_partial_mail_coverage_offline(tmp_pa
         previous_generation=None,
     )
     selected, coverage = _select_inputs(mapped, work, "gmail", uuid4(), lambda _: True)
-    batch = await TextualRepresentationBuilder(ConverterRegistry()).build_with_text(
+    registry = ConverterRegistry()
+    if over_limit:
+        # Narrow fixture dependency: real DOCX extraction with a small output budget.
+        bounded_docx = DocxConverter(limits=PackageTextLimits(maximum_output_bytes=1))
+        configured = MagicMock()
+        configured.for_extension.side_effect = lambda extension, actual=registry: (
+            bounded_docx if extension == ".docx" else actual.for_extension(extension)
+        )
+        configured.for_web.side_effect = registry.for_web
+        registry = configured
+    batch = await TextualRepresentationBuilder(registry).build_with_text(
         selected,
         SimpleNamespace(source_short_name="gmail", logger=MagicMock()),
-        SimpleNamespace(entity_tracker=ProjectionConversionTracker()),
+        SimpleNamespace(entity_tracker=ProjectionConversionTracker(allow_failures=True)),
         strict_conversion=True,
         native_bodies={
             p.entity.entity_id: p.native_body
@@ -704,8 +717,12 @@ async def test_embedded_content_gap_reaches_partial_mail_coverage_offline(tmp_pa
     )
     covered = _conversion_coverage(batch, coverage)
     assert covered.status == "partial"
-    assert [p.outcome for p in covered.parts] == ["indexed", "indexed"]
-    assert covered.parts[1].gaps == ("embedded_content_unprocessed",)
-    assert text in batch.representations[1].text
+    assert [p.outcome for p in covered.parts] == ["indexed", "failed" if over_limit else "indexed"]
+    if over_limit:
+        assert covered.parts[1].reason == "preparation_limit"
+        assert len(batch.representations) == 1
+    else:
+        assert covered.parts[1].gaps == ("embedded_content_unprocessed",)
+        assert text in batch.representations[1].text
     assert "readable parent email body" in batch.representations[0].text.lower()
     assert item.model_dump() == before
