@@ -52,6 +52,26 @@ Binary precision, recall and reciprocal rank count grades >= 1 as relevant.
 `ir-measures` supplies nDCG with its default linear graded gain, RR, P and R;
 we do not maintain custom implementations of that scoring math.
 
+### Importing assessor labels
+
+Assessor rubrics must match those meanings before becoming scorer judgments.
+For example, a private rubric may use 1 for "tangential, not useful". Export that
+label as **0**, not 1; preserve its original label and the explicit mapping in
+the assessment evidence. Partial answers graded 2 and direct answers graded 3
+can retain their grades. A topical match that does not help answer the query is
+not marginally useful merely because it shares words with the query.
+
+Judge the displayed snippet and the underlying original separately. An unhelpful
+snippet does not prove that the original lacks an answer. Read retained content
+when needed; otherwise leave document relevance unknown and omit its qrel rather
+than inventing a zero. Record the inspected part/revision and assessor provenance.
+Report the judged fraction of each result window alongside pooled metrics. Recall
+against a judged pool is not recall against every connected account.
+
+Changing labels creates a new dataset fingerprint. Reuse saved rankings for an
+explicit offline re-evaluation bound to that new dataset; never overwrite the
+original experiment or repeat paid retrieval merely to change its labels.
+
 Every known-answer query needs a positive judgment. `no_answer` queries explicitly
 assert no relevant answer in this corpus and have no positive judgments. Their
 empty-success outcome is reported separately, not averaged into nDCG/recall.
