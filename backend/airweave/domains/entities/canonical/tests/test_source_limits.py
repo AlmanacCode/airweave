@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import shutil
 import socket
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -26,11 +27,14 @@ from airweave.platform.http_client.airweave_client import AirweaveHttpClient
 @pytest.fixture
 async def local_redis(tmp_path):
     """One nonpersistent process, no shared keys or existing Redis connections."""
+    executable = shutil.which("redis-server")
+    if executable is None:
+        pytest.skip("Source limit integration requires redis-server")
     with socket.socket() as socket_:
         socket_.bind(("127.0.0.1", 0))
         port = socket_.getsockname()[1]
     process = await asyncio.create_subprocess_exec(
-        "/opt/homebrew/bin/redis-server", "--bind", "127.0.0.1", "--port", str(port),
+        executable, "--bind", "127.0.0.1", "--port", str(port),
         "--save", "", "--appendonly", "no", "--dir", str(tmp_path),
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
         env={**os.environ, "LC_ALL": "C"},
