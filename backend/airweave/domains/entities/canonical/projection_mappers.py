@@ -287,6 +287,25 @@ def _calendar(record: SourceRecord) -> tuple[BaseEntity, ...]:
     )
 
 
+async def _calendar_inputs(record: SourceRecord) -> ProjectionInputs:
+    """Calendar descriptions can contain HTML; preserve original JSON separately."""
+    from airweave.domains.converters.html import html_to_text
+    from airweave.domains.sync_pipeline.async_helpers import run_in_thread_pool
+
+    (entity,) = _calendar(record)
+    part = _projection_input(0, entity)
+    if record.identity.record_type != "event" or record.payload.get("description") is None:
+        return ProjectionInputs(parts=(part,))
+    # The provider has no contentType flag. Parse every present description using
+    # its documented HTML-capable semantics, without guessing from tag patterns.
+    body = NativeTextBody(
+        text=await run_in_thread_pool(html_to_text, _string(record.payload["description"])),
+        kind="extracted_text",
+        metadata_fields=("description",),
+    )
+    return ProjectionInputs(parts=(part.model_copy(update={"native_body": body}),))
+
+
 def _slack(record: SourceRecord) -> tuple[BaseEntity, ...]:
     payload = record.payload
     if record.identity.record_type == "channel":
@@ -565,6 +584,9 @@ async def map_record(  # noqa: C901 -- explicit provider dispatch keeps mapper o
             )
 
             yield await map_notion_property(record, storage)
+            return
+        elif source_name == "google_calendar":
+            yield await _calendar_inputs(record)
             return
         elif source_name == "wispr":
             yield _wispr_inputs(record)

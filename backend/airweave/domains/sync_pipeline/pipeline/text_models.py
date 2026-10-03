@@ -8,10 +8,11 @@ from airweave.platform.entities._base import BaseEntity
 
 
 class NativeTextBody(BaseModel):
-    """Source-selected body; an empty string is present content, not missing content."""
+    """Source-selected body with explicit conversion provenance; empty is present content."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     text: str
+    kind: Literal["native_text", "extracted_text"] = "native_text"
     metadata_fields: tuple[str, ...] = ()
 
 

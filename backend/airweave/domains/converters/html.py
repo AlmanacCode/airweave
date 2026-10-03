@@ -49,20 +49,29 @@ class _PreheaderPaddingVisitor:
         return {"type": "continue"}
 
 
+def html_to_text(content: str) -> str:
+    """Render retained provider HTML using the same body-only conversion policy."""
+    try:
+        from html_to_markdown import ConversionOptions, convert_with_visitor
+    except ImportError as error:
+        raise EntityProcessingError("HTML conversion requires html-to-markdown package") from error
+    if not content.strip():
+        return ""
+    markdown = convert_with_visitor(
+        content,
+        ConversionOptions(extract_metadata=False),
+        visitor=_PreheaderPaddingVisitor(),
+    )
+    return markdown.strip() if markdown else ""
+
+
 class HtmlConverter(BaseTextConverter):
     """Converts HTML files to markdown text using html-to-markdown."""
 
     async def convert_batch(self, file_paths: List[str]) -> Dict[str, ConversionResult]:
         """Convert HTML files to markdown text."""
-        try:
-            from html_to_markdown import ConversionOptions, convert_with_visitor
-        except ImportError:
-            logger.error("html-to-markdown package not installed for HTML conversion")
-            raise EntityProcessingError(
-                "HTML conversion requires html-to-markdown package. "
-                "Install with: pip install html-to-markdown"
-            )
-
+        # Preserve batch-wide dependency failure before per-file error handling.
+        html_to_text("")
         logger.info(f"Converting {len(file_paths)} HTML files to markdown...")
 
         results = {}
@@ -90,18 +99,7 @@ class HtmlConverter(BaseTextConverter):
                                     f"({replacement_count} replacement chars)"
                                 )
 
-                        if not html_content.strip():
-                            return ""
-
-                        # Keep generated head metadata out of body chunks/snippets.
-                        # The retained HTML remains the authoritative original.
-                        markdown = convert_with_visitor(
-                            html_content,
-                            ConversionOptions(extract_metadata=False),
-                            visitor=_PreheaderPaddingVisitor(),
-                        )
-
-                        return markdown.strip() if markdown else ""
+                        return html_to_text(html_content)
 
                     text = await run_in_thread_pool(_convert)
 
