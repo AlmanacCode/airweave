@@ -29,7 +29,7 @@ claiming recovery is verified in this deployment.
 
 Provision isolated PostgreSQL databases for application and Temporal state;
 private Redis, Temporal and Svix; persistent Vespa with the matching application
-package; local MiniLM inference; and a private S3 bucket for canonical bytes.
+package; configured Cohere inference; and a private S3 bucket for canonical bytes.
 Use the repository's existing dependency configurations as inputs, not its local
 Compose file as a production deployment: that file enables local auth and exposes
 ports. Dependency image pins, persistent volumes, backups and a restore exercise
@@ -45,7 +45,7 @@ no initialized Temporal client after a transient startup outage.
 
 Create the Porter environment group `almanac-source-store-staging` with only the
 owned service's values. Supply database connection settings, Redis endpoint,
-Temporal endpoint/namespace, Vespa endpoint, TEXT2VEC_INFERENCE_URL,
+Temporal endpoint/namespace, Vespa endpoint, COHERE_API_KEY,
 STORAGE_AWS_BUCKET, SVIX_URL, SVIX_JWT_SECRET and the application's required
 encryption/signing secrets. Inspect `backend/airweave/core/config/settings.py`
 for exact current fields. Do not copy the main product database from Doppler.
@@ -59,16 +59,22 @@ search with missing content. Configure an OCR backend to index those documents.
 This does not mean every PDF requires OCR: the PDF converter first tries local
 text extraction. Image conversion requires an OCR backend.
 
-The selected local MiniLM service is a startup dependency for both API and worker:
-composition checks its health endpoint. FastEmbed and the semantic chunker also
-load public model artifacts; provide a writable persistent model cache and verify
-startup with the intended network policy. OCR, generative search credentials,
-Cohere reranking, frontend and Temporal UI are optional for owned indexed search.
+The selected embedding recipe is Cohere Embed 5 Pro (`cohere_embed_v5_pro`),
+1,024 dimensions, matching the retained-corpus qualification. Supply the key via
+secret management; no local MiniLM service is part of this staging template.
+FastEmbed and the semantic chunker still load public model artifacts; prewarm a
+writable persistent model cache and qualify startup under the intended network
+policy. Removing MiniLM does not remove those local preparation dependencies.
 
-The manifest uses local embeddings to avoid assuming third-party model credits.
-Semantic quality and resource use still need measurement. Do not claim generative
-search is operational without separately configured model credentials and a live
-search test.
+Cohere is metered separately from AWS. The configured account's $50/month cap is
+not a credit-eligibility claim or an application-enforced per-import budget.
+Reranking remains opt-in at the product query contract, not implicitly enabled
+by supplying an embedding key. No generative-search capability is implied.
+
+This template is for a fresh isolated index configured with the same model and
+1,024-dimensional schema. Do not point it at an existing 384-dimensional index or
+silently relabel stored vectors; changing models requires an explicit new index/
+reprojection and verified cutover. Existing MiniLM CI fixtures remain unchanged.
 
 ## Local image build
 
@@ -129,3 +135,88 @@ The default remains `0.0.0.0` for container networking. Binding limits network
 reachability; it does not authenticate these endpoints, including `POST /drain`.
 Keep container worker ports private. API listener and API metrics bindings are
 configured separately.
+
+## Shared process capacity
+
+The checked-in manifest explicitly sets `DB_POOL_SIZE=8`,
+`DB_POOL_MAX_OVERFLOW=0`, `TEMPORAL_MAX_CONCURRENT_ACTIVITIES=4`, and
+`TEMPORAL_MAX_CONCURRENT_WORKFLOW_TASKS=8`. These are initial bounded budgets,
+not measured throughput or freshness guarantees. SQL pool capacity no longer
+comes from `SYNC_MAX_WORKERS`; that setting remains per-sync record/batch
+processing concurrency (two in this manifest), not worker replicas or whole
+pipeline concurrency.
+
+Each process can expose eight application SQL connections plus one independent
+health connection. In tenant mode the application budget splits into seven
+content connections and one control connection, with no overflow. One API plus
+one worker therefore has a configured ceiling of **18**; one API plus two worker
+replicas has **27**. Count each additional Uvicorn process, replica and rollout
+surge separately, and add migrations, operators, Temporal persistence and other
+clients to the database's total budget. Pools grow lazily: ceilings are not
+observed connection usage. Connections wait at most the existing 30-second pool
+checkout timeout; this is not a whole-operation deadline.
+
+Each worker admits at most four remote Temporal activities at once. Two worker
+replicas admit eight total, independently of the API process. Eight workflow
+**tasks** per worker bounds execution of workflow decisions, not the number of
+waiting durable workflows. The existing eight workflow pollers and sixteen
+activity pollers control long polling, not admission. A real installed-SDK test
+with those poller values admitted four blocked activities and left the fifth
+queued until a slot was released. No local activities or Nexus handlers are
+registered; those unused SDK slot kinds are not an additional processing path.
+
+Activities can perform multiple internal operations. Canonical capture uses
+ordered durable batches; preparation uses its existing projector; legacy syncs
+have their own record semaphore, provider/model limits and executor. Four
+activity slots do not establish a whole-pipeline four/eight-record bound.
+Retain provider backoff, rate limits and record bounds; measure SQL checkout
+waits, backlog and per-stage memory before increasing capacity.
+
+Sync admission now uses one short transaction under the existing sync-row lock.
+The internal job UUID is stable for organization, sync, Temporal namespace/run/activity
+identity. Exact retries reuse the current-generation job; manual and scheduled
+callers cannot both admit a new active job. Failed/cancelled operations are failures,
+not successful skips. Ordinary busy schedules skip; forced busy schedules defer
+through SDK backoff without retaining an activity slot or SQL session.
+
+New workflow histories use thirty-second attempts and constant thirty-second retry
+intervals. Ordinary admissions have at most three attempts within two minutes;
+forced admissions have a sixty-five-minute schedule-to-close bound. Explicit
+admission errors are nonretryable; SDK timeout uncertainty can retry the same ID.
+The workflow patch preserves previous command policy when replaying old histories.
+Event publication remains best effort and cannot fail an admitted job's reply.
+
+Exhausting retries after commit can leave PENDING until existing recovery runs:
+API startup ensures the singleton cleanup schedule every 150 seconds, which finds
+provider PENDING jobs older than three minutes and transitions them to CANCELLED.
+Admission failure is outside the workflow's execution transition handler. Cleanup
+availability is therefore a real deployment prerequisite, not an unconditional
+latency guarantee; a failed cleanup leaves the pending job visible and blocking.
+No new recovery queue or job metadata was introduced.
+
+Temporal Python SDK 1.22.0 / Python 3.13 qualification used its actual default
+sandbox and callable result decoder. The production typed activity initially
+failed decoding postponed dataclass fields (`NameError: Any`); eager annotations
+in `activity_results.py` resolve it without widening sandbox passthrough or changing
+the wire result. The four-slot test uses production admission and retry policy:
+four busy attempts close SQL contexts, a queued completion activity runs, then
+all four retry with unchanged distinct operation IDs. A separate ordinary run
+commits a pending job, loses its reply through the real thirty-second SDK timeout,
+and recovers the same job on attempt two. PostgreSQL qualification uses an isolated
+schema for committed replay, concurrent admission, and current authority fences.
+Focused results: 23 admission/activity/workflow checks passed (2.39s); the
+four-slot SDK case passed (3.10s), ordinary real-time timeout case passed (32.71s),
+and 51 existing sync service checks passed (2.97s). An additional actual SQL
+cleanup-entrypoint test passed (3.29s): it cancels an eligible stable-UUID pending
+job, permits a subsequent admission, and leaves a recent running job untouched.
+The cleanup fixture supplies the absent external cancellation response; SQL
+selection and state-machine updates are real. These isolated-schema tests do not
+requalify deployed role grants or schedules. These are local SDK/SQL proofs,
+not a deployed restart or provider throughput test.
+
+Local verification: twenty-one configuration/wiring/shutdown checks passed in
+focused runs; the real
+SDK admission test passed against a disposable Temporal test server. No provider,
+model, production database, running fixture configuration or deployment changed.
+The SDK capacity knobs are documented by
+[Temporal's Python worker](https://github.com/temporalio/sdk-python/blob/main/temporalio/worker/_worker.py).

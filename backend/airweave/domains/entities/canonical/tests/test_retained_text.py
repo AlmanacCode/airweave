@@ -85,7 +85,18 @@ async def publication(database, source, tmp_path):
 
     async def fixed_chunks(entities, context, runtime):
         return processor._multiply_entities(
-            entities, [[{"text": entity.textual_representation}] for entity in entities], context
+            entities,
+            [
+                [
+                    {
+                        "text": entity.textual_representation,
+                        "start_index": 0,
+                        "end_index": len(entity.textual_representation),
+                    }
+                ]
+                for entity in entities
+            ],
+            context,
         )
 
     processor._chunk_entities = fixed_chunks
@@ -98,7 +109,7 @@ async def publication(database, source, tmp_path):
     }
     records = CanonicalQueryService(CanonicalRecordStore(), CanonicalQueryStore(), "test-key")
     reader = CanonicalTextReader(records, storage)
-    projector = CanonicalProjector(store, database, processor, storage)
+    projector = CanonicalProjector(store, lambda _organization: database(), processor, storage)
     return SimpleNamespace(
         service=service,
         fence=fence,
@@ -148,7 +159,8 @@ async def test_pdf_full_content_read_is_single_conversion_and_published_with_ind
             yield db
 
     app.dependency_overrides[get_db] = session
-    app.dependency_overrides[deps.get_context] = lambda: SimpleNamespace(
+    app.dependency_overrides[deps.get_tenant_db] = session
+    app.dependency_overrides[deps.get_owned_context] = lambda: SimpleNamespace(
         organization=SimpleNamespace(id=p.fence.organization_id)
     )
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(
@@ -265,12 +277,16 @@ async def test_abandoned_generation_text_is_in_bounded_repeatable_gc(database, p
             select(ProjectionGeneration).where(ProjectionGeneration.record_id == p.work.record.id)
         )
         generation = row.id
+        document_count = len(row.documents)
+        artifact_count = len(row.text_representations)
     now = datetime.now(timezone.utc) + timedelta(hours=2)
     gc = ProjectionGCStore()
-    async with database() as db:
-        first = await gc.claim(db, generation, now=now, limit=1)
-        assert len(first.documents) == 1 and not first.artifact_keys
-        await gc.acknowledge(db, first, now=now)
+    assert document_count and artifact_count
+    for _ in range(document_count):
+        async with database() as db:
+            page = await gc.claim(db, generation, now=now, limit=1)
+            assert len(page.documents) == 1 and not page.artifact_keys
+            await gc.acknowledge(db, page, now=now)
     async with database() as db:
         second = await gc.claim(db, generation, now=now, limit=1)
         assert not second.documents and len(second.artifact_keys) == 1
@@ -282,11 +298,20 @@ async def test_abandoned_generation_text_is_in_bounded_repeatable_gc(database, p
             retained = await p.storage.read_file(key)
             await p.storage.delete_file(key)
         await gc.acknowledge(db, retry, now=now + timedelta(minutes=6))
+    reclaimed = list(retry.artifact_keys)
+    for _ in range(artifact_count - 1):
+        async with database() as db:
+            page = await gc.claim(db, generation, now=now + timedelta(minutes=6), limit=1)
+            assert not page.documents and len(page.artifact_keys) == 1
+            for key in page.artifact_keys:
+                await p.storage.delete_file(key)
+            reclaimed.extend(page.artifact_keys)
+            await gc.acknowledge(db, page, now=now + timedelta(minutes=6))
     # A timed-out writer can finish after deletion; recurring cleanup retains exact keys.
     await p.storage.write_file(retry.artifact_keys[0], retained)
     async with database() as db:
         repeated = await gc.claim(db, generation, now=now + timedelta(hours=1), limit=100)
-        assert repeated.artifact_keys == retry.artifact_keys
+        assert repeated.artifact_keys == tuple(reclaimed)
         for key in repeated.artifact_keys:
             await p.storage.delete_file(key)
         await gc.acknowledge(db, repeated, now=now + timedelta(hours=1))

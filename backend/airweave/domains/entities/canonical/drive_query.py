@@ -235,6 +235,10 @@ class CanonicalDriveQuery:
             )
         if query.filters.mime_type is not None:
             statement = statement.where(payload["mimeType"].astext == query.filters.mime_type)
+        if query.filters.updated_after is not None:
+            statement = statement.where(Entity.source_updated_at >= query.filters.updated_after)
+        if query.filters.updated_before is not None:
+            statement = statement.where(Entity.source_updated_at < query.filters.updated_before)
         return statement, facts
 
     @staticmethod

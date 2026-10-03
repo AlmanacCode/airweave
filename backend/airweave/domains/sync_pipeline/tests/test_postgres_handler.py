@@ -17,7 +17,7 @@ from airweave.domains.sync_pipeline.entity.actions import (
 from airweave.domains.sync_pipeline.entity.handlers.postgres import EntityPostgresHandler
 from airweave.domains.sync_pipeline.exceptions import SyncFailureError
 
-_GET_DB_CTX = "airweave.domains.sync_pipeline.entity.handlers.postgres.get_db_context"
+_GET_DB_CTX = "airweave.domains.sync_pipeline.entity.handlers.postgres.get_tenant_db_context"
 
 
 @dataclass

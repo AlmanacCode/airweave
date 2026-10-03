@@ -23,7 +23,7 @@ from airweave.core.context import BaseContext
 from airweave.core.exceptions import NotFoundException
 from airweave.core.logging import ContextualLogger, LoggerConfigurator, logger
 from airweave.core.protocols.event_bus import EventBus
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.domains.access_control.dispatcher import ACActionDispatcher
 from airweave.domains.access_control.membership_tracker import ACLMembershipTracker
 from airweave.domains.access_control.pipeline import AccessControlPipeline
@@ -253,7 +253,7 @@ class SyncFactory(SyncFactoryProtocol):
         if canonical_source is not None:
             runtime.canonical_capture = CanonicalCapturePipeline(
                 service=CanonicalCaptureService(CanonicalRecordStore()),
-                sessions=get_db_context,
+                sessions=lambda: get_tenant_db_context(sync_context.organization_id),
                 event_bus=self._event_bus,
                 record_types=canonical_source.canonical_record_types,
                 attempt=resolve_capture_attempt(capture_attempt),
@@ -445,7 +445,14 @@ class SyncFactory(SyncFactoryProtocol):
             execution_config=execution_config,
         )
 
-        node_selections = await self._load_node_selections(db, source_connection_id, ctx)
+        # Owned capture scopes come from the verified persisted account intent.
+        # Legacy browse-tree selection is not an input to this authority path.
+        owned = await self._sc_repo.get_owned_source(db, source_connection, ctx)
+        node_selections = (
+            []
+            if owned is not None
+            else await self._load_node_selections(db, source_connection_id, ctx)
+        )
         if node_selections:
             logger.info(f"Loaded {len(node_selections)} node selections for targeted sync")
 

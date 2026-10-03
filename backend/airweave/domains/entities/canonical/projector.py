@@ -15,6 +15,7 @@ from airweave.domains.entities.canonical.extraction_models import (
 )
 from airweave.domains.entities.canonical.mail_body import prepared_mail_body
 from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.preparation_recipe import PreparationRecipe
 from airweave.domains.entities.canonical.projection_inputs import ProjectionInputs
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionBatchResult,
@@ -93,18 +94,25 @@ class CanonicalProjector:
     def __init__(
         self,
         store: CanonicalProjectionStore,
-        sessions: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+        sessions: Callable[[UUID], AbstractAsyncContextManager[AsyncSession]],
         processor: ChunkEmbedProcessor,
         storage: StorageBackend,
+        *,
+        recipe: PreparationRecipe | None = None,
     ):
         """Inject existing processor, storage, and transaction session ownership."""
         self._store = store
         self._sessions = sessions
         self._processor = processor
         self._storage = storage
+        self._recipe = recipe if recipe is not None else PreparationRecipe()
 
     async def _admit(
-        self, work: ProjectionWork, source_name: str, destination: VespaDestination
+        self,
+        work: ProjectionWork,
+        source_name: str,
+        destination: VespaDestination,
+        generation: UUID,
     ) -> bool:
         """Close authorization transaction before any external processing begins."""
         if (
@@ -112,8 +120,8 @@ class CanonicalProjector:
             or destination.collection_id != work.binding.collection_id
         ):
             return False
-        async with self._sessions() as db:
-            return await self._store.admit(db, work)
+        async with self._sessions(work.organization_id) as db:
+            return await self._store.begin_attempt(db, work, generation, self._recipe)
 
     async def _prepare_mail_text(
         self, work: ProjectionWork, source_name: str, generation: UUID, built: tuple[BuiltText, ...]
@@ -124,8 +132,10 @@ class CanonicalProjector:
         body = prepared_mail_body(built, generation, work.record.completeness)
         if body is None:
             raise ValueError("Gmail projection did not convert its required body")
-        async with self._sessions() as db:
-            return await self._store.prepare_mail_body(db, work, generation, body)
+        async with self._sessions(work.organization_id) as db:
+            return await self._store.prepare_mail_body(
+                db, work, generation, body, recipe=self._recipe
+            )
 
     async def project_one(
         self,
@@ -138,10 +148,9 @@ class CanonicalProjector:
         from airweave.domains.entities.canonical.projection_mappers import map_record
         from airweave.domains.entities.canonical.projection_policy import excluded_from_search
 
-        if not await self._admit(work, source_name, destination):
-            return ProjectionResult()
-
         generation = uuid4()
+        if not await self._admit(work, source_name, destination, generation):
+            return ProjectionResult()
         chunks = []
         coverage = ExtractionCoverage(parts=())
         no_documents = work.record.deleted_at is not None or excluded_from_search(
@@ -197,7 +206,7 @@ class CanonicalProjector:
                 _stamp_chunks(chunks, work.record)
                 prepared = destination.prepare_documents(chunks)
                 manifest = _scope_manifest(prepared, work.record.sync_id, destination.collection_id)
-                async with self._sessions() as db:
+                async with self._sessions(work.organization_id) as db:
                     if not await self._store.prepare(
                         db,
                         work,
@@ -206,6 +215,7 @@ class CanonicalProjector:
                         manifest,
                         coverage=coverage,
                         text_representations=tuple(item for item, _ in artifacts),
+                        recipe=self._recipe,
                     ):
                         return ProjectionResult()
                 for artifact, content in artifacts:
@@ -214,7 +224,7 @@ class CanonicalProjector:
                     )
                 await destination.feed_prepared(prepared)
         if no_documents:
-            async with self._sessions() as db:
+            async with self._sessions(work.organization_id) as db:
                 if not await self._store.prepare(
                     db,
                     work,
@@ -223,9 +233,10 @@ class CanonicalProjector:
                     (),
                     coverage=coverage,
                     text_representations=(),
+                    recipe=self._recipe,
                 ):
                     return ProjectionResult()
-        async with self._sessions() as db:
+        async with self._sessions(work.organization_id) as db:
             published = await self._store.publish(db, work, generation, len(chunks))
         return ProjectionResult(
             published=published,
@@ -265,6 +276,9 @@ class CanonicalProjector:
                 representations=body_text.representations + file_text.representations,
                 failed_entity_ids=file_text.failed_entity_ids,
                 conversion_gaps={**body_text.conversion_gaps, **file_text.conversion_gaps},
+                conversion_failures={
+                    **body_text.conversion_failures, **file_text.conversion_failures
+                },
             ),
             coverage,
         )
@@ -282,7 +296,7 @@ class CanonicalProjector:
         skip_failed: bool = False,
     ) -> ProjectionBatchResult:
         """Failed rows stay pending; other rows in the page continue to make progress."""
-        async with self._sessions() as db:
+        async with self._sessions(organization_id) as db:
             pending = await self._store.pending(
                 db,
                 organization_id,
@@ -302,7 +316,7 @@ class CanonicalProjector:
                 failed += int(result.conversion_failed)
             except Exception as error:
                 failed += 1
-                async with self._sessions() as db:
+                async with self._sessions(organization_id) as db:
                     await self._store.fail(db, work, type(error).__name__)
                 logger.warning(
                     "Canonical projection failed for record %s (%s)",
@@ -323,6 +337,11 @@ def _conversion_coverage(built: BuiltTextBatch, coverage: ExtractionCoverage) ->
     available = {_part_index(entity.entity_id) for entity in built.entities}
     gaps = {_part_index(identity): reason for identity, reason in built.conversion_gaps.items()}
     failed = {_part_index(identity) for identity in built.failed_entity_ids}
+    failures = {
+        _part_index(identity): reason for identity, reason in built.conversion_failures.items()
+    }
+    if set(failures) - failed:
+        raise ValueError("Conversion failure reason does not belong to a failed part")
     if set(gaps) - {part.part_index for part in coverage.parts}:
         raise ValueError("Conversion gap does not belong to a selected source part")
     parts = []
@@ -333,7 +352,7 @@ def _conversion_coverage(built: BuiltTextBatch, coverage: ExtractionCoverage) ->
             part = ExtractionOutcome(
                 **part.model_dump(exclude={"outcome", "reason"}),
                 outcome="failed",
-                reason="conversion_failed",
+                reason=failures.get(part.part_index, "conversion_failed"),
             )
         if part.part_index in gaps:
             if part.outcome != "indexed":
@@ -364,6 +383,7 @@ def _check_converted_parts(
         or set(entities) != set(representations)
         or set(entities) & set(failed)
         or set(failed) & set(built.conversion_gaps)
+        or set(built.conversion_failures) - set(failed)
         or set(entities) | set(failed) | set(built.conversion_gaps) != expected
         or len(failed) != tracker.failed_count
     ):
@@ -392,8 +412,10 @@ def _select_inputs(
         part, entity = item.part, item.entity
         if item.omission == "unsupported_format":
             outcome, reason = "unsupported", "unsupported_format"
+        elif item.omission == "conversion_failed":
+            outcome, reason = "failed", "conversion_failed"
         elif entity is None:
-            outcome, reason = "unavailable_original", "original_not_captured"
+            outcome, reason = "unavailable_original", item.omission or "original_not_captured"
         elif (
             part.kind == "file"
             and part.extension is not None

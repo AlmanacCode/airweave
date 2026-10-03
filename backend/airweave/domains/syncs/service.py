@@ -28,10 +28,12 @@ from airweave.core.shared_models import (
     SyncJobStatus,
     SyncStatus,
 )
-from airweave.db.session import get_db_context
+from airweave.db.session import get_tenant_db_context
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.page_source import CanonicalPageSource
-from airweave.domains.entities.canonical.search_metadata import SEARCH_METADATA_PIPELINE_VERSION
+from airweave.domains.entities.canonical.projection_policy import (
+    CURRENT_PROJECTION_PIPELINE_VERSION,
+)
 from airweave.domains.entities.canonical.source import CanonicalSource
 from airweave.domains.owned_provisioning.guard import require_provider_sync
 from airweave.domains.sources.exceptions.classifier import classify_error
@@ -155,7 +157,7 @@ class SyncService(SyncServiceProtocol):
             destination_connection_ids=destination_connection_ids,
             cron_schedule=cron,
             run_immediately=run_immediately,
-            initial_pipeline_version=(SEARCH_METADATA_PIPELINE_VERSION if canonical else 1),
+            initial_pipeline_version=(CURRENT_PROJECTION_PIPELINE_VERSION if canonical else 1),
             ctx=ctx,
             uow=uow,
         )
@@ -265,21 +267,12 @@ class SyncService(SyncServiceProtocol):
                 detail=f"Cannot trigger sync: sync is {sync.status}",
             )
 
-        active_jobs = await self._sync_job_repo.get_active_for_sync(db, sync_id, ctx)
-        if active_jobs:
-            job_status = active_jobs[0].status.lower()
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot start new sync: a sync job is already {job_status}",
-            )
-
-        sync_schema = schemas.Sync.model_validate(sync, from_attributes=True)
-
         sync_job = await self._sync_job_repo.create(
             db,
             SyncJobCreate(sync_id=sync_id, status=SyncJobStatus.PENDING),
             ctx,
         )
+        sync_schema = schemas.Sync.model_validate(sync, from_attributes=True)
         await db.flush()
         await db.refresh(sync_job)
         sync_job_schema = schemas.SyncJob.model_validate(sync_job, from_attributes=True)
@@ -426,7 +419,7 @@ class SyncService(SyncServiceProtocol):
         Called exclusively from RunSyncActivity (Temporal worker).
         """
         try:
-            async with get_db_context() as db:
+            async with get_tenant_db_context(ctx.organization.id) as db:
                 orchestrator = await self._sync_factory.create_orchestrator(
                     db=db,
                     sync=sync,

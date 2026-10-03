@@ -5,12 +5,15 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, exists, or_, select, tuple_
+from sqlalchemy import and_, cast, exists, func, or_, select, text, tuple_
+from sqlalchemy.dialects.postgresql import JSONPATH
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.mail_body import PreparedMailBody
+from airweave.domains.entities.canonical.preparation_recipe import PreparationRecipe
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionBinding,
     ProjectionDocument,
@@ -30,6 +33,28 @@ from airweave.models.entity import Entity
 from airweave.models.projection_generation import ProjectionGeneration
 from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
+
+
+def extraction_has_indexed_content() -> ColumnElement[bool]:
+    """Searchable metadata does not establish extraction of original content."""
+    return func.coalesce(
+        func.jsonb_path_exists(
+            ProjectionGeneration.extraction_coverage,
+            cast('$.parts[*] ? (@.kind != "metadata" && @.outcome == "indexed")', JSONPATH),
+        ),
+        False,
+    )
+
+
+def extraction_has_gaps() -> ColumnElement[bool]:
+    """Known content omissions remain partial even when usable text was indexed."""
+    return func.coalesce(
+        func.jsonb_path_exists(
+            ProjectionGeneration.extraction_coverage,
+            cast('$.parts[*] ? (@.kind != "metadata" && exists(@.gaps[0]))', JSONPATH),
+        ),
+        False,
+    )
 
 
 def publication_matches(locator: ProjectionLocator):
@@ -240,35 +265,15 @@ class CanonicalProjectionStore:
         """
         if not 1 <= limit <= 100:
             raise ValueError("Projection source page size must be between 1 and 100")
-        owned_source = exists(
-            select(SourceConnection.id)
-            .join(
-                Collection,
-                and_(
-                    Collection.readable_id == SourceConnection.readable_collection_id,
-                    Collection.organization_id == SourceConnection.organization_id,
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT organization_id,sync_id FROM owned_pending_sources("
+                    "CAST(:sources AS text[]),CAST(:after AS uuid),:limit)"
                 ),
+                {"sources": list(source_names), "after": after_id, "limit": limit},
             )
-            .where(
-                SourceConnection.is_authenticated.is_(True),
-                source_is_readable(SourceConnection.organization_id, SourceConnection.sync_id),
-                SourceConnection.sync_id == Sync.id,
-                SourceConnection.organization_id == Sync.organization_id,
-                SourceConnection.short_name.in_(source_names),
-            )
-        )
-        fresh_work = exists(
-            select(Entity.id).where(
-                Entity.sync_id == Sync.id,
-                Entity.organization_id == Sync.organization_id,
-                _pending_record(),
-                Entity.projection_error.is_(None),
-            )
-        )
-        statement = select(Sync.organization_id, Sync.id).where(owned_source, fresh_work)
-        if after_id is not None:
-            statement = statement.where(Sync.id > after_id)
-        rows = (await db.execute(statement.order_by(Sync.id).limit(limit + 1))).all()
+        ).all()
         sources = tuple(
             ProjectionSourceRef(organization_id=organization, sync_id=sync)
             for organization, sync in rows[:limit]
@@ -318,8 +323,59 @@ class CanonicalProjectionStore:
             return None
         return entity
 
+    async def begin_attempt(
+        self, db: AsyncSession, work: ProjectionWork, generation: UUID, recipe: PreparationRecipe
+    ) -> bool:
+        """Retain provenance before processing, under the existing current-input fence."""
+        facts = recipe.model_dump(mode="json")
+        async with UnitOfWork(db):
+            if await self._current(db, work) is None:
+                return False
+            prior = await db.get(ProjectionGeneration, generation)
+            if prior is not None:
+                if (
+                    prior.preparation_recipe != facts
+                    or prior.organization_id != work.organization_id
+                    or prior.sync_id != work.record.sync_id
+                    or prior.collection_id != work.binding.collection_id
+                    or prior.record_id != work.record.id
+                    or prior.revision != work.record.revision
+                    or prior.pipeline_version != work.pipeline_version
+                ):
+                    raise ValueError("Preparation attempt provenance is immutable")
+                return prior.retired_at is None
+            db.add(
+                ProjectionGeneration(
+                    id=generation,
+                    organization_id=work.organization_id,
+                    sync_id=work.record.sync_id,
+                    collection_id=work.binding.collection_id,
+                    record_id=work.record.id,
+                    revision=work.record.revision,
+                    pipeline_version=work.pipeline_version,
+                    preparation_recipe=facts,
+                    documents=None,
+                    next_gc_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                )
+            )
+            await db.flush()
+            return True
+
+    @staticmethod
+    def _check_recipe(prior: ProjectionGeneration, recipe: PreparationRecipe | None) -> None:
+        """Never relabel an existing attempt, including unknown historical provenance."""
+        facts = recipe.model_dump(mode="json") if recipe is not None else None
+        if prior.preparation_recipe != facts:
+            raise ValueError("Preparation attempt provenance is immutable")
+
     async def prepare_mail_body(
-        self, db: AsyncSession, work: ProjectionWork, generation: UUID, body: PreparedMailBody
+        self,
+        db: AsyncSession,
+        work: ProjectionWork,
+        generation: UUID,
+        body: PreparedMailBody,
+        *,
+        recipe: PreparationRecipe | None = None,
     ) -> bool:
         """Designate validated converter text before embedding; index manifest seals later."""
         async with UnitOfWork(db):
@@ -327,6 +383,25 @@ class CanonicalProjectionStore:
                 return False
             prior = await db.get(ProjectionGeneration, generation)
             if prior is not None:
+                self._check_recipe(prior, recipe)
+                if (
+                    prior.retired_at is None
+                    and prior.documents is None
+                    and prior.mail_body_text is None
+                    and prior.mail_body_status is None
+                    and prior.record_id == work.record.id
+                    and prior.revision == work.record.revision
+                    and prior.pipeline_version == work.pipeline_version
+                    and prior.organization_id == work.organization_id
+                    and prior.sync_id == work.record.sync_id
+                    and prior.collection_id == work.binding.collection_id
+                ):
+                    prior.mail_body_text = body.text
+                    prior.mail_body_status = body.status
+                    sync = await db.get(Sync, work.record.sync_id)
+                    sync.mail_text_sequence += 1
+                    await db.flush()
+                    return True
                 if (
                     prior.mail_body_text != body.text
                     or prior.mail_body_status != body.status
@@ -348,6 +423,7 @@ class CanonicalProjectionStore:
                     record_id=work.record.id,
                     revision=work.record.revision,
                     pipeline_version=work.pipeline_version,
+                    preparation_recipe=recipe.model_dump(mode="json") if recipe else None,
                     documents=None,
                     mail_body_text=body.text,
                     mail_body_status=body.status,
@@ -360,7 +436,7 @@ class CanonicalProjectionStore:
             return True
 
     @staticmethod
-    async def _seal_mail_attempt(
+    async def _seal_attempt(
         db: AsyncSession,
         prior: ProjectionGeneration,
         work: ProjectionWork,
@@ -369,7 +445,7 @@ class CanonicalProjectionStore:
         extraction: dict | None,
         text_descriptors: list[dict] | None,
     ) -> bool:
-        """Transition a prepared body to its one immutable pre-feed index manifest."""
+        """Seal the one immutable pre-feed manifest, retaining any early mail body."""
         if (
             prior.retired_at is not None
             or prior.record_id != work.record.id
@@ -396,6 +472,7 @@ class CanonicalProjectionStore:
         *,
         coverage: ExtractionCoverage | None = None,
         text_representations: tuple[TextArtifact, ...] | None = None,
+        recipe: PreparationRecipe | None = None,
     ) -> bool:
         """Commit exact immutable deletion identities before the first remote feed."""
         if collection_id != work.binding.collection_id:
@@ -433,8 +510,9 @@ class CanonicalProjectionStore:
                 return False
             prior = await db.get(ProjectionGeneration, generation)
             if prior is not None:
+                self._check_recipe(prior, recipe)
                 if prior.documents is None:
-                    return await self._seal_mail_attempt(
+                    return await self._seal_attempt(
                         db, prior, work, collection_id, manifest, extraction, text_descriptors
                     )
                 if (
@@ -458,6 +536,7 @@ class CanonicalProjectionStore:
                     record_id=work.record.id,
                     revision=work.record.revision,
                     pipeline_version=work.pipeline_version,
+                    preparation_recipe=recipe.model_dump(mode="json") if recipe else None,
                     documents=manifest,
                     extraction_coverage=extraction,
                     text_representations=text_descriptors,

@@ -310,16 +310,22 @@ async def test_required_child_access_loss_does_not_withdraw_enclosing_channel(
         assert "canonical_checkpoint" not in (await db.scalar(select(SyncCursor))).cursor_data
 
 
-async def test_fresh_empty_inventory_reconciles_old_files_without_exact_owner_call(
-    database, source, tmp_path
+@pytest.mark.parametrize("omitted", [False, True])
+async def test_next_cycle_edit_preserves_message_history_and_reconciles_file_inventory(
+    database, source, tmp_path, omitted
 ):
     from airweave.models.sync_job import SyncJob
 
     service, fence = source
     storage = FilesystemBackend(tmp_path)
     downloads = []
-    await attempt(database, source, storage, downloads, number=1)
+    initial_pipeline, _ = await attempt(database, source, storage, downloads, number=1)
     assert downloads == ["F1", "F2", "F3"]
+    async with database() as db:
+        original = await db.scalar(select(Entity).where(Entity.native_id == MESSAGE["ts"]))
+        original_id, original_revision = original.id, original.record_revision
+        initial_cycle = await service.read_cycle(db, initial_pipeline._writer())
+        assert initial_cycle.phase == "complete"
     job = uuid4()
     async with database() as db:
         (await db.get(SyncJob, fence.job_id)).status = "completed"
@@ -333,17 +339,63 @@ async def test_fresh_empty_inventory_reconciles_old_files_without_exact_owner_ca
         )
         await db.commit()
     following = (service, fence.model_copy(update={"job_id": job, "attempt_id": uuid4()}))
+    edited = {**MESSAGE, "text": "Edited message", "edited": {"ts": "2"}, "files": []}
+    if omitted:
+        with pytest.raises(ValueError, match="unconfirmed"):
+            await attempt(
+                database,
+                following,
+                storage,
+                downloads,
+                number=1,
+                responses=[ROOT, {"messages": []}, {"messages": []}],
+            )
+        async with database() as db:
+            current = await service.store.read(
+                db, fence.organization_id, fence.sync_id, original_id
+            )
+            assert current.deleted_at is None and current.payload == MESSAGE
+            assert current.revision == original_revision
+            children = (
+                await db.scalars(
+                    select(Entity).where(Entity.entity_definition_short_name == "file")
+                )
+            ).all()
+            assert all(child.deleted_at is None for child in children)
+            for child in children:
+                stored = await service.store.read(
+                    db, fence.organization_id, fence.sync_id, child.id
+                )
+                assert stored.content_access == "available"
+            cursor = await db.scalar(select(SyncCursor).where(SyncCursor.sync_id == fence.sync_id))
+            assert cursor.cursor_data["canonical_cycle"]["phase"] == "active"
+        return
     pipeline, connector = await attempt(
         database,
         following,
         storage,
         downloads,
         number=1,
-        responses=[ROOT, {"messages": [{**MESSAGE, "files": []}]}],
+        responses=[ROOT, {"messages": [edited]}],
     )
     assert connector._get.await_count == 2
     assert downloads == ["F1", "F2", "F3"]
     async with database() as db:
+        current = await service.store.read(db, fence.organization_id, fence.sync_id, original_id)
+        assert current.identity.native_id == MESSAGE["ts"]
+        assert current.payload == edited and current.revision == original_revision + 1
+        changes = await service.store.changes(db, fence.organization_id, fence.sync_id)
+        message_history = [
+            change.record for change in changes.changes if change.record.id == original_id
+        ]
+        assert [(record.revision, record.payload) for record in message_history] == [
+            (original_revision, MESSAGE),
+            (original_revision + 1, edited),
+        ]
+        assert all(record.content_access == "available" for record in message_history)
+        final_cycle = await service.read_cycle(db, pipeline._writer())
+        assert final_cycle.phase == "complete"
+        assert final_cycle.version.cycle_id != initial_cycle.version.cycle_id
         children = (
             await db.scalars(select(Entity).where(Entity.entity_definition_short_name == "file"))
         ).all()

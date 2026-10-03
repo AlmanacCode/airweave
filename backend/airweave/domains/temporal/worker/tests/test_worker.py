@@ -108,6 +108,8 @@ async def test_start_passes_runtime_to_get_client(
         mock_get_client.return_value = MagicMock()
         await worker.start()
 
+        assert mock_worker_cls.call_args.kwargs["max_concurrent_activities"] == 4
+        assert mock_worker_cls.call_args.kwargs["max_concurrent_workflow_tasks"] == 8
         mock_get_client.assert_awaited_once()
         _, kwargs = mock_get_client.call_args
         assert kwargs["runtime"] is runtime_instance

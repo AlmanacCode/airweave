@@ -6,9 +6,14 @@ import os
 from abc import ABC, abstractmethod
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from airweave.core.logging import logger
+from airweave.domains.converters.package_limits import (
+    PackageTextLimits,
+    PreparationLimit,
+    text_size,
+)
 from airweave.domains.ocr.protocols import OcrProvider
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, SyncFailureError
 
@@ -18,7 +23,15 @@ class ConversionResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     text: str | None
-    gap: Literal["ocr_unavailable"] | None = None
+    gap: Literal["ocr_unavailable", "embedded_content_unprocessed"] | None = None
+    failure_reason: Literal["preparation_limit"] | None = None
+
+    @model_validator(mode="after")
+    def validate_failure(self):
+        """A failed conversion cannot also claim text or a partial extraction gap."""
+        if self.failure_reason is not None and (self.text is not None or self.gap is not None):
+            raise ValueError("Conversion failure cannot include extracted content or a gap")
+        return self
 
 
 class BaseTextConverter(ABC):
@@ -55,8 +68,14 @@ class HybridDocumentConverter(BaseTextConverter):
         converter = DocxConverter(ocr_provider=MistralOCR())
     """
 
-    def __init__(self, ocr_provider: Optional[OcrProvider] = None) -> None:
+    def __init__(
+        self,
+        ocr_provider: Optional[OcrProvider] = None,
+        *,
+        output_limits: PackageTextLimits | None = None,
+    ) -> None:
         self._ocr_provider = ocr_provider
+        self._output_limits = output_limits
 
     @abstractmethod
     async def _try_extract(self, path: str) -> Optional[str]:
@@ -103,10 +122,12 @@ class HybridDocumentConverter(BaseTextConverter):
         """A text-disguised-as-binary fallback does not hide infrastructure errors."""
         try:
             local = await self._extract_local(path)
-            if local.text is not None or local.gap is not None:
+            if local.text is not None or local.gap is not None or local.failure_reason is not None:
                 return local
         except SyncFailureError:
             raise
+        except PreparationLimit:
+            return ConversionResult(text=None, failure_reason="preparation_limit")
         except Exception as exc:
             logger.warning(f"{os.path.basename(path)}: extraction error ({exc}), needs OCR")
         return ConversionResult(text=self._try_read_as_text(path))
@@ -122,8 +143,10 @@ class HybridDocumentConverter(BaseTextConverter):
 
         for path in file_paths:
             local = await self._extract_with_fallback(path)
-            if (local.text is not None and local.gap is None) or (
-                local.gap is not None and self._ocr_provider is None
+            if (
+                local.failure_reason is not None
+                or (local.text is not None and local.gap != "ocr_unavailable")
+                or (local.gap is not None and self._ocr_provider is None)
             ):
                 results[path] = local
             else:
@@ -143,15 +166,22 @@ class HybridDocumentConverter(BaseTextConverter):
                     ocr_results = {}
                 for path, local in needs_ocr.items():
                     text = ocr_results.get(path)
-                    results[path] = (
-                        ConversionResult(text=text)
-                        if text
-                        else local
-                        if local.gap is not None
-                        else ConversionResult(text=text)
-                    )
+                    results[path] = self._ocr_result(text, local)
 
         return results
+
+    def _ocr_result(self, text: str | None, local: ConversionResult) -> ConversionResult:
+        """Keep non-OCR gaps and enforce the selected document's fallback output bound."""
+        if not text:
+            return local if local.gap is not None else ConversionResult(text=text)
+        if self._output_limits is not None:
+            try:
+                text_size(text, 0, "", self._output_limits)
+            except PreparationLimit:
+                return ConversionResult(text=None, failure_reason="preparation_limit")
+        return ConversionResult(
+            text=text, gap=local.gap if local.gap != "ocr_unavailable" else None
+        )
 
 
 class OcrConverterAdapter(BaseTextConverter):

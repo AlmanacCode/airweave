@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
@@ -11,6 +11,7 @@ from airweave.domains.entities.canonical.mail_body import current_mail_body
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionCleanupPage,
     ProjectionDocument,
+    ProjectionGenerationRef,
 )
 from airweave.domains.entities.canonical.store import content_is_available
 from airweave.domains.entities.canonical.text_models import TextArtifact
@@ -22,17 +23,17 @@ from airweave.models.sync import Sync
 class ProjectionGCStore:
     """Retain manifests indefinitely: timed-out feed threads have no bounded lifetime."""
 
-    async def due(self, db: AsyncSession, *, now: datetime, limit: int = 20) -> tuple[UUID, ...]:
-        """Bound maintenance work independently from source sync frequency."""
+    async def due(
+        self, db: AsyncSession, *, now: datetime, limit: int = 20
+    ) -> tuple[ProjectionGenerationRef, ...]:
+        """Cross-tenant discovery returns IDs through the fixed control capability."""
+        rows = await db.execute(
+            text("SELECT organization_id,generation_id FROM owned_due_generations(:now,:limit)"),
+            {"now": now, "limit": limit},
+        )
         return tuple(
-            await db.scalars(
-                select(ProjectionGeneration.id)
-                .where(
-                    ProjectionGeneration.next_gc_at <= now,
-                )
-                .order_by(ProjectionGeneration.next_gc_at, ProjectionGeneration.id)
-                .limit(limit)
-            )
+            ProjectionGenerationRef(organization_id=organization, generation_id=generation)
+            for organization, generation in rows
         )
 
     async def claim(

@@ -14,6 +14,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from airweave.adapters.rate_limiter.null import NullRateLimiter
+from airweave.api import deps
 from airweave.api.v1.endpoints.records import record_error_response, router
 from airweave.core import container as container_mod
 from airweave.core import credentials
@@ -127,7 +128,9 @@ async def test_persisted_keys_scope_expiry_and_revocation_over_http(
         async with runtime_database() as db:
             yield db
 
+    app.dependency_overrides[deps.get_control_session_factory] = lambda: runtime_database
     app.dependency_overrides[get_db] = session
+    app.dependency_overrides[deps.get_tenant_db] = session
     base = f"/sync/{fence.sync_id}/records"
     paths = (base, f"{base}/{result.changes[0].record.id}", base + "/changes")
     async with AsyncClient(transport=ASGITransport(app), base_url="http://test") as client:

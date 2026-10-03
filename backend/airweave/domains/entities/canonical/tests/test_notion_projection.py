@@ -308,7 +308,7 @@ async def test_unknown_notion_block_stays_pending_in_actual_projector(database, 
         root_work = next(item for item in pending if item.record.identity.record_type == "page")
         assert await publish_prepared(store, db, root_work, uuid4(), 1)
     processor, destination = MagicMock(), MagicMock(collection_id=binding.collection_id)
-    projector = CanonicalProjector(store, database, processor, AsyncMock())
+    projector = CanonicalProjector(store, lambda _organization: database(), processor, AsyncMock())
     result = await projector.batch(
         fence.organization_id, fence.sync_id, "notion", destination, MagicMock()
     )

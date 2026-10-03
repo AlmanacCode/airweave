@@ -5,11 +5,11 @@ logic lives in ``context_resolver.py``. This module just wires FastAPI
 ``Depends()`` to the resolver.
 """
 
-from typing import Any, Callable, Optional
+from typing import Any, AsyncGenerator, Callable, Optional
 
 from fastapi import Depends, Header, HTTPException, Request
 from fastapi_auth0 import Auth0User
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from airweave import crud, schemas
 from airweave.api.auth import auth0
@@ -25,6 +25,7 @@ from airweave.core.protocols.rate_limiter import RateLimiter
 from airweave.core.shared_models import AuthMethod
 from airweave.db import session as db_session
 from airweave.db.session import get_db
+from airweave.db.tenant_session import tenant_session_factory
 from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.canonical.store import CanonicalRecordStore
@@ -110,25 +111,24 @@ async def get_context(
     return await resolver.resolve(request, db, auth0_user, x_api_key, x_organization_id)
 
 
-def get_search_session_factory() -> async_sessionmaker[AsyncSession]:
+def get_control_session_factory() -> async_sessionmaker[AsyncSession]:
     """Resolve the configured factory dynamically, including isolated local deployments."""
     return db_session.AsyncSessionLocal
 
 
-async def get_owned_search_context(
+async def get_owned_context(
     request: Request,
-    sessions: async_sessionmaker[AsyncSession] = Depends(get_search_session_factory),
+    sessions: async_sessionmaker[AsyncSession] = Depends(get_control_session_factory),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     x_organization_id: Optional[str] = Header(None, alias="X-Organization-ID"),
     auth0_user: Optional[Auth0User] = Depends(auth0.get_user),
     cache: ContextCache = Inject(ContextCache),
     rate_limiter: RateLimiter = Inject(RateLimiter),
 ) -> ApiContext:
-    """Finish this read route's authentication transaction before search network waits.
+    """Authenticate on control credentials and close before owned operation waits.
 
-    Reuse ordinary context resolution. Closing our own session preserves the previous
-    read route's rollback semantics, including Auth0's uncommitted last-active update.
-    Other routes retain their existing request-owned session.
+    Keep bootstrap objects out of the tenant Session identity map. This preserves
+    the previous search route's rollback semantics for uncommitted Auth0 activity.
     """
     async with sessions() as db:
         return await get_context(
@@ -140,6 +140,27 @@ async def get_owned_search_context(
             cache=cache,
             rate_limiter=rate_limiter,
         )
+
+
+def get_owned_tenant_engine() -> AsyncEngine:
+    """Resolve the explicit content engine, including disposable test overrides."""
+    return db_session.get_tenant_engine()
+
+
+def get_tenant_session_factory(
+    ctx: ApiContext = Depends(get_owned_context),
+    engine: AsyncEngine = Depends(get_owned_tenant_engine),
+) -> async_sessionmaker[AsyncSession]:
+    """Only verified persisted organization authority selects the SQL tenant."""
+    return tenant_session_factory(engine, ctx.organization.id)
+
+
+async def get_tenant_db(
+    sessions: async_sessionmaker[AsyncSession] = Depends(get_tenant_session_factory),
+) -> AsyncGenerator[AsyncSession, None]:
+    """Use a separate immutable identity map after bootstrap authentication closes."""
+    async with sessions() as db:
+        yield db
 
 
 async def get_logger(

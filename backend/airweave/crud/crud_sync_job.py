@@ -1,6 +1,5 @@
 """CRUD operations for sync jobs."""
 
-from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -11,9 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from airweave.core.context import BaseContext
 from airweave.crud._base_organization import CRUDBaseOrganization
 from airweave.db.unit_of_work import UnitOfWork
-from airweave.models.source_connection import SourceConnection
 from airweave.models.sync import Sync
-from airweave.models.sync_job import SyncJob
+from airweave.models.sync_job import SyncJob, SyncJobStatus
 from airweave.schemas.sync_job import SyncJobCreate, SyncJobUpdate
 
 
@@ -27,12 +25,19 @@ async def lock_sync_for_job(db: AsyncSession, organization: UUID, sync_id: UUID)
     )
     if sync is None:
         raise HTTPException(status_code=404, detail="Sync not found")
-    if sync.provisioning_generation and (
+    if sync.status != "active" or (
         sync.provisioning_generation != sync.provisioning_ready_generation
-        or sync.status != "active"
     ):
         raise HTTPException(status_code=409, detail="Owned source is not ready for capture")
     return sync
+
+
+class SyncJobBusy(HTTPException):
+    """An admitted job already owns this sync; callers may defer without holding a slot."""
+
+    def __init__(self) -> None:
+        """Expose the existing HTTP conflict contract to manual callers."""
+        super().__init__(status_code=409, detail="A sync job is already active")
 
 
 class CRUDSyncJob(CRUDBaseOrganization[SyncJob, SyncJobCreate, SyncJobUpdate]):
@@ -48,11 +53,40 @@ class CRUDSyncJob(CRUDBaseOrganization[SyncJob, SyncJobCreate, SyncJobUpdate]):
         skip_validation: bool = False,
     ) -> SyncJob:
         """Stamp job admission under the same lock used by account generation changes."""
+        if not skip_validation:
+            await self._validate_organization_access(ctx, ctx.organization.id)
         sync = await lock_sync_for_job(db, ctx.organization.id, obj_in.sync_id)
-        values = obj_in.model_dump(exclude_unset=True)
+        if obj_in.id is not None:
+            existing = await db.scalar(
+                select(SyncJob)
+                .where(SyncJob.id == obj_in.id, SyncJob.organization_id == ctx.organization.id)
+                .execution_options(populate_existing=True)
+            )
+            if existing is not None:
+                if (
+                    existing.organization_id != ctx.organization.id
+                    or existing.sync_id != sync.id
+                    or existing.provisioning_generation != sync.provisioning_generation
+                ):
+                    raise HTTPException(status_code=409, detail="Job admission identity changed")
+                return existing
+        active = await db.scalar(
+            select(SyncJob.id)
+            .where(
+                SyncJob.sync_id == sync.id,
+                SyncJob.organization_id == ctx.organization.id,
+                SyncJob.status.in_(
+                    [SyncJobStatus.PENDING, SyncJobStatus.RUNNING, SyncJobStatus.CANCELLING]
+                ),
+            )
+            .limit(1)
+        )
+        if active is not None:
+            raise SyncJobBusy()
+        values = obj_in.model_dump(exclude_unset=True, exclude_none=True)
         values["provisioning_generation"] = sync.provisioning_generation
         return await super().create(
-            db, obj_in=values, ctx=ctx, uow=uow, skip_validation=skip_validation
+            db, obj_in=values, ctx=ctx, uow=uow, skip_validation=True
         )
 
     async def get(self, db: AsyncSession, id: UUID, ctx: BaseContext) -> SyncJob | None:
@@ -147,46 +181,6 @@ class CRUDSyncJob(CRUDBaseOrganization[SyncJob, SyncJobCreate, SyncJobUpdate]):
         # Add the sync name to the job object
         job.sync_name = sync_name
         return job
-
-    async def get_stuck_jobs_by_status(
-        self,
-        db: AsyncSession,
-        status: list[str],
-        modified_before: Optional[datetime] = None,
-        started_before: Optional[datetime] = None,
-    ) -> list[SyncJob]:
-        """Get sync jobs stuck in specific statuses based on timestamps.
-
-        Args:
-            db: Database session
-            status: List of statuses to filter by
-            modified_before: For CANCELLING/PENDING jobs - modified_at before this time
-            started_before: For RUNNING jobs - started_at before this time
-
-        Returns:
-            List of stuck sync jobs
-        """
-        # Native imports share durable jobs, but own their explicit resume/cancel
-        # lifecycle. Provider heartbeat timeouts must never terminate them.
-        native_source = (
-            select(SourceConnection.id)
-            .where(
-                SourceConnection.sync_id == SyncJob.sync_id,
-                SourceConnection.organization_id == SyncJob.organization_id,
-                SourceConnection.short_name == "almanac",
-            )
-            .exists()
-        )
-        stmt = select(SyncJob).where(SyncJob.status.in_(status), ~native_source)
-
-        # Apply timestamp filters based on what's provided
-        if modified_before is not None:
-            stmt = stmt.where(SyncJob.modified_at < modified_before)
-        if started_before is not None:
-            stmt = stmt.where(SyncJob.started_at < started_before)
-
-        result = await db.execute(stmt)
-        return list(result.scalars().all())
 
 
 sync_job = CRUDSyncJob(SyncJob)

@@ -7,11 +7,10 @@ from fastapi import Depends, HTTPException, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api import deps
-from airweave.api.backend_actor import backend_actor
+from airweave.api.backend_actor import backend_owned_actor
 from airweave.api.context import ApiContext
 from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
-from airweave.db.session import get_db
 from airweave.domains.entities.canonical.page_receipts import PageAcknowledgement
 from airweave.domains.entities.canonical.store import CanonicalStoreError, WriterBusy
 from airweave.domains.native_ingestion.access_models import NativeAccessChange, NativeRecordAccess
@@ -34,8 +33,8 @@ async def start_native_import(
     source_id: UUID,
     request_key: RequestKey,
     request: StartNativeImport,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeImportState:
     """Start or recover identical intent in the authenticated organization."""
@@ -51,8 +50,8 @@ async def start_native_import(
 async def read_native_import(
     source_id: UUID,
     request_key: RequestKey,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeImportState:
     """Read import state without activating any writer."""
@@ -69,8 +68,8 @@ async def begin_scope(
     source_id: UUID,
     request_key: RequestKey,
     request: BeginNativeScope,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeScopeState:
     """Begin scope using server-held import authority."""
@@ -89,8 +88,8 @@ async def read_scope(
     source_id: UUID,
     request_key: RequestKey,
     request: NativeScopeRef,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeScopeState:
     """Read scope using server-held import authority."""
@@ -109,8 +108,8 @@ async def reconcile_scope(
     source_id: UUID,
     request_key: RequestKey,
     request: ReconcileNativeScope,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeScopeState:
     """Reconcile scope using server-held import authority."""
@@ -129,8 +128,8 @@ async def page(
     source_id: UUID,
     request_key: RequestKey,
     request: CommitNativePage,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> PageAcknowledgement:
     """Page using server-held import authority."""
@@ -148,8 +147,8 @@ async def page(
 async def complete_native_import(
     source_id: UUID,
     request_key: RequestKey,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeImportState:
     """Complete this authorized import; never change another writer."""
@@ -167,8 +166,8 @@ async def complete_native_import(
 async def cancel_native_import(
     source_id: UUID,
     request_key: RequestKey,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeImportState:
     """Cancel this authorized import; never change another writer."""
@@ -190,8 +189,8 @@ async def read_access(
     source_id: UUID,
     request_key: RequestKey,
     record_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeRecordAccess:
     """Read access metadata under the authenticated native source binding."""
@@ -214,8 +213,8 @@ async def change_access(
     request_key: RequestKey,
     record_id: UUID,
     request: NativeAccessChange,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> NativeRecordAccess:
     """Accept explicit fresh source evidence; never restore from an old page retry."""

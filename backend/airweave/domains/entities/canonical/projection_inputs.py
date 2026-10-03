@@ -10,19 +10,29 @@ from airweave.platform.entities._base import BaseEntity
 
 
 class ProjectionInput(BaseModel):
-    """An expected part, with None only for explicitly uncaptured original bytes."""
+    """An expected part, with explicit omissions for unavailable or unconvertible originals."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     part: ExtractionPart
     entity: BaseEntity | None
     native_body: NativeTextBody | None = None
-    omission: Literal["unsupported_format"] | None = None
+    omission: (
+        Literal[
+            "unsupported_format",
+            "conversion_failed",
+            "export_size_limit",
+            "read_size_limit",
+            "unsupported",
+            "download_not_permitted",
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def valid_omission(self) -> "ProjectionInput":
-        """Explicit unsupported originals cannot also supply indexable content."""
+        """Explicitly omitted originals cannot also supply indexable content."""
         if self.omission is not None and (self.entity is not None or self.native_body is not None):
-            raise ValueError("Unsupported projection parts cannot supply an entity or text")
+            raise ValueError("Omitted projection parts cannot supply an entity or text")
         return self
 
 

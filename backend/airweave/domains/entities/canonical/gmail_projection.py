@@ -18,6 +18,13 @@ from airweave.domains.storage.protocols import StorageBackend
 from airweave.platform.entities._base import Breadcrumb
 from airweave.platform.entities.gmail import GmailAttachmentEntity, GmailMessageEntity
 
+_INERT_TEXT_MIME = {
+    "text/calendar": ".ics",
+    "application/ics": ".ics",
+    "message/delivery-status": ".dsn",
+    "text/rfc822-headers": ".headers",
+}
+
 
 def _header(part: dict, name: str) -> str:
     return next(
@@ -105,6 +112,7 @@ class GmailProjection:
         filename = part.get("filename") or "attachment"
         mime = part.get("mimeType", "application/octet-stream")
         suffix = Path(filename).suffix.lower() or mimetypes.guess_extension(mime) or ".bin"
+        suffix = _INERT_TEXT_MIME.get(mime.lower(), suffix)
         descriptor = ExtractionPart(
             part_index=len(self.attachments) + 1,
             key=path,
@@ -120,6 +128,20 @@ class GmailProjection:
             self.attachments.append(ProjectionInput(part=descriptor, entity=None))
             return
         content = await _body(part, path, self.record, self.storage)
+        original_size = len(content)
+        if mime.lower() in _INERT_TEXT_MIME:
+            try:
+                decoded = _decode_text(content, part, path)
+            except (UnicodeDecodeError, LookupError):
+                self.attachments.append(
+                    ProjectionInput(part=descriptor, entity=None, omission="conversion_failed")
+                )
+                return
+            content = decoded.text.encode("utf-8")
+            if decoded.recovery is not None:
+                descriptor = descriptor.model_copy(
+                    update={"charset_recoveries": (decoded.recovery,)}
+                )
         local = await write_blob(content, self.directory, suffix=suffix)
         message_id = self.record.identity.native_id
         entity = GmailAttachmentEntity(
@@ -136,7 +158,7 @@ class GmailProjection:
             attachment_id=part.get("body", {}).get("attachmentId") or part.get("partId") or path,
             thread_id=self.record.payload["threadId"],
             url=f"https://mail.google.com/mail/u/0/#inbox/{message_id}",
-            size=len(content),
+            size=original_size,
             file_type=suffix.lstrip("."),
             mime_type=mime,
             local_path=str(local),

@@ -775,7 +775,8 @@ AUTH_PROVIDER_INSTANCE_TABLE = [
     AuthProviderInstanceCase(id="conn-not-found", conn_found=False,
                              expect_error=NotFoundException, error_match="readable_id"),
     AuthProviderInstanceCase(id="no-cred-on-conn", has_cred_id=False,
-                             expect_error=NotFoundException, error_match="no integration credential"),
+                             expect_error=NotFoundException,
+                             error_match="no integration credential"),
     AuthProviderInstanceCase(id="cred-not-found", cred_found=False,
                              expect_error=NotFoundException, error_match="credential not found"),
     AuthProviderInstanceCase(id="not-in-ap-registry", in_ap_registry=False,
@@ -1068,3 +1069,20 @@ async def test_create_does_not_wrap_token_provider_server_error():
 
     with pytest.raises(TokenProviderServerError):
         await service.create(db=MagicMock(), source_connection_id=sc_id, ctx=_make_ctx())
+
+
+@pytest.mark.asyncio
+async def test_http_client_enforces_supplied_limits_without_paid_feature():
+    """Owned provider protection is independent of inherited subscription flags."""
+    service = _make_service()
+    ctx = _make_ctx(enabled_features=[])
+    limiter = MagicMock()
+    limiter.check_and_increment = AsyncMock(side_effect=RuntimeError("configured guard"))
+    service._rate_limiter = limiter
+    client = service._build_http_client("gmail", uuid4(), ctx, MagicMock())
+    try:
+        with pytest.raises(RuntimeError, match="configured guard"):
+            await client.get("https://gmail.googleapis.com/gmail/v1/users/me/profile")
+        limiter.check_and_increment.assert_awaited_once()
+    finally:
+        await client.aclose()

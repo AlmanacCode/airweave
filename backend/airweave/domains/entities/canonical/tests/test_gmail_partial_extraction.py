@@ -46,7 +46,10 @@ def attached(*parts):
 def pipeline(database, tmp_path, registry):
     processor = ChunkEmbedProcessor(registry, FakeDenseEmbedder(), FakeSparseEmbedder())
     return CanonicalProjector(
-        CanonicalProjectionStore(), database, processor, FilesystemBackend(tmp_path)
+        CanonicalProjectionStore(),
+        lambda _organization: database(),
+        processor,
+        FilesystemBackend(tmp_path),
     )
 
 
@@ -105,7 +108,7 @@ async def test_body_query_and_original_thread_read_work_before_attachment_finish
 
 
 async def test_partial_retry_cannot_drop_a_good_part_and_recovers_without_recapture(
-    database, source, tmp_path
+    database, source, tmp_path, worker_discovery
 ):
     service, fence = source
     binding = await bind_projection(database, fence, "gmail")
@@ -293,3 +296,31 @@ async def test_source_withdrawal_during_partial_feed_denies_body_and_publication
     async with database() as db:
         row = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
         assert row.indexed_generation is None
+
+
+async def test_malformed_text_attachment_keeps_parent_body_and_original(database, source, tmp_path):
+    from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
+    from airweave.models.projection_generation import ProjectionGeneration
+
+    service, fence = source
+    binding = await bind_projection(database, fence, "gmail")
+    original = attached(part(b"\xff\xfe\x00", mime="text/plain", filename="broken.txt"))
+    await capture(database, service, fence, original)
+    target = destination(binding.collection_id)
+    result = await pipeline(database, tmp_path, ConverterRegistry()).batch(
+        fence.organization_id, fence.sync_id, "gmail", target, logger
+    )
+    assert result.published == 1 and result.failed == 1
+    target.feed_prepared.assert_awaited_once()
+    async with database() as db:
+        row = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
+        generation = await db.get(ProjectionGeneration, row.indexed_generation)
+        coverage = ExtractionCoverage.model_validate(generation.extraction_coverage)
+        assert coverage.status == "partial"
+        assert [(p.outcome, p.reason) for p in coverage.parts] == [
+            ("indexed", None),
+            ("failed", "conversion_failed"),
+        ]
+        assert row.source_payload == original.payload and row.record_revision == 1
+    page = await read(database, fence, filters=MailFilters(query="retained body boundary"))
+    assert len(page.messages) == 1 and page.indexing.text_ready == 1

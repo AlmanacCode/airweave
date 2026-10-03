@@ -8,11 +8,10 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api import deps
-from airweave.api.backend_actor import backend_actor
+from airweave.api.backend_actor import backend_owned_actor
 from airweave.api.context import ApiContext
 from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
-from airweave.db.session import get_db
 from airweave.domains.device_ingestion.models import (
     BindDevice,
     DeviceBeginRequest,
@@ -44,8 +43,8 @@ def admission_error(error: CanonicalStoreError) -> HTTPException:
 @router.put("", response_model=DeviceSourceState)
 async def ensure_source(
     request: EnsureDeviceSource,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> DeviceSourceState:
     """Ensure immutable owner/account/source identity without fabricating OAuth credentials."""
@@ -59,8 +58,8 @@ async def ensure_source(
 async def read_source(
     source_id: UUID,
     owner_id: OwnerID,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> DeviceSourceState:
     """Owner-scoped read returns enrollment metadata only."""
@@ -74,8 +73,8 @@ async def read_source(
 async def bind_device(
     source_id: UUID,
     request: BindDevice,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> DeviceSourceState:
     """Explicit backend-attested reauthorization replaces a primary device with CAS."""
@@ -89,8 +88,8 @@ async def bind_device(
 async def revoke_device(
     source_id: UUID,
     request: RevokeDevice,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> DeviceSourceState:
     """Remote generation revoke stops writes and withdraws retained-source read authority."""
@@ -105,8 +104,8 @@ async def start_run(
     source_id: UUID,
     request_key: RequestKey,
     request: DeviceBeginRequest,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> DeviceRunState:
     """Recover exact bounded-run intent; server alone creates the writer fence."""
@@ -123,8 +122,8 @@ async def read_run(
     source_id: UUID,
     request_key: RequestKey,
     owner_id: OwnerID,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> DeviceRunState:
     """Read current/terminal metadata without restoring a device or exposing private data."""
@@ -141,8 +140,8 @@ async def commit_page(
     source_id: UUID,
     request_key: RequestKey,
     request: Request,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> DevicePageAck:
     """Forward exact UTF-8 JSON bytes; never roundtrip a native Int64 through JS numbers."""
@@ -168,8 +167,8 @@ async def complete_run(
     source_id: UUID,
     request_key: RequestKey,
     request: DevicePrincipal,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> DeviceRunState:
     """Certify bounded collection only after its final page; indexing remains unverified."""
@@ -187,8 +186,8 @@ async def declare_upload(
     request_key: RequestKey,
     handle: UUID,
     request: Request,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> DeviceUploadHandle:
     """Declare immutable attachment membership and expected bytes before binary transfer."""
@@ -218,8 +217,8 @@ async def upload_content(
     device_id: UUID,
     generation: Annotated[int, Query(ge=1)],
     store_generation: UUID,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(backend_actor),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> DeviceUploadHandle:
     """Bound raw binary without accepting multipart paths or storage selectors."""

@@ -3,7 +3,7 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from airweave.domains.entities.canonical.coverage_models import CaptureCoverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
@@ -19,7 +19,20 @@ class DriveFilters(BaseModel):
     drive: NativeID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=512)
     mime_type: str | None = Field(default=None, pattern=r"^[\w.+-]+/[\w.+-]+$")
+    updated_after: AwareDatetime | None = None
+    updated_before: AwareDatetime | None = None
     sort: Literal["name", "updated"] = "name"
+
+    @model_validator(mode="after")
+    def ordered_dates(self):
+        """Require a nonempty timezone-aware modified interval."""
+        if (
+            self.updated_after is not None
+            and self.updated_before is not None
+            and self.updated_after >= self.updated_before
+        ):
+            raise ValueError("updated_after must be earlier than updated_before")
+        return self
 
 
 class DriveListQuery(BaseModel):

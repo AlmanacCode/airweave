@@ -1,12 +1,14 @@
 """Cohere text embeddings with explicit retrieval intent and bounded requests."""
 
 import math
+import time
 
 import cohere
 import httpx
 from cohere.core.api_error import ApiError
 from cohere.types import EmbedByTypeResponse
 
+from airweave.core.logging import logger
 from airweave.domains.embedders.exceptions import (
     EmbedderAuthError,
     EmbedderConfigError,
@@ -73,12 +75,16 @@ class CohereDenseEmbedder:
                 results.append(DenseEmbedding(vector=vector))
         return results
 
-    async def _request(
-        self, batch: list[str], purpose: EmbeddingPurpose
-    ) -> EmbedByTypeResponse:
-        """Translate provider errors without exposing request text or credentials."""
+    async def _request(self, batch: list[str], purpose: EmbeddingPurpose) -> EmbedByTypeResponse:
+        """Translate provider errors without exposing request text or credentials.
+
+        Logs describe SDK acknowledgments, not durable invoices or full costs.
+        SDK-internal retries and calls with no response have unknown consumption.
+        """
+        started = time.monotonic()
+        response = None
         try:
-            return await self._client.embed(
+            response = await self._client.embed(
                 model=self._model,
                 texts=batch,
                 input_type="search_query" if purpose == "query" else "search_document",
@@ -87,6 +93,7 @@ class CohereDenseEmbedder:
                 truncate="NONE",
                 request_options={"max_retries": 0},
             )
+            return response
         except ApiError as exc:
             if exc.status_code in (401, 403):
                 raise EmbedderAuthError("Cohere authentication failed", provider="cohere") from exc
@@ -101,6 +108,35 @@ class CohereDenseEmbedder:
             raise EmbedderTimeoutError(provider="cohere") from exc
         except httpx.RequestError as exc:
             raise EmbedderConnectionError(provider="cohere") from exc
+
+        finally:
+            units = response.meta.billed_units if response and response.meta else None
+            logger.info(
+                "Provider call completed",
+                extra={
+                    "custom_dimensions": {
+                        "provider": "cohere",
+                        "model": self._model,
+                        "operation": "embed",
+                        "purpose": purpose,
+                        "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+                        "outcome": "acknowledged" if response is not None else "failed",
+                        "billed_units": units.model_dump(
+                            mode="json",
+                            include={
+                                "images",
+                                "input_tokens",
+                                "image_tokens",
+                                "output_tokens",
+                                "search_units",
+                                "classifications",
+                            },
+                        )
+                        if units is not None
+                        else None,
+                    }
+                },
+            )
 
     async def close(self) -> None:
         """Release the transport owned by this adapter."""

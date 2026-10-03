@@ -114,7 +114,7 @@ async def test_run(case: RunCase):
     mock_db = AsyncMock()
 
     with patch(
-        "airweave.domains.syncs.service.get_db_context",
+        "airweave.domains.syncs.service.get_tenant_db_context",
     ) as mock_db_ctx:
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -181,7 +181,7 @@ async def test_run_forwards_optional_kwargs():
     exec_config = MagicMock()
 
     with patch(
-        "airweave.domains.syncs.service.get_db_context",
+        "airweave.domains.syncs.service.get_tenant_db_context",
     ) as mock_db_ctx:
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -243,7 +243,7 @@ async def test_credential_error_propagates_error_category():
         sync_factory=fake_factory,
     )
 
-    with patch("airweave.domains.syncs.service.get_db_context") as mock_db_ctx:
+    with patch("airweave.domains.syncs.service.get_tenant_db_context") as mock_db_ctx:
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -284,7 +284,7 @@ async def test_non_credential_error_has_no_error_category():
         sync_factory=fake_factory,
     )
 
-    with patch("airweave.domains.syncs.service.get_db_context") as mock_db_ctx:
+    with patch("airweave.domains.syncs.service.get_tenant_db_context") as mock_db_ctx:
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -337,7 +337,7 @@ async def test_classified_error_logs_at_warning_not_error():
 
     ctx = _mock_ctx()
 
-    with patch("airweave.domains.syncs.service.get_db_context") as mock_db_ctx:
+    with patch("airweave.domains.syncs.service.get_tenant_db_context") as mock_db_ctx:
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -373,7 +373,7 @@ async def test_unclassified_error_still_logs_at_error():
 
     ctx = _mock_ctx()
 
-    with patch("airweave.domains.syncs.service.get_db_context") as mock_db_ctx:
+    with patch("airweave.domains.syncs.service.get_tenant_db_context") as mock_db_ctx:
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -415,7 +415,7 @@ async def test_classified_error_pauses_sync_for_credentials():
         sync_factory=fake_factory,
     )
 
-    with patch("airweave.domains.syncs.service.get_db_context") as mock_db_ctx:
+    with patch("airweave.domains.syncs.service.get_tenant_db_context") as mock_db_ctx:
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -458,7 +458,7 @@ async def test_rate_limit_error_does_not_pause_sync():
         sync_factory=fake_factory,
     )
 
-    with patch("airweave.domains.syncs.service.get_db_context") as mock_db_ctx:
+    with patch("airweave.domains.syncs.service.get_tenant_db_context") as mock_db_ctx:
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -504,7 +504,7 @@ async def test_classified_error_wrapped_as_application_error():
         sync_factory=fake_factory,
     )
 
-    with patch("airweave.domains.syncs.service.get_db_context") as mock_db_ctx:
+    with patch("airweave.domains.syncs.service.get_tenant_db_context") as mock_db_ctx:
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -546,7 +546,7 @@ async def test_unclassified_error_not_wrapped():
         sync_factory=fake_factory,
     )
 
-    with patch("airweave.domains.syncs.service.get_db_context") as mock_db_ctx:
+    with patch("airweave.domains.syncs.service.get_tenant_db_context") as mock_db_ctx:
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -594,7 +594,7 @@ async def test_classified_error_pause_failure_does_not_mask_classification():
 
     ctx = _mock_ctx()
 
-    with patch("airweave.domains.syncs.service.get_db_context") as mock_db_ctx:
+    with patch("airweave.domains.syncs.service.get_tenant_db_context") as mock_db_ctx:
         mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_db_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1076,8 +1076,8 @@ async def test_create_no_cron_no_run_immediately():
     "source_kind, source_config, expected_version",
     [
         ("legacy", None, 1),
-        ("gmail", None, 2),
-        ("slack", None, 2),
+        ("gmail", None, 4),
+        ("slack", None, 4),
         ("outlook_mail", None, 1),
         ("stripe", None, 1),
         (
@@ -1089,9 +1089,9 @@ async def test_create_no_cron_no_run_immediately():
                     "api_version": "2025-06-30.basil",
                 }
             },
-            2,
+            4,
         ),
-        ("outlook_mail", {"capture_originals": True, "expected_principal_id": "native-owner"}, 2),
+        ("outlook_mail", {"capture_originals": True, "expected_principal_id": "native-owner"}, 4),
     ],
 )
 async def test_create_with_cron_calls_temporal_schedule(

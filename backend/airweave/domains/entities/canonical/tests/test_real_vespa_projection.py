@@ -115,7 +115,10 @@ async def test_captured_blob_to_published_search_and_withdrawal(
     dense, sparse = FixedDense(dimensions=384), FixedSparse()
     store = CanonicalProjectionStore()
     projector = CanonicalProjector(
-        store, database, ChunkEmbedProcessor(ConverterRegistry(), dense, sparse), storage
+        store,
+        lambda _organization: database(),
+        ChunkEmbedProcessor(ConverterRegistry(), dense, sparse),
+        storage,
     )
     destination = await VespaDestination.create(
         collection_id=collection.id, organization_id=fence.organization_id, logger=log
@@ -138,9 +141,10 @@ async def test_captured_blob_to_published_search_and_withdrawal(
             yield db
 
     app.dependency_overrides[get_db] = session
+    app.dependency_overrides[deps.get_tenant_db] = session
     app.dependency_overrides[deps.get_context] = lambda: ctx
-    app.dependency_overrides[deps.get_owned_search_context] = lambda: ctx
-    app.dependency_overrides[deps.get_search_session_factory] = lambda: database
+    app.dependency_overrides[deps.get_owned_context] = lambda: ctx
+    app.dependency_overrides[deps.get_tenant_session_factory] = lambda: database
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(owned_search=owned)
     request = {"query": "fundraising", "sync_ids": [str(fence.sync_id)], "mode": "keyword"}
     try:

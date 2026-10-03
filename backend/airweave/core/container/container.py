@@ -59,6 +59,7 @@ from airweave.domains.embedders.protocols import (
     SparseEmbedderProtocol,
     SparseEmbedderRegistryProtocol,
 )
+from airweave.domains.entities.canonical.preparation_recipe import PreparationRecipe
 from airweave.domains.entities.protocols import (
     EntityDefinitionRegistryProtocol,
     EntityRepositoryProtocol,
@@ -279,6 +280,7 @@ class Container:
     converter_registry: ConverterRegistryProtocol
 
     # Optional fields (default=None) — must be last in frozen dataclass
+    preparation_recipe: PreparationRecipe = PreparationRecipe()
     # OCR provider (with fallback chain + circuit breaking)
     ocr_provider: Optional[OcrProvider] = None
 

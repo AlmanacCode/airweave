@@ -11,7 +11,6 @@ from airweave.adapters.storage.filesystem import FilesystemBackend
 from airweave.api import deps
 from airweave.api.context import ApiContext, AuthMethod
 from airweave.api.v1.endpoints.records import record_error_response, router
-from airweave.db.session import get_db
 from airweave.domains.entities.canonical.requests import BlobReference, CaptureBatch
 from airweave.domains.entities.canonical.store import CanonicalStoreError
 from airweave.domains.entities.canonical.tests.helpers import bind_projection, observation
@@ -63,8 +62,8 @@ async def test_historical_routes_preserve_current_download_contract(database, so
         async with database() as db:
             yield db
 
-    app.dependency_overrides[get_db] = database_dependency
-    app.dependency_overrides[deps.get_context] = lambda: actor
+    app.dependency_overrides[deps.get_tenant_db] = database_dependency
+    app.dependency_overrides[deps.get_owned_context] = lambda: actor
     app.dependency_overrides[deps.get_canonical_query_service] = query_service
     app.dependency_overrides[deps.get_container] = lambda: FixtureContainer(storage)
     base = f"/api/v1/sync/{fence.sync_id}/records/{record_id}"

@@ -343,3 +343,79 @@ async def test_inline_native_size_discrepancy_preserves_data_and_metadata(tmp_pa
     source.payload["payload"]["body"]["data"] = "invalid!!"
     with pytest.raises(ValueError):
         await map_gmail(source, AsyncMock(), tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_inert_mime_text_preserves_structure_charset_and_original(tmp_path):
+    from airweave.domains.converters.registry import ConverterRegistry
+
+    text = (
+        "BEGIN:VCALENDAR\r\nSUMMARY:नमस्ते — café\r\n"
+        "DTSTART;TZID=America/Los_Angeles:20261003T090000\r\n"
+        "RRULE:FREQ=WEEKLY;COUNT=2\r\nURL:https://example.invalid/inert\r\nEND:VCALENDAR\r\n"
+    )
+    source = record(
+        {
+            "mimeType": "multipart/mixed",
+            "parts": [
+                part(b"message body"),
+                part(
+                    text.encode(),
+                    "application/ics",
+                    filename="invite.bin",
+                    headers=[
+                        {"name": "Content-Type", "value": "application/ics; charset=gb2312"},
+                    ],
+                ),
+                part(
+                    "Diagnostic-Code: smtp; café\r\n".encode("latin-1"),
+                    "message/delivery-status",
+                    headers=[
+                        {
+                            "name": "Content-Type",
+                            "value": "message/delivery-status; charset=iso-8859-1",
+                        },
+                    ],
+                ),
+                part(b"Subject: unchanged\r\n\tfolded\r\n", "text/rfc822-headers"),
+            ],
+        }
+    )
+    before = source.model_dump()
+    mapped = await map_gmail(source, AsyncMock(), tmp_path)
+    registry = ConverterRegistry()
+    extracted = []
+    for item in mapped.parts[1:]:
+        path = item.entity.local_path
+        converter = registry.for_extension(item.part.extension)
+        extracted.append((await converter.convert_batch([path]))[path].text)
+    assert extracted == [
+        text,
+        "Diagnostic-Code: smtp; café\r\n",
+        "Subject: unchanged\r\n\tfolded\r\n",
+    ]
+    assert mapped.parts[1].part.charset_recoveries[0].from_charset == "gb2312"
+    assert registry.for_extension(".bin") is None
+    assert source.model_dump() == before
+
+
+@pytest.mark.asyncio
+async def test_invalid_inert_attachment_does_not_discard_parent_body(tmp_path):
+    from airweave.domains.converters.strict_text import StrictTextConverter
+
+    source = record(
+        {
+            "mimeType": "multipart/mixed",
+            "parts": [
+                part(b"valid parent"),
+                part(b"\xff\xfe", "text/calendar"),
+            ],
+        }
+    )
+    mapped = await map_gmail(source, AsyncMock(), tmp_path)
+    assert "valid parent" in next(tmp_path.glob("*.html")).read_text()
+    assert mapped.parts[1].omission == "conversion_failed"
+    assert mapped.parts[1].entity is None
+    invalid = tmp_path / "invalid.ics"
+    invalid.write_bytes(b"\xff")
+    assert (await StrictTextConverter().convert_batch([str(invalid)]))[str(invalid)].text is None

@@ -25,7 +25,11 @@ from airweave.domains.entities.canonical.content_models import ContentProvenance
 from airweave.domains.entities.canonical.coverage import capture_coverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
 from airweave.domains.entities.canonical.projection_models import ProjectionLocator
-from airweave.domains.entities.canonical.projection_store import publications_match
+from airweave.domains.entities.canonical.projection_store import (
+    extraction_has_gaps,
+    extraction_has_indexed_content,
+    publications_match,
+)
 from airweave.domains.entities.canonical.read_authority import source_is_readable
 from airweave.domains.entities.canonical.requests import RecordIdentity
 from airweave.domains.entities.canonical.search_metadata import (
@@ -984,9 +988,7 @@ class OwnedSearchService:
             Entity.indexed_pipeline_version.is_distinct_from(Sync.index_pipeline_version),
             Entity.indexed_generation.is_(None),
         )
-        has_indexed = ProjectionGeneration.extraction_coverage.contains(
-            {"parts": [{"outcome": "indexed"}]}
-        )
+        has_indexed = extraction_has_indexed_content()
         has_omitted = (
             ProjectionGeneration.extraction_coverage.contains(
                 {"parts": [{"outcome": "unsupported"}]}
@@ -995,6 +997,7 @@ class OwnedSearchService:
                 {"parts": [{"outcome": "unavailable_original"}]}
             )
             | ProjectionGeneration.extraction_coverage.contains({"parts": [{"outcome": "failed"}]})
+            | extraction_has_gaps()
         )
         rows = await db.execute(
             select(

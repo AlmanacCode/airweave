@@ -3,7 +3,10 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import JsonValue
 
+from airweave.domains.entities.canonical.requests import CompletedScope
+from airweave.domains.entities.canonical.scan_models import ScanContinuation
 from airweave.domains.sources.exceptions import SourceServerError
 from airweave.domains.sources.exceptions.classifier import classify_error
 from airweave.domains.sources.token_providers.protocol import ManagedToolAuthProvider
@@ -172,7 +175,7 @@ async def test_listing_preserves_native_row_and_continuation(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_partitioned_listing_resumes_both_half_open_windows(monkeypatch):
+async def test_partitioned_listing_resumes_newer_then_older_half_open_windows(monkeypatch):
     from airweave.domains.entities.canonical.page_source import CanonicalPageSource
     from airweave.domains.entities.canonical.requests import CompletedScope
     from airweave.domains.entities.canonical.scan_models import ScanContinuation
@@ -186,8 +189,8 @@ async def test_partitioned_listing_resumes_both_half_open_windows(monkeypatch):
     execute = AsyncMock(
         side_effect=[
             {"meetings": rows, "has_more": True, "truncated": True},
-            {"meetings": rows[:1], "has_more": False},
             {"meetings": rows[1:], "has_more": False},
+            {"meetings": rows[:1], "has_more": False},
         ]
     )
     monkeypatch.setattr(connector, "_execute", execute)
@@ -205,9 +208,187 @@ async def test_partitioned_listing_resumes_both_half_open_windows(monkeypatch):
     assert not second.final
     third = await resumed.capture_page(scope, second.continuation, files=MagicMock())
     assert third.final
-    assert execute.call_args_list[1].args[1]["until"] == "2026-01-02T00:00:00+00:00"
-    assert execute.call_args_list[2].args[1]["since"] == "2026-01-02T00:00:00+00:00"
-    assert third.records[0].identity.native_id == "b"
+    assert execute.call_args_list[1].args[1] == {
+        "limit": 200,
+        "since": "2026-01-02T00:00:00+00:00",
+    }
+    assert execute.call_args_list[2].args[1] == {
+        "limit": 200,
+        "until": "2026-01-02T00:00:00+00:00",
+    }
+    assert second.records[0].identity.native_id == "b"
+    assert third.records[0].identity.native_id == "a"
+
+
+@pytest.mark.asyncio
+async def test_nested_newer_windows_resume_after_failure_and_drain_older_ranges(monkeypatch):
+    def row(day: int) -> dict[str, JsonValue]:
+        return {"id": f"meeting-{day}", "start": f"2026-01-{day:02}T00:00:00Z"}
+
+    newest = {"limit": 200, "since": "2026-01-07T00:00:00+00:00"}
+    steps = iter(
+        [
+            ({"limit": 200}, {"meetings": [row(1), row(9)], "has_more": True, "truncated": True}),
+            (
+                {"limit": 200, "since": "2026-01-05T00:00:00+00:00"},
+                {"meetings": [row(5), row(9)], "has_more": True, "truncated": True},
+            ),
+            (newest, None),
+            (newest, {"meetings": [row(9)], "has_more": True, "next_cursor": "native-next"}),
+            ({**newest, "cursor": "native-next"}, {"meetings": [row(7)], "has_more": False}),
+            (
+                {
+                    "limit": 200,
+                    "since": "2026-01-05T00:00:00+00:00",
+                    "until": "2026-01-07T00:00:00+00:00",
+                },
+                {"meetings": [row(5)], "has_more": False},
+            ),
+            (
+                {"limit": 200, "until": "2026-01-05T00:00:00+00:00"},
+                {"meetings": [row(1), row(3)], "has_more": False},
+            ),
+        ]
+    )
+
+    async def execute(slug: str, arguments: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        expected, response = next(steps)
+        assert slug == "WISPR_FLOW_MCP_SEARCH_MEETINGS"
+        assert arguments == expected
+        if response is None:
+            raise RuntimeError("synthetic listing interruption")
+        return response
+
+    scope = CompletedScope(record_type="meeting_listing")
+    continuation = ScanContinuation()
+    observed: set[str] = set()
+    completed_windows = []
+    # Reconstruct the source and deserialize progress before every successful page.
+    for index in range(6):
+        connector = await source()
+        monkeypatch.setattr(connector, "_execute", execute)
+        continuation = ScanContinuation.model_validate_json(continuation.model_dump_json())
+        if index == 2:
+            saved = continuation.model_dump_json()
+            with pytest.raises(RuntimeError, match="synthetic listing interruption"):
+                await connector.capture_page(scope, continuation, files=MagicMock())
+            assert continuation.model_dump_json() == saved
+            assert len(continuation.value["pending"]) == 2
+            connector = await source()
+            monkeypatch.setattr(connector, "_execute", execute)
+            continuation = ScanContinuation.model_validate_json(saved)
+        page = await connector.capture_page(scope, continuation, files=MagicMock())
+        observed.update(record.identity.native_id for record in page.records)
+        if index >= 2:
+            completed_windows.append([record.identity.native_id for record in page.records])
+        assert page.final is (index == 5)
+        continuation = page.continuation
+
+    assert completed_windows == [
+        ["meeting-9"],
+        ["meeting-7"],
+        ["meeting-5"],
+        ["meeting-1", "meeting-3"],
+    ]
+    assert observed == {f"meeting-{day}" for day in (1, 3, 5, 7, 9)}
+    assert continuation.value["pending"] == []
+    assert next(steps, None) is None
+
+
+@pytest.mark.asyncio
+async def test_existing_older_first_cursor_keeps_active_window_and_pending_range(monkeypatch):
+    connector = await source()
+    execute = AsyncMock(
+        side_effect=[
+            {"meetings": [{"id": "older", "start": "2026-01-03T00:00:00Z"}], "has_more": False},
+            {"meetings": [{"id": "newer", "start": "2026-01-09T00:00:00Z"}], "has_more": False},
+        ]
+    )
+    monkeypatch.setattr(connector, "_execute", execute)
+    continuation = ScanContinuation(
+        value={
+            "cursor": "existing-native-cursor",
+            "window": {"until": "2026-01-05T00:00:00Z", "depth": 1},
+            "pending": [{"since": "2026-01-05T00:00:00Z", "depth": 1}],
+        }
+    )
+    scope = CompletedScope(record_type="meeting_listing")
+    older = await connector.capture_page(scope, continuation, files=MagicMock())
+    newer = await connector.capture_page(scope, older.continuation, files=MagicMock())
+    assert not older.final and newer.final
+    assert execute.call_args_list[0].args[1] == {
+        "limit": 200,
+        "cursor": "existing-native-cursor",
+        "until": "2026-01-05T00:00:00+00:00",
+    }
+    assert execute.call_args_list[1].args[1] == {
+        "limit": 200,
+        "since": "2026-01-05T00:00:00+00:00",
+    }
+
+
+@pytest.mark.asyncio
+async def test_count_cap_preserves_finite_bounds_and_depth_limit_stays_incomplete(monkeypatch):
+    connector = await source()
+    execute = AsyncMock(
+        side_effect=[
+            {
+                "meetings": [
+                    {"id": str(index), "start": "2026-01-07T00:00:00Z"} for index in range(200)
+                ],
+                "has_more": True,
+                "next_cursor": "past-query-cap",
+            },
+            {
+                "meetings": [
+                    {"id": "six", "start": "2026-01-06T00:00:00Z"},
+                    {"id": "eight", "start": "2026-01-08T00:00:00Z"},
+                ],
+                "has_more": False,
+                "truncated": True,
+            },
+        ]
+    )
+    monkeypatch.setattr(connector, "_execute", execute)
+    continuation = ScanContinuation(
+        value={
+            "cursor": "at-query-cap",
+            "count": 800,
+            "earliest": "2026-01-03T00:00:00Z",
+            "latest": "2026-01-07T00:00:00Z",
+            "window": {
+                "since": "2026-01-01T00:00:00Z",
+                "until": "2026-01-09T00:00:00Z",
+                "depth": 31,
+            },
+        }
+    )
+    scope = CompletedScope(record_type="meeting_listing")
+    capped = await connector.capture_page(scope, continuation, files=MagicMock())
+    assert not capped.final and len(capped.records) == 200
+    assert capped.continuation.value["window"] == {
+        "since": "2026-01-05T00:00:00Z",
+        "until": "2026-01-09T00:00:00Z",
+        "depth": 32,
+    }
+    assert capped.continuation.value["pending"] == [
+        {
+            "since": "2026-01-01T00:00:00Z",
+            "until": "2026-01-05T00:00:00Z",
+            "depth": 32,
+        }
+    ]
+    assert capped.continuation.value["cursor"] is None
+    assert capped.continuation.value["count"] == 0
+    saved = capped.continuation.model_dump_json()
+    with pytest.raises(ValueError, match="cannot be partitioned safely"):
+        await connector.capture_page(scope, capped.continuation, files=MagicMock())
+    assert capped.continuation.model_dump_json() == saved
+    assert execute.call_args_list[1].args[1] == {
+        "limit": 200,
+        "since": "2026-01-05T00:00:00+00:00",
+        "until": "2026-01-09T00:00:00+00:00",
+    }
 
 
 @pytest.mark.asyncio
@@ -374,8 +555,8 @@ async def test_scratchpad_partitions_by_modified_time_and_keeps_native_listing(m
     execute = AsyncMock(
         side_effect=[
             {"notes": rows, "has_more": True, "truncated": True},
-            {"notes": rows[:1], "has_more": False},
             {"notes": rows[1:], "has_more": False},
+            {"notes": rows[:1], "has_more": False},
         ]
     )
     monkeypatch.setattr(connector, "_execute", execute)
@@ -386,8 +567,16 @@ async def test_scratchpad_partitions_by_modified_time_and_keeps_native_listing(m
     second = await connector.capture_page(scope, first.continuation, files=MagicMock())
     third = await connector.capture_page(scope, second.continuation, files=MagicMock())
     assert third.final
-    assert execute.call_args_list[1].args[1]["until"] == "2026-01-02T00:00:00+00:00"
-    assert execute.call_args_list[2].args[1]["since"] == "2026-01-02T00:00:00+00:00"
+    assert execute.call_args_list[1].args[1] == {
+        "limit": 200,
+        "since": "2026-01-02T00:00:00+00:00",
+    }
+    assert execute.call_args_list[2].args[1] == {
+        "limit": 200,
+        "until": "2026-01-02T00:00:00+00:00",
+    }
+    assert second.records[0].payload == rows[1]
+    assert third.records[0].payload == rows[0]
     assert connector.capture_cycle_configuration.policy("scratchpad_listing") == "discovery_only"
 
 

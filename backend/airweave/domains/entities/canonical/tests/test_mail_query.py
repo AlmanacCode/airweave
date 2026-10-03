@@ -317,7 +317,9 @@ async def test_real_gmail_builder_retains_body_after_embedding_failure(database,
         work = (await store.pending(db, fence.organization_id, fence.sync_id))[0]
     processor = ChunkEmbedProcessor(ConverterRegistry(), FakeDenseEmbedder(), FakeSparseEmbedder())
     processor.process_built_text = AsyncMock(side_effect=RuntimeError("Embedding unavailable"))
-    projector = CanonicalProjector(store, database, processor, FilesystemBackend(tmp_path))
+    projector = CanonicalProjector(
+        store, lambda _organization: database(), processor, FilesystemBackend(tmp_path)
+    )
     destination = MagicMock(collection_id=binding.collection_id)
     with pytest.raises(RuntimeError, match="Embedding unavailable"):
         await projector.project_one(work, "gmail", destination, MagicMock())

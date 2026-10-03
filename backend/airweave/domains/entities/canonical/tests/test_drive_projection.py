@@ -1,18 +1,24 @@
 """Drive projection preserves retained representations and explicit content gaps."""
 
 import hashlib
+import json
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
+import httpx
 import pytest
-
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.projection_mappers import map_record
 from airweave.domains.entities.canonical.projection_models import ProjectionBinding, ProjectionWork
 from airweave.domains.entities.canonical.projector import _select_inputs
+from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.requests import BlobReference, RecordIdentity
+from airweave.domains.storage.exceptions import FileSkippedException
+from airweave.platform.sources.records.google_drive import file_record
+from airweave.platform.sources.records.google_drive_content import capture_file_content
 from airweave.platform.sources.records.workspace_manifest import (
     DOCS_MIME,
     MANIFEST_MIME,
@@ -219,3 +225,79 @@ async def test_docs_without_native_or_export_publishes_only_unavailable_coverage
         assert evidence.parts[0].outcome == "unavailable_original"
     assert source.model_dump() == before and source.completeness == "partial"
     storage.read_file.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "mime,reason",
+    [
+        ("application/vnd.google-apps.presentation", "export_size_limit"),
+        ("application/vnd.google-apps.spreadsheet", "export_size_limit"),
+        ("application/pdf", "read_size_limit"),
+        ("application/vnd.google-apps.unknown", "unsupported"),
+        ("application/vnd.google-apps.presentation", "download_not_permitted"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_export_omission_capture_projection_and_authorized_manifest_read(mime, reason):
+    source = original(mime)
+    payload = dict(source.payload)
+    if reason == "download_not_permitted":
+        payload["capabilities"] = {"canDownload": False}
+    stored = {}
+
+    async def store(content, *, media_type):
+        blob = retain(source, content, media_type)
+        stored[blob.key] = content
+        return blob
+
+    download = AsyncMock()
+    if reason == "export_size_limit":
+        response = httpx.Response(
+            403,
+            json={"error": {"errors": [{"reason": "exportSizeLimitExceeded"}]}},
+            request=httpx.Request("GET", "https://provider.test/export"),
+        )
+        download.side_effect = httpx.HTTPStatusError(
+            "large", request=response.request, response=response
+        )
+    elif reason == "read_size_limit":
+        download.side_effect = FileSkippedException(reason="large", filename="file")
+    get = AsyncMock(return_value={"version": "7"})
+    capture = await capture_file_content(
+        file_record(payload),
+        files=SimpleNamespace(
+            capture_canonical_url=download, store_canonical_blob=AsyncMock(side_effect=store)
+        ),
+        get=get,
+        client=object(),
+        auth=object(),
+        logger=Mock(),
+    )
+    source = source.model_copy(
+        update={
+            "payload": capture.payload,
+            "blobs": capture.blobs,
+            "content_hash": capture.content_hash,
+            "completeness": capture.completeness,
+        }
+    )
+    get.assert_awaited_once()
+    provider_calls = download.await_count
+    storage = SimpleNamespace(read_file=AsyncMock(side_effect=lambda key, **kwargs: stored[key]))
+    async with map_record(source, "google_drive", storage) as mapped:
+        evidence = coverage(mapped, source)
+        omitted = next(part for part in evidence.parts if part.outcome == "unavailable_original")
+        assert omitted.reason == reason and omitted.key == "/export"
+        assert any(part.kind == "metadata" and part.outcome == "indexed" for part in evidence.parts)
+    queries = SimpleNamespace(read=AsyncMock(return_value=source))
+    query = CanonicalQueryService(object(), queries, "unused-for-exact-read")
+    manifest = source.blobs[0]
+    db = SimpleNamespace(expire_all=Mock())
+    raw = await query.blob(
+        db, uuid4(), source.sync_id, source.id, source.revision, manifest.sha256, storage
+    )
+    assert json.loads(raw)["export"]["reason"] == reason
+    assert json.loads(raw)["schema_version"] == 3
+    assert source.payload == payload
+    assert download.await_count == provider_calls
+    db.expire_all.assert_called_once()

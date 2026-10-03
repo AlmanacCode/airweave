@@ -162,7 +162,7 @@ async def test_transition_failed_publishes_lifecycle_event_with_error_category()
     ctx.organization = MagicMock()
     ctx.organization.id = ORG_ID
 
-    with patch("airweave.domains.syncs.jobs.state_machine.get_db_context") as mock_ctx:
+    with patch("airweave.domains.syncs.jobs.state_machine.get_tenant_db_context") as mock_ctx:
         mock_db = AsyncMock()
         mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -198,7 +198,7 @@ async def test_transition_failed_with_error_category():
     ctx.organization = MagicMock()
     ctx.organization.id = ORG_ID
 
-    with patch("airweave.domains.syncs.jobs.state_machine.get_db_context") as mock_ctx:
+    with patch("airweave.domains.syncs.jobs.state_machine.get_tenant_db_context") as mock_ctx:
         mock_db = AsyncMock()
         mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)

@@ -110,7 +110,7 @@ class CanonicalWisprQuery:
             candidate = candidate.where(Entity.meeting_started_at >= query.filters.after)
         if query.filters.before is not None:
             candidate = candidate.where(Entity.meeting_started_at < query.filters.before)
-        if cursor is not None:
+        if cursor is not None and cursor.after_id is not None:
             candidate = candidate.where(
                 tuple_(Entity.meeting_started_at, Entity.id)
                 < tuple_(cursor.after_started_at, cursor.after_id)
@@ -149,8 +149,19 @@ class CanonicalWisprQuery:
                 self.signing_key,
                 algorithm="HS256",
             )
+        start_cursor = query.cursor or jwt.encode(
+            MeetingCursor(
+                organization_id=organization,
+                sync_id=sync,
+                filters=query.filters,
+                sequence=sequence,
+            ).model_dump(mode="json"),
+            self.signing_key,
+            algorithm="HS256",
+        )
         return MeetingPage(
             meetings=meetings,
+            start_cursor=start_cursor,
             next_cursor=token,
             has_more=more,
             capture=capture,

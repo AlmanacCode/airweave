@@ -9,6 +9,7 @@ from uuid import UUID
 from airweave.core.protocols.registry import BaseRegistryEntry
 from airweave.domains.auth_provider._base import BaseAuthProvider
 from airweave.domains.credentials.types import DecryptedCredential
+from airweave.domains.owned_provisioning.models import ManagedSource
 from airweave.domains.sources.token_providers.protocol import (
     ManagedAuthProvider,
     ManagedToolAuthProvider,
@@ -82,6 +83,7 @@ class SourceConnectionData:
     oauth_type: Optional[str]
     readable_auth_provider_id: Optional[str]
     auth_provider_config: Optional[dict]
+    owned_source: ManagedSource | None = None
 
 
 @dataclass(frozen=True)

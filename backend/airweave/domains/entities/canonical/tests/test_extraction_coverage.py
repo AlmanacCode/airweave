@@ -65,7 +65,7 @@ def destination(collection_id):
 def projector(database, storage):
     return CanonicalProjector(
         CanonicalProjectionStore(),
-        database,
+        lambda _organization: database(),
         ChunkEmbedProcessor(ConverterRegistry(), FakeDenseEmbedder(), FakeSparseEmbedder()),
         storage,
     )
@@ -397,7 +397,7 @@ async def test_inline_image_without_ocr_and_configured_conversion_failure_are_di
     ocr = MagicMock(convert_batch=AsyncMock(side_effect=lambda paths: dict.fromkeys(paths)))
     configured = CanonicalProjector(
         CanonicalProjectionStore(),
-        database,
+        lambda _organization: database(),
         ChunkEmbedProcessor(ConverterRegistry(ocr), FakeDenseEmbedder(), FakeSparseEmbedder()),
         storage,
     )
@@ -553,3 +553,176 @@ async def test_pdf_partial_and_unavailable_ocr_are_published_without_losing_orig
                 assert coverage.parts[-1].kind == "metadata"
             ref, original = originals[native]
             assert await storage.read_file(ref.key) == original
+
+
+async def test_inert_attachment_decode_failure_publishes_body_with_failed_part(
+    database, source, tmp_path
+):
+    service, fence = source
+    binding = await bind_projection(database, fence, "gmail")
+    await capture(
+        database,
+        service,
+        fence,
+        original(
+            part(b"BEGIN:VCALENDAR\r\nSUMMARY:Review\r\nEND:VCALENDAR\r\n", mime="text/calendar"),
+            part(b"\xff", mime="text/calendar"),
+        ),
+    )
+    target = destination(binding.collection_id)
+    result = await projector(database, FilesystemBackend(tmp_path)).batch(
+        fence.organization_id, fence.sync_id, "gmail", target, logger
+    )
+    assert result.published == 1 and result.failed == 1
+    target.feed_prepared.assert_awaited_once()
+    async with database() as db:
+        row = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
+        coverage = await current_extraction(
+            db, fence.organization_id, fence.sync_id, row.id, row.record_revision
+        )
+        assert coverage.status == "partial"
+        assert [p.outcome for p in coverage.parts] == ["indexed", "indexed", "failed"]
+        assert coverage.parts[2].reason == "conversion_failed"
+        assert row.projection_error == "conversion_failed"
+
+
+async def test_xlsx_limit_keeps_published_mail_body_and_captured_original(
+    database, source, tmp_path
+):
+    """Real XLSX extraction + SQL; synthetic MIME and fake embeddings, no provider calls."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    from airweave.domains.entities.canonical.mail_body import current_mail_body
+
+    workbook = Workbook()
+    workbook.active["A1"] = "नमस्ते"
+    workbook.active["XFD1"] = "Original retained far column"
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    data = stream.getvalue()
+    service, fence = source
+    binding = await bind_projection(database, fence, "gmail")
+    item = original(
+        part(
+            data,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename="sparse.xlsx",
+        )
+    )
+    await capture(database, service, fence, item)
+    target = destination(binding.collection_id)
+    result = await projector(database, FilesystemBackend(tmp_path)).batch(
+        fence.organization_id, fence.sync_id, "gmail", target, logger
+    )
+    assert result.failed == 1 and result.published == 1
+    target.feed_prepared.assert_awaited_once()
+    async with database() as db:
+        row = (await db.scalars(select(Entity).where(Entity.sync_id == fence.sync_id))).one()
+        coverage = await current_extraction(
+            db, fence.organization_id, fence.sync_id, row.id, row.record_revision
+        )
+        assert coverage.status == "partial"
+        assert [p.outcome for p in coverage.parts] == ["indexed", "failed"]
+        assert coverage.parts[1].reason == "preparation_limit"
+        captured = await service.store.read(db, fence.organization_id, fence.sync_id, row.id)
+        assert captured.completeness == "complete" and captured.content_access == "available"
+        assert captured.payload == item.payload
+        body = await db.scalar(
+            select(current_mail_body().with_only_columns(ProjectionGeneration.mail_body_text)
+                   .scalar_subquery()).select_from(Entity).join(Sync, Sync.id == Entity.sync_id)
+        )
+        assert "intact fundraising email body with useful context" in body.lower()
+
+
+@pytest.mark.parametrize("over_limit", [False, True])
+async def test_embedded_content_gap_reaches_partial_mail_coverage_offline(tmp_path, over_limit):
+    """Actual MIME mapping/converters/coverage; no SQL, embedding, OCR or remote feed."""
+    from io import BytesIO
+    from types import SimpleNamespace
+
+    from docx import Document
+    from PIL import Image
+
+    from airweave.domains.converters.docx import DocxConverter
+    from airweave.domains.converters.package_limits import PackageTextLimits
+    from airweave.domains.entities.canonical.gmail_projection import map_gmail
+    from airweave.domains.entities.canonical.projection_models import (
+        ProjectionBinding,
+        ProjectionWork,
+    )
+    from airweave.domains.entities.canonical.projector import (
+        ProjectionConversionTracker,
+        _conversion_coverage,
+        _select_inputs,
+    )
+    from airweave.domains.entities.canonical.tests.test_gmail_projection import record
+    from airweave.domains.sync_pipeline.pipeline.text_builder import TextualRepresentationBuilder
+
+    document = Document()
+    text = "नमस्ते — اردو — 中文. Retained attachment paragraph with useful source context."
+    document.add_paragraph(text)
+    image = BytesIO()
+    Image.new("RGB", (10, 10), "blue").save(image, format="PNG")
+    document.add_picture(image)
+    content = BytesIO()
+    document.save(content)
+    item = record(
+        {
+            "mimeType": "multipart/mixed",
+            "parts": [
+                part(b"Intact readable parent email body with enough useful source context."),
+                part(
+                    content.getvalue(),
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    filename="mixed.docx",
+                ),
+            ],
+        }
+    )
+    before = item.model_dump()
+    mapped = await map_gmail(item, AsyncMock(), tmp_path)
+    work = ProjectionWork(
+        binding=ProjectionBinding(
+            source_connection_id=uuid4(), source_name="gmail", collection_id=uuid4()
+        ),
+        organization_id=uuid4(),
+        record=item,
+        pipeline_version=1,
+        previous_generation=None,
+    )
+    selected, coverage = _select_inputs(mapped, work, "gmail", uuid4(), lambda _: True)
+    registry = ConverterRegistry()
+    if over_limit:
+        # Narrow fixture dependency: real DOCX extraction with a small output budget.
+        bounded_docx = DocxConverter(limits=PackageTextLimits(maximum_output_bytes=1))
+        configured = MagicMock()
+        configured.for_extension.side_effect = lambda extension, actual=registry: (
+            bounded_docx if extension == ".docx" else actual.for_extension(extension)
+        )
+        configured.for_web.side_effect = registry.for_web
+        registry = configured
+    batch = await TextualRepresentationBuilder(registry).build_with_text(
+        selected,
+        SimpleNamespace(source_short_name="gmail", logger=MagicMock()),
+        SimpleNamespace(entity_tracker=ProjectionConversionTracker(allow_failures=True)),
+        strict_conversion=True,
+        native_bodies={
+            p.entity.entity_id: p.native_body
+            for p in mapped.parts
+            if p.entity is not None and p.native_body is not None
+        },
+    )
+    covered = _conversion_coverage(batch, coverage)
+    assert covered.status == "partial"
+    assert [p.outcome for p in covered.parts] == ["indexed", "failed" if over_limit else "indexed"]
+    if over_limit:
+        assert covered.parts[1].reason == "preparation_limit"
+        assert len(batch.representations) == 1
+    else:
+        assert covered.parts[1].gaps == ("embedded_content_unprocessed",)
+        assert text in batch.representations[1].text
+    assert "readable parent email body" in batch.representations[0].text.lower()
+    assert item.model_dump() == before

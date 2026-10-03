@@ -1,7 +1,7 @@
 """Protocols for source connection domain."""
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,9 @@ from airweave.schemas.source_connection import (
     SourceConnectionUpdate,
 )
 
+if TYPE_CHECKING:
+    from airweave.domains.owned_provisioning.models import ManagedSource
+
 
 class SourceConnectionRepositoryProtocol(Protocol):
     """Data access for source connections.
@@ -32,6 +35,15 @@ class SourceConnectionRepositoryProtocol(Protocol):
 
     async def get(self, db: AsyncSession, id: UUID, ctx: ApiContext) -> Optional[SourceConnection]:
         """Get a source connection by ID within org scope."""
+        ...
+
+    async def get_owned_source(
+        self,
+        db: AsyncSession,
+        source: SourceConnection,
+        ctx: ApiContext,
+    ) -> "ManagedSource | None":
+        """Load a verified owned binding or fail closed on inconsistent tenant state."""
         ...
 
     async def get_by_sync_id(
@@ -188,15 +200,16 @@ class SourceConnectionCreateServiceProtocol(Protocol):
         """Create a source connection."""
         ...
 
-    async def create_deferred(
+    async def create_owned_deferred(
         self,
         db: AsyncSession,
         *,
         obj_in: SourceConnectionCreate,
         ctx: ApiContext,
         uow: UnitOfWork,
+        intent_id: UUID,
     ) -> SourceConnectionSchema:
-        """Create a managed source in the caller transaction without execution."""
+        """Create from this tenant's persisted owned intent without copying its project key."""
         ...
 
     async def reinitiate_oauth(

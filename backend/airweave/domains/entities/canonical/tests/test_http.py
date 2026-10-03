@@ -26,8 +26,9 @@ def query_app(database, context):
         async with database() as db:
             yield db
 
-    app.dependency_overrides[deps.get_context] = context
+    app.dependency_overrides[deps.get_owned_context] = context
     app.dependency_overrides[get_db] = session
+    app.dependency_overrides[deps.get_tenant_db] = session
     app.dependency_overrides[deps.get_canonical_query_service] = lambda: CanonicalQueryService(
         CanonicalRecordStore(), CanonicalQueryStore(), "synthetic-cursor-secret"
     )

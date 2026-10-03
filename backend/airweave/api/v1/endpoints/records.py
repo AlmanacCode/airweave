@@ -10,11 +10,10 @@ from pydantic import AwareDatetime, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from airweave.api import deps
-from airweave.api.backend_actor import backend_search_actor
+from airweave.api.backend_actor import backend_owned_actor
 from airweave.api.context import ApiContext
 from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
-from airweave.db.session import get_db
 from airweave.domains.entities.canonical.calendar_query import CalendarRangeNotCaptured
 from airweave.domains.entities.canonical.contact_query import (
     ContactCandidatePage,
@@ -45,6 +44,8 @@ from airweave.domains.entities.canonical.query_models import (
     HistoricalRecordRead,
     IndexedRecordRead,
     MailThreadPage,
+    RecordBrowsePage,
+    RecordBrowseQuery,
     RecordChangePage,
     RecordFilters,
     RecordListQuery,
@@ -58,6 +59,7 @@ from airweave.domains.entities.canonical.slack_models import (
     SlackTimestamp,
 )
 from airweave.domains.entities.canonical.slack_query import CanonicalSlackQuery
+from airweave.domains.entities.canonical.status_models import SourceStatus
 from airweave.domains.entities.canonical.store import CanonicalStoreError
 from airweave.domains.entities.canonical.text_models import TextRead, TextRepresentationList
 from airweave.domains.entities.canonical.wispr_models import (
@@ -84,12 +86,23 @@ async def _search_disconnected(request: Request) -> None:
         pass
 
 
+@router.post("/browse", response_model=RecordBrowsePage)
+async def browse_records(
+    request: RecordBrowseQuery,
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> RecordBrowsePage:
+    """Browse retained source clocks without reading bodies, vectors or provider APIs."""
+    return await service.browse(db, ctx.organization.id, request)
+
+
 @router.post("/search", response_model=OwnedSearchResponse)
 async def search_records(
     request: OwnedSearchRequest,
     http_request: Request,
-    sessions: async_sessionmaker[AsyncSession] = Depends(deps.get_search_session_factory),
-    ctx: ApiContext = Depends(deps.get_owned_search_context),
+    sessions: async_sessionmaker[AsyncSession] = Depends(deps.get_tenant_session_factory),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     container: Container = Depends(deps.get_container),
 ) -> OwnedSearchResponse:
     """Retrieve bounded indexed originals; no provider requests or agent execution."""
@@ -101,8 +114,8 @@ async def search_records(
 async def search_candidates(
     request: OwnedSearchRequest,
     http_request: Request,
-    sessions: async_sessionmaker[AsyncSession] = Depends(deps.get_search_session_factory),
-    ctx: ApiContext = Depends(backend_search_actor),
+    sessions: async_sessionmaker[AsyncSession] = Depends(deps.get_tenant_session_factory),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> OwnedCandidatesResponse:
     """Internal unranked candidates; the caller must check native Almanac authority."""
@@ -114,8 +127,8 @@ async def search_candidates(
 async def rank_candidates(
     request: OwnedRankRequest,
     http_request: Request,
-    sessions: async_sessionmaker[AsyncSession] = Depends(deps.get_search_session_factory),
-    ctx: ApiContext = Depends(backend_search_actor),
+    sessions: async_sessionmaker[AsyncSession] = Depends(deps.get_tenant_session_factory),
+    ctx: ApiContext = Depends(backend_owned_actor),
     container: Container = Depends(deps.get_container),
 ) -> OwnedRankResponse:
     """Rank only the shortlist already approved by the trusted product backend."""
@@ -145,6 +158,7 @@ async def record_error_response(request: Request, error: CanonicalStoreError) ->
     status = {
         "source_not_found": 404,
         "record_not_found": 404,
+        "record_metadata_unavailable": 409,
         "blob_not_found": 404,
         "stale_record_revision": 409,
         "blob_unavailable": 503,
@@ -175,25 +189,33 @@ async def drive_files(
     drive: DriveID | None = None,
     name: str | None = Query(default=None, min_length=1, max_length=512),
     mime_type: str | None = Query(default=None, pattern=r"^[\w.+-]+/[\w.+-]+$"),
+    updated_after: AwareDatetime | None = None,
+    updated_before: AwareDatetime | None = None,
     sort: Literal["name", "updated"] = "name",
     limit: int = Query(default=50, ge=1, le=100),
     cursor: str | None = Query(default=None, min_length=1, max_length=16384),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> DriveMetadataPage:
     """Enumerate current saved file metadata without projection or provider requests."""
+    try:
+        filters = DriveFilters(
+            folder=folder,
+            drive=drive,
+            name=name,
+            mime_type=mime_type,
+            sort=sort,
+            updated_after=updated_after,
+            updated_before=updated_before,
+        )
+    except ValidationError:
+        raise HTTPException(422, "Invalid retained Drive modified interval") from None
     return await CanonicalDriveQuery(service.signing_key).files(
         db,
         ctx.organization.id,
         sync_id,
-        DriveListQuery(
-            filters=DriveFilters(
-                folder=folder, drive=drive, name=name, mime_type=mime_type, sort=sort
-            ),
-            limit=limit,
-            cursor=cursor,
-        ),
+        DriveListQuery(filters=filters, limit=limit, cursor=cursor),
     )
 
 
@@ -201,14 +223,25 @@ async def drive_files(
 async def drive_file(
     sync_id: UUID,
     file_id: DriveID,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> DriveMetadataRead:
     """Resolve one native file identity within this authorized captured Drive."""
     return await CanonicalDriveQuery(service.signing_key).file(
         db, ctx.organization.id, sync_id, file_id
     )
+
+
+@router.get("/{sync_id}/status", response_model=SourceStatus)
+async def retained_source_status(
+    sync_id: UUID,
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> SourceStatus:
+    """Observe saved import/preparation facts; never execute provider or model calls."""
+    return await service.status(db, ctx.organization.id, sync_id)
 
 
 @router.get("/{sync_id}/records", response_model=RecordPage)
@@ -220,8 +253,8 @@ async def list_records(
     state: Literal["active", "deleted", "all"] = "active",
     cursor: str | None = None,
     limit: int = Query(100, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> RecordPage:
     """List exact stored records in stable ID order; continuation is a live traversal."""
@@ -243,8 +276,8 @@ async def record_changes(
     sync_id: UUID,
     cursor: str | None = None,
     limit: int = Query(100, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> RecordChangePage:
     """Read observed changes from the beginning, or resume a source-bound cursor."""
@@ -255,8 +288,8 @@ async def record_changes(
 async def read_record(
     sync_id: UUID,
     record_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> IndexedRecordRead:
     """Read current committed provider state, including tombstones and completeness."""
@@ -278,8 +311,8 @@ async def read_stored_spreadsheet(
     end_row: int | None = Query(None, gt=0),
     start_column: int | None = Query(None, ge=0),
     end_column: int | None = Query(None, gt=0),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
     container: Container = Depends(deps.get_container),
 ) -> SpreadsheetRead:
@@ -315,8 +348,8 @@ async def read_stored_document(
     record_id: UUID,
     response: Response,
     revision: int = Query(ge=1),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
     container: Container = Depends(deps.get_container),
 ) -> DocumentRead:
@@ -337,8 +370,8 @@ async def slack_thread(
     response: Response,
     limit: int = Query(default=15, ge=1, le=15),
     cursor: str | None = Query(default=None, max_length=16384),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> SlackThreadPage:
     """Read observed native Slack thread messages; never fetch omitted history."""
@@ -360,8 +393,8 @@ async def wispr_meetings(
     before: AwareDatetime | None = None,
     limit: int = Query(default=5, ge=1, le=100),
     cursor: str | None = None,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> MeetingPage:
     """List captured meetings by native start; bodies stay on exact retained reads."""
@@ -391,8 +424,8 @@ async def mail_messages(
     unread: bool | None = None,
     limit: int = Query(default=100, ge=1, le=100),
     cursor: str | None = None,
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> MailMessagePage:
     """Enumerate retained Gmail metadata; literal body search never contacts the provider."""
@@ -420,8 +453,8 @@ async def mail_messages(
 async def mail_message(
     sync_id: UUID,
     message_id: str = Path(min_length=1, max_length=512),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> SourceRecord:
     """Read one retained native message identity without querying the provider."""
@@ -434,8 +467,8 @@ async def mail_thread(
     thread_id: str = Path(min_length=1, max_length=512),
     cursor: str | None = None,
     limit: int = Query(100, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> MailThreadPage:
     """Read observed Gmail messages in chronological order without querying the provider."""
@@ -450,8 +483,8 @@ async def record_blob(
     record_id: UUID,
     sha256: str = Path(pattern=r"^[a-f0-9]{64}$"),
     revision: int = Query(ge=1),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
     container: Container = Depends(deps.get_container),
 ) -> Response:
@@ -479,8 +512,8 @@ async def list_text_representations(
     record_id: UUID,
     response: Response,
     revision: int = Query(ge=1),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
     container: Container = Depends(deps.get_container),
 ) -> TextRepresentationList:
@@ -512,8 +545,8 @@ async def read_text_representation(
     offset: int = Query(0, ge=0),
     limit: int = Query(12000, ge=1, le=100000),
     view: Literal["content", "index"] = "content",
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
     container: Container = Depends(deps.get_container),
 ) -> TextRead:
@@ -543,8 +576,8 @@ async def contact_candidates(
     value: str = Query(min_length=1, max_length=256),
     limit: int = Query(default=100, ge=1, le=100),
     cursor: str | None = Query(default=None, max_length=16384),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> ContactCandidatePage:
     """Traverse eligible retained cards, including empty matching windows."""
@@ -565,8 +598,8 @@ async def historical_record(
     sync_id: UUID,
     record_id: UUID,
     revision: int = Path(ge=1),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
 ) -> HistoricalRecordRead:
     """Read a historical capture using current source/record access."""
@@ -580,8 +613,8 @@ async def historical_record_blob(
     record_id: UUID,
     revision: int = Path(ge=1),
     sha256: str = Path(pattern=r"^[a-f0-9]{64}$"),
-    db: AsyncSession = Depends(get_db),
-    ctx: ApiContext = Depends(deps.get_context),
+    db: AsyncSession = Depends(deps.get_tenant_db),
+    ctx: ApiContext = Depends(deps.get_owned_context),
     service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
     container: Container = Depends(deps.get_container),
 ) -> Response:

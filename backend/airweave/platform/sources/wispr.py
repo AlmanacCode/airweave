@@ -528,6 +528,7 @@ class WisprSource(BaseSource):
     def _partition(
         progress: _Progress, earliest: datetime | None, latest: datetime | None
     ) -> _Progress:
+        """Visit the newer half first, keeping the older range durable for later."""
         if earliest is None or latest is None or earliest == latest or progress.window.depth >= 32:
             raise ValueError("Wispr query cap cannot be partitioned safely")
         split = earliest + (latest - earliest) / 2
@@ -537,9 +538,9 @@ class WisprSource(BaseSource):
         ):
             raise ValueError("Wispr date partition made no progress")
         return _Progress(
-            window=_Window(since=window.since, until=split, depth=window.depth + 1),
+            window=_Window(since=split, until=window.until, depth=window.depth + 1),
             pending=[
                 *progress.pending,
-                _Window(since=split, until=window.until, depth=window.depth + 1),
+                _Window(since=window.since, until=split, depth=window.depth + 1),
             ],
         )

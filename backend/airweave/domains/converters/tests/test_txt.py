@@ -6,7 +6,6 @@ import tempfile
 import pytest
 
 from airweave.domains.converters.txt import TxtConverter
-from airweave.domains.sync_pipeline.exceptions import EntityProcessingError
 
 
 @pytest.fixture
@@ -21,7 +20,6 @@ def temp_dir():
 
 
 class TestTxtConverterEncodingValidation:
-
     @pytest.mark.asyncio
     async def test_convert_clean_utf8_text(self, converter, temp_dir):
         file_path = os.path.join(temp_dir, "clean.txt")
@@ -121,14 +119,14 @@ class TestTxtConverterChardetFallback:
 
     @pytest.mark.asyncio
     async def test_non_utf8_with_low_chardet_confidence(self, converter, temp_dir):
-        """chardet confidence <= 0.7 → fallback to replace, high ratio → EntityProcessingError."""
+        """Low-confidence non-UTF-8 must not become replacement text."""
         file_path = os.path.join(temp_dir, "low_confidence.txt")
         # Random bytes that aren't valid in any encoding
         with open(file_path, "wb") as f:
             f.write(bytes(range(128, 256)) * 100)
 
         result = await converter.convert_batch([file_path])
-        # Either None (EntityProcessingError caught) or some replacement text
+        # The result reports failure when no strict decoding is available.
         assert file_path in result
 
     @pytest.mark.asyncio
@@ -141,12 +139,11 @@ class TestTxtConverterChardetFallback:
 
         result = await converter.convert_batch([file_path])
         assert file_path in result
-        # If chardet succeeds, content is returned; if not, fallback handles it
-        assert result[file_path].text is not None or result[file_path].text is None
+        assert result[file_path].text == text
 
     @pytest.mark.asyncio
     async def test_chardet_decode_raises_unicode_error(self, converter, temp_dir):
-        """When chardet detects an encoding but decode fails → fallback to replace."""
+        """A BOM is decoded strictly, never sent through a replacement fallback."""
         file_path = os.path.join(temp_dir, "bad_decode.txt")
         with open(file_path, "wb") as f:
             # Write bytes that look like a specific encoding to chardet
@@ -158,7 +155,7 @@ class TestTxtConverterChardetFallback:
 
     @pytest.mark.asyncio
     async def test_excessive_replacement_chars_raises_error(self, converter, temp_dir):
-        """Plain text with >25% replacement chars → EntityProcessingError → None."""
+        """Undecodable text returns an explicit failed conversion."""
         file_path = os.path.join(temp_dir, "binary_garbage.txt")
         with open(file_path, "wb") as f:
             # Bytes that fail UTF-8 and chardet, producing many replacements
@@ -170,11 +167,11 @@ class TestTxtConverterChardetFallback:
 
 
 class TestTxtConverterJsonXmlReplacementLimits:
-    """Tests for JSON/XML >50 replacement char limit."""
+    """Structured text never repairs malformed bytes with replacement characters."""
 
     @pytest.mark.asyncio
     async def test_json_with_many_replacement_chars(self, converter, temp_dir):
-        """JSON with >50 replacement characters → EntityProcessingError → None."""
+        """Malformed JSON bytes fail regardless of their count."""
         file_path = os.path.join(temp_dir, "bad.json")
         # Valid JSON prefix but lots of invalid bytes
         content = b'{"key": "' + b"\x80" * 60 + b'"}'
@@ -186,8 +183,8 @@ class TestTxtConverterJsonXmlReplacementLimits:
         assert result[file_path].text is None
 
     @pytest.mark.asyncio
-    async def test_json_with_few_replacement_chars_still_parses(self, converter, temp_dir):
-        """JSON with <50 replacement characters still attempts to parse."""
+    async def test_json_with_few_invalid_bytes_fails(self, converter, temp_dir):
+        """Even one malformed sequence must not become a successful JSON conversion."""
         file_path = os.path.join(temp_dir, "ok.json")
         content = b'{"key": "value\x80\x81"}'
         with open(file_path, "wb") as f:
@@ -195,11 +192,11 @@ class TestTxtConverterJsonXmlReplacementLimits:
 
         result = await converter.convert_batch([file_path])
         assert file_path in result
-        # May still fail on JSON parse but not from replacement char check
+        assert result[file_path].text is None
 
     @pytest.mark.asyncio
     async def test_xml_with_many_replacement_chars(self, converter, temp_dir):
-        """XML with >50 replacement characters → EntityProcessingError → None."""
+        """Malformed XML bytes fail rather than being replaced."""
         file_path = os.path.join(temp_dir, "bad.xml")
         content = b'<?xml version="1.0"?><root>' + b"\x80" * 60 + b"</root>"
         with open(file_path, "wb") as f:
@@ -211,7 +208,7 @@ class TestTxtConverterJsonXmlReplacementLimits:
 
     @pytest.mark.asyncio
     async def test_xml_fallback_raw_with_excessive_binary(self, converter, temp_dir):
-        """XML parse failure with >100 replacement chars in raw → None."""
+        """Invalid XML does not fall back to repaired raw text."""
         file_path = os.path.join(temp_dir, "malformed.xml")
         # Not valid XML at all, plus binary garbage
         content = b"<broken" + b"\x80" * 150
@@ -227,7 +224,7 @@ class TestTryChardetDecode:
     """Direct unit tests for _try_chardet_decode static method branches."""
 
     def test_returns_none_when_encoding_is_none(self):
-        """chardet detects high confidence but encoding=None → returns None (line 68)."""
+        """Detection without an encoding cannot authorize decoding."""
         from unittest.mock import patch
 
         with patch("chardet.detect", return_value={"confidence": 0.9, "encoding": None}):
@@ -235,12 +232,10 @@ class TestTryChardetDecode:
         assert result is None
 
     def test_returns_none_when_decode_raises_unicode_error(self):
-        """chardet detects an encoding that fails to decode the bytes → returns None (lines 73-74)."""
+        """A detected charset still must decode the complete input strictly."""
         from unittest.mock import patch
 
-        with patch(
-            "chardet.detect", return_value={"confidence": 0.9, "encoding": "ascii"}
-        ):
+        with patch("chardet.detect", return_value={"confidence": 0.9, "encoding": "ascii"}):
             result = TxtConverter._try_chardet_decode(b"\x80\x81\x82", "/path/to/file.txt")
         assert result is None
 
@@ -262,7 +257,6 @@ class TestTryChardetDecode:
 
 
 class TestTxtConverterEdgeCases:
-
     @pytest.mark.asyncio
     async def test_convert_nonexistent_file(self, converter):
         result = await converter.convert_batch(["/nonexistent/file.txt"])
@@ -279,3 +273,58 @@ class TestTxtConverterEdgeCases:
 
         assert file_path in result
         assert result[file_path].text is None
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "utf-16", "utf-32"])
+async def test_multilingual_text_and_bom_are_preserved(converter, tmp_path, encoding):
+    text = "हिन्दी बैठक — اگلی ملاقات — English e\u0301 👩🏽‍💻 �"
+    path = tmp_path / "source.txt"
+    original = text.encode(encoding)
+    path.write_bytes(original)
+    converted = (await converter.convert_batch([str(path)]))[str(path)]
+    assert converted.text == text
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16", "utf-32"])
+async def test_json_retains_readable_hindi_urdu_and_escaped_unicode(converter, tmp_path, encoding):
+    import json
+
+    data = {"हिन्दी": "अगली बैठक", "اردو": "اگلی ملاقات", "mixed": "English e\u0301 👩🏽‍💻"}
+    path = tmp_path / "attachment.json"
+    original = json.dumps(data, ensure_ascii=encoding == "utf-32").encode(encoding)
+    path.write_bytes(original)
+    converted = (await converter.convert_batch([str(path)]))[str(path)]
+    assert "अगली बैठक" in converted.text and "اگلی ملاقات" in converted.text
+    assert "\\u" not in converted.text
+    assert json.loads(converted.text.removeprefix("```json\n").removesuffix("\n```")) == data
+    assert path.read_bytes() == original
+
+
+async def test_xml_honors_declared_legacy_charset(converter, tmp_path):
+    path = tmp_path / "attachment.xml"
+    original = '<?xml version="1.0" encoding="iso-8859-1"?><note>Ça plaît à Noël</note>'.encode(
+        "latin-1"
+    )
+    path.write_bytes(original)
+    converted = (await converter.convert_batch([str(path)]))[str(path)]
+    assert "Ça plaît à Noël" in converted.text
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "extension,original",
+    [
+        ("txt", b"\xff\xfe\x00"),  # Authoritative UTF-16 BOM with a truncated character.
+        ("json", b'{"note": "valid prefix\x80"}'),
+        ("xml", b'<?xml version="1.0" encoding="utf-8"?><note>prefix\x80</note>'),
+    ],
+)
+async def test_malformed_attachment_bytes_fail_without_replacement(
+    converter, tmp_path, extension, original
+):
+    path = tmp_path / f"attachment.{extension}"
+    path.write_bytes(original)
+    converted = (await converter.convert_batch([str(path)]))[str(path)]
+    assert converted.text is None and converted.gap is None
+    assert path.read_bytes() == original

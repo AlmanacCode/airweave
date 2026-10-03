@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select, text
 from temporalio import activity
 
 from airweave import schemas
@@ -17,14 +18,14 @@ from airweave.core.datetime_utils import utc_now_naive
 from airweave.core.logging import LoggerConfigurator
 from airweave.core.redis_client import redis_client
 from airweave.core.shared_models import SyncJobStatus
-from airweave.db.session import get_db_context
+from airweave.db.session import get_db_context, get_tenant_db_context
 from airweave.domains.entities.protocols import EntityRepositoryProtocol
 from airweave.domains.organizations.protocols import OrganizationRepositoryProtocol
 from airweave.domains.syncs.jobs.protocols import (
-    SyncJobRepositoryProtocol,
     SyncJobStateMachineProtocol,
 )
 from airweave.domains.temporal.protocols import TemporalWorkflowServiceProtocol
+from airweave.models.source_connection import SourceConnection
 from airweave.models.sync_job import SyncJob
 
 _CANCELLING_PENDING_CUTOFF = timedelta(minutes=3)
@@ -53,7 +54,6 @@ class CleanupStuckSyncJobsActivity:
 
     temporal_workflow_service: TemporalWorkflowServiceProtocol
     state_machine: SyncJobStateMachineProtocol
-    sync_job_repo: SyncJobRepositoryProtocol
     entity_repo: EntityRepositoryProtocol
     org_repo: OrganizationRepositoryProtocol
 
@@ -105,39 +105,57 @@ class CleanupStuckSyncJobsActivity:
         running_cutoff: datetime,
         logger: Any,
     ) -> list[SyncJob]:
-        """Query DB for stuck jobs. Session is scoped to read-only discovery."""
-        async with get_db_context() as db:
-            cancelling_pending_jobs = await self.sync_job_repo.get_stuck_jobs_by_status(
-                db=db,
-                status=[SyncJobStatus.CANCELLING.value, SyncJobStatus.PENDING.value],
-                modified_before=cancelling_pending_cutoff,
-            )
-            logger.info(
-                f"Found {len(cancelling_pending_jobs)} CANCELLING/PENDING jobs "
-                f"stuck for > {_CANCELLING_PENDING_CUTOFF}"
-            )
-
-            running_jobs = await self.sync_job_repo.get_stuck_jobs_by_status(
-                db=db,
-                status=[SyncJobStatus.RUNNING.value],
-                started_before=running_cutoff,
-            )
-            logger.info(
-                f"Found {len(running_jobs)} RUNNING jobs started >{_RUNNING_CUTOFF} ago "
-                f"(will check activity)"
-            )
-
-            stuck_running_jobs = [
-                job
-                for job in running_jobs
-                if await self._is_running_job_stuck(job, running_cutoff, db, logger)
-            ]
-            logger.info(
-                f"Found {len(stuck_running_jobs)} RUNNING jobs "
-                f"with no activity in last {_RUNNING_CUTOFF}"
-            )
-
-        return cancelling_pending_jobs + stuck_running_jobs
+        """Discover only IDs globally; load/check each candidate under its immutable scope."""
+        found = []
+        after = None
+        while True:
+            async with get_db_context() as db:
+                candidates = (
+                    await db.execute(
+                        text(
+                            "SELECT organization_id,job_id FROM owned_stale_jobs("
+                            ":pending,:running,CAST(:after AS uuid),100)"
+                        ),
+                        {
+                            "pending": cancelling_pending_cutoff,
+                            "running": running_cutoff,
+                            "after": after,
+                        },
+                    )
+                ).all()
+            if not candidates:
+                return found
+            for organization, job_id in candidates:
+                async with get_tenant_db_context(organization) as db:
+                    job = await db.get(SyncJob, job_id)
+                    if job is None:
+                        continue
+                    native = await db.scalar(
+                        select(SourceConnection.id)
+                        .where(
+                            SourceConnection.organization_id == organization,
+                            SourceConnection.sync_id == job.sync_id,
+                            SourceConnection.short_name == "almanac",
+                        )
+                        .limit(1)
+                    )
+                    if native is not None:
+                        continue
+                    if (
+                        job.status in (SyncJobStatus.CANCELLING.value, SyncJobStatus.PENDING.value)
+                        and job.modified_at < cancelling_pending_cutoff
+                    ):
+                        found.append(job)
+                    elif (
+                        job.status == SyncJobStatus.RUNNING.value
+                        and job.started_at is not None
+                        and job.started_at < running_cutoff
+                        and await self._is_running_job_stuck(job, running_cutoff, db, logger)
+                    ):
+                        found.append(job)
+            after = candidates[-1].job_id
+            if len(candidates) < 100:
+                return found
 
     async def _is_running_job_stuck(
         self, job: SyncJob, running_cutoff: datetime, db: Any, logger: Any
@@ -219,7 +237,7 @@ class CleanupStuckSyncJobsActivity:
         )
 
         try:
-            async with get_db_context() as db:
+            async with get_tenant_db_context(job.organization_id) as db:
                 organization = await self.org_repo.get(
                     db=db,
                     id=job.organization_id,

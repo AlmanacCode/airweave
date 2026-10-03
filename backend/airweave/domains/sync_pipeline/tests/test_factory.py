@@ -13,9 +13,11 @@ from airweave.domains.sync_pipeline.factory import SourceBuildResult, SyncFactor
 
 def _build_factory(**overrides):
     """Build a SyncFactory with mock deps, accepting per-test overrides."""
+    sc_repo = MagicMock()
+    sc_repo.get_owned_source = AsyncMock(return_value=None)
     defaults = {
         # Repositories
-        "sc_repo": MagicMock(),
+        "sc_repo": sc_repo,
         "entity_repo": MagicMock(),
         "entity_count_repo": MagicMock(),
         "acl_repo": MagicMock(),
@@ -691,3 +693,46 @@ async def test_generation_admission_stops_stale_factory(during_build):
         assert order == (["refresh", "build"] if during_build else [])
         destinations.assert_not_awaited()
         tracker.assert_not_awaited()
+
+
+@pytest.mark.parametrize("owned", [True, False])
+async def test_verified_owned_scope_avoids_legacy_selection_query(owned):
+    """Only verified persisted ownership can remove the unsupported selection dependency."""
+    from airweave.domains.owned_provisioning.models import ManagedSource
+
+    spec = ManagedSource(
+        provider="gmail",
+        project_key="synthetic-project",
+        expected_identity="owner@example.invalid",
+        collection="owned-collection",
+        cron="0 0 * * *",
+        connected_account_id="synthetic-connection",
+        auth_config_id="synthetic-config",
+        user_id="synthetic-owner",
+    )
+    sc = SimpleNamespace(id=uuid4(), short_name="gmail", config_fields={})
+    repo = MagicMock()
+    repo.get_owned_source = AsyncMock(return_value=spec if owned else None)
+    lifecycle = MagicMock()
+    source = MagicMock()
+    lifecycle.create = AsyncMock(return_value=source)
+    factory = _build_factory(sc_repo=repo, source_lifecycle_service=lifecycle)
+    with (
+        patch.object(factory, "_validate_not_completed_snapshot"),
+        patch.object(factory, "_create_cursor", AsyncMock(return_value=None)),
+        patch.object(factory, "_load_node_selections", AsyncMock(return_value=[])) as selection,
+        patch("airweave.domains.sync_pipeline.factory.FileService"),
+    ):
+        result = await factory._build_source(
+            db=AsyncMock(),
+            sync=_make_sync(),
+            sync_job=_make_sync_job(),
+            ctx=_make_ctx(),
+            logger=MagicMock(),
+            source_connection=sc,
+            force_full_sync=False,
+            execution_config=None,
+        )
+    assert result.source is source and result.node_selections == []
+    repo.get_owned_source.assert_awaited_once()
+    assert selection.await_count == (0 if owned else 1)

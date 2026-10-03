@@ -15,11 +15,10 @@ from sqlalchemy import select
 
 from airweave import schemas
 from airweave.api import deps
-from airweave.api.backend_actor import backend_actor
+from airweave.api.backend_actor import backend_owned_actor
 from airweave.api.context import ApiContext
 from airweave.api.v1.endpoints.device_ingestion import router
 from airweave.core.shared_models import AuthMethod
-from airweave.db.session import get_db
 from airweave.domains.device_ingestion.service import DeviceIngestion
 from airweave.domains.device_ingestion.tests.test_admission import (  # noqa: F401
     bound,
@@ -81,8 +80,8 @@ async def test_native_notes_lost_ack_lock_recovery_over_http(database, bound):  
         async with database() as db:
             yield db
 
-    app.dependency_overrides[get_db] = database_dependency
-    app.dependency_overrides[backend_actor] = lambda: actor
+    app.dependency_overrides[deps.get_tenant_db] = database_dependency
+    app.dependency_overrides[backend_owned_actor] = lambda: actor
     app.dependency_overrides[deps.get_container] = lambda: FixtureContainer(service())
     process = await asyncio.create_subprocess_exec(
         str(binary),

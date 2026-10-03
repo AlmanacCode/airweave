@@ -96,8 +96,8 @@ async def api(database, monkeypatch):
     app.add_exception_handler(CanonicalStoreError, records.record_error_response)
     app.dependency_overrides[deps.get_db] = session
     app.dependency_overrides[deps.get_context] = authenticated
-    app.dependency_overrides[deps.get_owned_search_context] = authenticated
-    app.dependency_overrides[deps.get_search_session_factory] = lambda: database
+    app.dependency_overrides[deps.get_owned_context] = authenticated
+    app.dependency_overrides[deps.get_tenant_session_factory] = lambda: database
     app.dependency_overrides[deps.get_canonical_query_service] = lambda: CanonicalQueryService(
         CanonicalRecordStore(), CanonicalQueryStore(), "synthetic-cursor-key"
     )
