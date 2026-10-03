@@ -2,10 +2,12 @@
 
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from airweave.core.config import settings
+from airweave.db.tenant_session import tenant_session_factory
 
 # Connection Pool Sizing Strategy (PgBouncer-aware):
 # - PgBouncer handles connection pooling to PostgreSQL (2000 client → 300 DB connections)
@@ -112,3 +114,14 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             except Exception:
                 # Connection may have been closed by server due to idle timeout; ignore on close
                 pass
+
+
+@asynccontextmanager
+async def get_tenant_db_context(organization_id: UUID) -> AsyncGenerator[AsyncSession, None]:
+    """Opt-in tenant boundary on the existing engine, not a new connection pool.
+
+    Call only after authenticated authority resolves the organization. Existing
+    unscoped request/worker paths are not converted by introducing this factory.
+    """
+    async with tenant_session_factory(async_engine, organization_id)() as db:
+        yield db
