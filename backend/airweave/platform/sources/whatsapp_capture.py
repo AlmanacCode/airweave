@@ -116,6 +116,37 @@ class WhatsAppCapture:
         except UnipileError as error:
             _source_failure(error)
 
+    async def acquire_chat_refresh(
+        self, *, event_account_id: str, event_chat_id: str
+    ) -> CaptureRecord:
+        """Acquire an exact chat original; this never persists or admits an event.
+
+        The caller must have run validate() once for this currently attested run
+        and owns the current authorized binding, shared writer fencing, admission
+        and ordering. Use only for nonconflicting creates/updates; never overwrite
+        pending or committed deletion state. Native404 is not a tombstone.
+        """
+        try:
+            if event_account_id != self.config.account_id or not event_chat_id:
+                raise UnipileError("identity")
+            chat = await self.client.chat(event_chat_id)
+            if chat.id != event_chat_id or chat.is_channel:
+                raise UnipileError("identity")
+            return self._chat(chat, datetime.now(timezone.utc))
+        except UnipileError as error:
+            _source_failure(error)
+
+    @staticmethod
+    def _chat(chat: WhatsAppChat, observed_at: datetime) -> CaptureRecord:
+        """Share exact native chat retention between listing and targeted acquisition."""
+        return CaptureRecord(
+            identity=RecordIdentity(record_type="whatsapp_chat", native_id=chat.id),
+            payload_schema_version=1,
+            payload=chat.original(),
+            completeness="partial",
+            observed_at=observed_at,
+        )
+
     async def acquire_message_refresh(
         self,
         *,
@@ -291,15 +322,7 @@ class WhatsAppCapture:
             # Unexpected unsupported kinds fail explicitly rather than claim complete scope.
             if any(chat.is_channel for chat in page.data):
                 raise ValueError("WhatsApp channel returned outside declared direct/group scope")
-            records = tuple(
-                CaptureRecord(
-                    identity=RecordIdentity(record_type="whatsapp_chat", native_id=chat.id),
-                    payload=chat.original(),
-                    completeness="partial",
-                    observed_at=now,
-                )
-                for chat in page.data
-            )
+            records = tuple(self._chat(chat, now) for chat in page.data)
         elif parent is not None and scope == self.child_scope(parent, "whatsapp_message"):
             if parent.payload.get("id") != parent.identity.native_id:
                 raise ValueError("WhatsApp parent payload identity mismatch")

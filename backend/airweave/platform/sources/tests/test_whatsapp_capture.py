@@ -28,6 +28,7 @@ from airweave.platform.sources.records.whatsapp_collections import (
 )
 from airweave.platform.sources.records.whatsapp_models import (
     WhatsAppAccount,
+    WhatsAppChat,
     WhatsAppMessage,
     WhatsAppPage,
     WhatsAppParticipant,
@@ -888,5 +889,47 @@ async def test_exact_refresh_uses_identity_hint_and_retains_full_native_body_and
     assert record.blobs[0].source_path == "/attachments/0"
     assert record.blobs[0].sha256 == hashlib.sha256(files.content).hexdigest()
     capture.client.message.assert_awaited_once_with("group@lid", "msg")
+    capture.client.account.assert_not_awaited()
+    capture.client.owner_profile.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account,chat", [("other", "group@lid"), ("acc_bound", "")])
+async def test_exact_chat_refresh_invalid_locator_denied_without_provider_io(account, chat):
+    capture = source()
+    capture.client.chat = AsyncMock()
+    with pytest.raises(SourceError, match="identity"):
+        await capture.acquire_chat_refresh(event_account_id=account, event_chat_id=chat)
+    capture.client.chat.assert_not_awaited()
+    capture.client.account.assert_not_awaited()
+    capture.client.owner_profile.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", [{"id": "different@lid"}, {"is_channel": True}])
+async def test_exact_chat_refresh_wrong_returned_identity_or_channel_rejected(changed):
+    capture = source()
+    capture.client.chat = AsyncMock(return_value=WhatsAppChat.model_validate(CHAT | changed))
+    with pytest.raises(SourceError, match="identity"):
+        await capture.acquire_chat_refresh(
+            event_account_id="acc_bound", event_chat_id="group@lid"
+        )
+    capture.client.chat.assert_awaited_once_with("group@lid")
+
+
+@pytest.mark.asyncio
+async def test_exact_chat_refresh_preserves_full_native_payload_with_listing_conversion():
+    capture = source()
+    native = CHAT | {"name": "مرحباً नमस्ते", "native_extra": {"unknown": [None, 3]}}
+    chat = WhatsAppChat.model_validate(native)
+    capture.client.chat = AsyncMock(return_value=chat)
+    record = await capture.acquire_chat_refresh(
+        event_account_id="acc_bound", event_chat_id="group@lid"
+    )
+    assert record.payload == native
+    assert record == capture._chat(chat, record.observed_at)
+    assert record.identity == RecordIdentity(record_type="whatsapp_chat", native_id="group@lid")
+    assert record.completeness == "partial" and record.payload_schema_version == 1
+    assert record.observed_at.tzinfo is not None
     capture.client.account.assert_not_awaited()
     capture.client.owner_profile.assert_not_awaited()
