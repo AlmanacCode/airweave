@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, JsonValue, StrictBool, TypeAdapter, ValidationError
 
@@ -28,7 +29,9 @@ from airweave.platform.entities.google_calendar import (
 from airweave.platform.entities.google_drive import GoogleDriveFileEntity, GoogleDriveFolderEntity
 from airweave.platform.entities.slack import SlackChannelEntity, SlackMessageEntity
 from airweave.platform.entities.wispr import WisprMeetingEntity, WisprNoteEntity
-from airweave.platform.sources.records.sheets_manifest import GridGap
+
+if TYPE_CHECKING:
+    from airweave.platform.sources.records.sheets_manifest import GridGap
 
 
 class ProjectionMappingError(ValueError):
@@ -491,6 +494,11 @@ async def map_record(  # noqa: C901 -- explicit provider dispatch keeps mapper o
         return
     with TemporaryDirectory(prefix="airweave-projection-") as temporary:
         directory = Path(temporary)
+        if source_name in ("imessage", "apple_notes", "apple_contacts"):
+            from airweave.domains.entities.canonical.apple_projection import map_apple
+
+            yield await map_apple(record, source_name, storage, directory)
+            return
         if source_name == "gmail":
             from airweave.domains.entities.canonical.gmail_projection import map_gmail
 

@@ -74,6 +74,8 @@ from airweave.domains.connections.repository import ConnectionRepository
 from airweave.domains.converters.registry import ConverterRegistry
 from airweave.domains.credentials.repository import IntegrationCredentialRepository
 from airweave.domains.credentials.service import IntegrationCredentialService
+from airweave.domains.device_ingestion.service import DeviceIngestion
+from airweave.domains.device_ingestion.store import DeviceIngestionStore
 from airweave.domains.embedders.config import (
     DENSE_EMBEDDER,
     EMBEDDING_DIMENSIONS,
@@ -623,6 +625,9 @@ def create_container(settings: Settings) -> Container:
         user_service=user_service,
         email_service=email_service,
         owned_search=search_deps["owned_search"],
+        device_ingestion=DeviceIngestion(
+            DeviceIngestionStore(CanonicalRecordStore()), storage_backend
+        ),
         native_sources=NativeSources(NativeSourceStore()),
         native_imports=NativeImports(
             NativeImportStore(NativeSourceStore(), CanonicalRecordStore())

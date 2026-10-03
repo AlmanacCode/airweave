@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from airweave.domains.entities.canonical.actors import ActorAnyOf, ActorFilter
 from airweave.domains.entities.canonical.content_models import MatchedPart
 from airweave.domains.entities.canonical.coverage_models import CaptureCoverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
@@ -38,6 +39,8 @@ class OwnedSearchRequest(BaseModel):
         ],
         ...,
     ] = Field(default=(), max_length=11)
+    actor_filters: tuple[ActorFilter, ...] = Field(default=(), max_length=20)
+    actor_any_of: ActorAnyOf | None = None
     created_after: AwareDatetime | None = None
     created_before: AwareDatetime | None = None
     updated_after: AwareDatetime | None = None
@@ -51,6 +54,13 @@ class OwnedSearchRequest(BaseModel):
             raise ValueError("Query must be nonblank and source IDs unique")
         if any(not item.strip() for item in self.record_types):
             raise ValueError("Record types must be nonblank")
+        if len(set(self.actor_filters)) != len(self.actor_filters):
+            raise ValueError("Actor filters must be unique")
+        if (
+            len(self.actor_filters) + (len(self.actor_any_of.handles) if self.actor_any_of else 0)
+            > 20
+        ):
+            raise ValueError("Combined actor handles must not exceed 20")
         for after, before in (
             (self.created_after, self.created_before),
             (self.updated_after, self.updated_before),

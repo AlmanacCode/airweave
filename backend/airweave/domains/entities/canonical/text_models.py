@@ -6,6 +6,25 @@ from uuid import UUID, uuid5
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class TextPreparationDependency(BaseModel):
+    """An actual parser/extractor version used to produce this retained derived view."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    name: str = Field(min_length=1, max_length=64)
+    version: str = Field(min_length=1, max_length=64)
+
+
+class TextPreparation(BaseModel):
+    """Bounded provenance descriptor; values are populated by the producing mapper."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    processor: str = Field(min_length=1, max_length=64)
+    version: str = Field(min_length=1, max_length=64)
+    source_path: str = Field(min_length=1, max_length=2048)
+    policy: str = Field(min_length=1, max_length=128)
+    dependencies: tuple[TextPreparationDependency, ...] = Field(default=(), max_length=8)
+
+
 class TextArtifact(BaseModel):
     """Body-free immutable descriptor, owned by one projection generation."""
 
@@ -17,6 +36,7 @@ class TextArtifact(BaseModel):
     characters: int = Field(ge=0)
     content_start: int | None = Field(default=None, ge=0)
     kind: Literal["native_text", "extracted_text", "generated_text"]
+    preparation: TextPreparation | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -63,6 +83,7 @@ class TextRepresentation(BaseModel):
     pipeline_version: int
     part_key: str
     kind: Literal["native_text", "extracted_text", "generated_text"]
+    preparation: TextPreparation | None = None
     media_type: Literal["text/markdown"] = "text/markdown"
     content_characters: int | None
     index_characters: int

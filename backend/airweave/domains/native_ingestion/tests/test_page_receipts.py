@@ -5,6 +5,7 @@
 # ruff: noqa: F811
 
 import asyncio
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
@@ -13,7 +14,7 @@ from sqlalchemy import func, select
 from airweave.db.unit_of_work import UnitOfWork
 from airweave.domains.entities.canonical.cycle_store import cursor_row, cycle_state
 from airweave.domains.entities.canonical.requests import CompletedScope, RecordIdentity
-from airweave.domains.entities.canonical.scan_models import BeginScan
+from airweave.domains.entities.canonical.scan_models import BeginScan, ReconcileScan
 from airweave.domains.entities.canonical.scan_store import CanonicalScanStore, ScanConflict
 from airweave.domains.entities.canonical.store import CanonicalRecordStore, StaleWriter
 from airweave.domains.native_ingestion.import_store import NativeImportStore
@@ -57,7 +58,9 @@ def page_request(native, state):
         item = item.model_copy(
             update={
                 "identity": RecordIdentity(record_type="session", native_id="one"),
-                "version": SessionVersion(created_at="2026-10-01T00:00:00Z", revision=1, content_revision=1),
+                "version": SessionVersion(
+                    created_at="2026-10-01T00:00:00Z", revision=1, content_revision=1
+                ),
             }
         )
     return CommitNativePage(
@@ -114,21 +117,41 @@ async def test_cancelled_import_cannot_replay_a_page_receipt(database, native, s
     request = page_request(native, scope)
     await commit(database, native, request)
     imported = await start(database, native)
+    canonical = CanonicalRecordStore()
+    imports = NativeImportStore(NativeSourceStore(), canonical)
+    async with database() as db, UnitOfWork(db):
+        active = await imports.active(
+            db, native.organization_id, native.source_connection_id, "request-one"
+        )
     async with database() as db:
         job = await db.get(SyncJob, imported.import_id)
         job.status = "cancelled"
         await db.commit()
     with pytest.raises(StaleWriter):
         await commit(database, native, request)
+    # Direct shared receipt recovery also fences; native wrappers are not its only guard.
+    from airweave.domains.entities.canonical.page_receipts import ScanPageReceipts, page_digest
+
+    with pytest.raises(StaleWriter):
+        async with database() as db, UnitOfWork(db):
+            await ScanPageReceipts(CanonicalScanStore(canonical)).recover(
+                db,
+                active.fence,
+                request.scope,
+                active.cycle_id,
+                page_id=request.page_id,
+                digest=page_digest(request),
+                expected=request.expected,
+            )
 
 
 async def test_receipt_failure_rolls_back_capture_and_cursor(database, native, scope, monkeypatch):
-    import airweave.domains.native_ingestion.page_store as module
+    import airweave.domains.entities.canonical.page_receipts as module
 
     def fail(**kwargs):
         raise RuntimeError("receipt persistence failed")
 
-    monkeypatch.setattr(module, "NativePageReceipt", fail)
+    monkeypatch.setattr(module, "PageReceipt", fail)
     with pytest.raises(RuntimeError, match="receipt persistence"):
         await commit(database, native, page_request(native, scope))
     canonical = CanonicalRecordStore()
@@ -145,3 +168,27 @@ async def test_receipt_failure_rolls_back_capture_and_cursor(database, native, s
             )
             == 0
         )
+
+
+async def test_reconciled_current_page_cannot_replay_stale_acknowledgement(database, native, scope):
+    """Same page/body is insufficient after canonical reconciliation advances its version."""
+    request = page_request(native, scope).model_copy(update={"final": True})
+    acknowledged = await commit(database, native, request)
+    canonical = CanonicalRecordStore()
+    imports = NativeImportStore(NativeSourceStore(), canonical)
+    async with database() as db, UnitOfWork(db):
+        imported = await imports.active(
+            db, native.organization_id, native.source_connection_id, "request-one"
+        )
+        await CanonicalScanStore(canonical).reconcile(
+            db,
+            ReconcileScan(
+                fence=imported.fence,
+                scope=request.scope,
+                cycle_id=imported.cycle_id,
+                expected=acknowledged.version,
+                observed_at=datetime.now(timezone.utc),
+            ),
+        )
+    with pytest.raises(ScanConflict, match="retry conflicts"):
+        await commit(database, native, request)

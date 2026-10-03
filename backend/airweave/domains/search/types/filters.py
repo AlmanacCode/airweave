@@ -38,6 +38,7 @@ class FilterableField(str, Enum):
     SYSTEM_METADATA_CHUNK_INDEX = "airweave_system_metadata.chunk_index"
     SYSTEM_METADATA_SYNC_ID = "airweave_system_metadata.sync_id"
     SYSTEM_METADATA_SYNC_JOB_ID = "airweave_system_metadata.sync_job_id"
+    ACTOR_TOKENS = "airweave_system_metadata.actor_tokens"
     NATIVE_TYPE = "airweave_system_metadata.native_type"
     CANONICAL_RECORD_TYPE = "airweave_system_metadata.canonical_record_type"
     CANONICAL_SOURCE_CREATED_US = "airweave_system_metadata.source_created_us"
@@ -74,6 +75,7 @@ _TEXT_FIELDS: frozenset[FilterableField] = frozenset(
         FilterableField.SYSTEM_METADATA_SOURCE_NAME,
         FilterableField.CANONICAL_RECORD_TYPE,
         FilterableField.NATIVE_TYPE,
+        FilterableField.ACTOR_TOKENS,
         FilterableField.SYSTEM_METADATA_ORIGINAL_ENTITY_ID,
         FilterableField.SYSTEM_METADATA_SYNC_ID,
         FilterableField.SYSTEM_METADATA_SYNC_JOB_ID,

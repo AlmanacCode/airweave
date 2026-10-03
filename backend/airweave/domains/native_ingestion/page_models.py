@@ -1,7 +1,6 @@
 """Bounded publisher page commands and durable acknowledgements."""
 
 import json
-from typing import Literal
 from uuid import UUID
 
 from pydantic import Field, JsonValue, field_validator, model_validator
@@ -35,22 +34,3 @@ class CommitNativePage(NativeModel):
         if len(keys) != len(set(keys)):
             raise ValueError("Native page contains duplicate originals")
         return self
-
-
-class NativePageAck(NativeModel):
-    """Durable capture acknowledgement, not search publication or import completion."""
-
-    page_id: UUID
-    version: ScanVersion
-    phase: Literal["collecting", "reconciling", "complete"]
-    sequence: int
-    changed: int
-    unchanged: int
-
-
-class NativePageReceipt(NativeModel):
-    """Only the most recently committed page is retryable with identical success."""
-
-    schema_version: Literal[1] = 1
-    digest: str = Field(pattern=r"^[a-f0-9]{64}$")
-    acknowledgement: NativePageAck

@@ -4,6 +4,7 @@ from uuid import UUID
 
 from jose import JWTError, jwt
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.blob_materializer import BlobIntegrityError, read_blob
@@ -11,6 +12,7 @@ from airweave.domains.entities.canonical.coverage import capture_coverage
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.domains.entities.canonical.query_models import (
     DocumentRead,
+    HistoricalRecordRead,
     MailThreadCursor,
     MailThreadPage,
     RecordChangePage,
@@ -30,6 +32,7 @@ from airweave.domains.entities.canonical.workspace_docs import read_document
 from airweave.domains.entities.canonical.workspace_sheets import read_spreadsheet
 from airweave.domains.storage.exceptions import StorageException
 from airweave.domains.storage.protocols import StorageBackend
+from airweave.models.entity_change import EntityChange
 from airweave.platform.sources.records.sheets_manifest import GridBounds
 
 
@@ -118,6 +121,67 @@ class CanonicalQueryService:
         if record is None:
             raise RecordNotFound("Record not found in this source")
         return record
+
+    async def read_revision(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        sync_id: UUID,
+        record_id: UUID,
+        revision: int,
+    ) -> HistoricalRecordRead:
+        """Select an immutable capture under the source and record's current authority."""
+        current = await self.read(db, organization_id, sync_id, record_id)
+        self._check_blob_record(current, current.revision)
+        change = await db.scalar(
+            select(EntityChange).where(
+                EntityChange.organization_id == organization_id,
+                EntityChange.sync_id == sync_id,
+                EntityChange.entity_record_id == record_id,
+                EntityChange.record_revision == revision,
+            )
+        )
+        if change is None:
+            raise RecordNotFound("Historical revision not found")
+        try:
+            record = SourceRecord.model_validate(change.snapshot)
+        except ValidationError as exc:
+            raise RecordNotFound("Historical revision is unavailable") from exc
+        if (
+            record.id != record_id
+            or record.sync_id != sync_id
+            or record.revision != revision
+            or record.identity != current.identity
+            or record.deleted_at is not None
+            or record.content_access != "available"
+        ):
+            raise RecordNotFound("Historical revision is unavailable")
+        return HistoricalRecordRead(record=record, current_revision=current.revision)
+
+    async def historical_blob(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        sync_id: UUID,
+        record_id: UUID,
+        revision: int,
+        sha256: str,
+        storage: StorageBackend,
+    ) -> bytes:
+        """Read historical bytes, then reauthorize against current source and record access."""
+        selected = await self.read_revision(db, organization_id, sync_id, record_id, revision)
+        ref = next((item for item in selected.record.blobs if item.sha256 == sha256), None)
+        if ref is None:
+            raise BlobNotFound("Blob reference not found on this historical revision")
+        try:
+            content = await read_blob(selected.record, ref, storage)
+        except (StorageException, BlobIntegrityError) as exc:
+            raise BlobUnavailable("Committed blob is unavailable; retry later") from exc
+        db.expire_all()
+        current = await self.read_revision(db, organization_id, sync_id, record_id, revision)
+        if current.record != selected.record:
+            raise RecordNotFound("Historical revision changed unexpectedly")
+        return content
 
     async def list_records(
         self, db: AsyncSession, organization_id: UUID, sync_id: UUID, query: RecordListQuery

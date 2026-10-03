@@ -107,6 +107,7 @@ class CanonicalQueryStore:
         after_id: UUID | None,
         limit: int,
         parent: RecordIdentity | None = None,
+        contact_raw_handle: str | None = None,
     ) -> tuple[SourceRecord, ...]:
         """Fetch one extra row so continuation does not require a count query."""
         scope = await db.scalar(
@@ -141,6 +142,15 @@ class CanonicalQueryStore:
             statement = statement.where(Entity.deleted_at.is_(None))
         elif filters.state == "deleted":
             statement = statement.where(Entity.deleted_at.is_not(None))
+        if contact_raw_handle is not None:
+            contact = Entity.source_payload["original"]["contact"]
+            statement = statement.where(
+                content_is_available(),
+                or_(
+                    contact["phones"].contains([{"rawValue": contact_raw_handle}]),
+                    contact["emails"].contains([{"rawValue": contact_raw_handle}]),
+                ),
+            )
         if after_id is not None:
             statement = statement.where(Entity.id > after_id)
         rows = await db.scalars(statement.order_by(Entity.id).limit(limit + 1))

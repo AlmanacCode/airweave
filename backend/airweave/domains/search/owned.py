@@ -15,6 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from airweave.api.context import ApiContext
 from airweave.core.protocols.reranker import RerankerProtocol, RerankerResult
 from airweave.core.protocols.tokenizer import TokenizerProtocol
+from airweave.domains.entities.canonical.actors import (
+    ACTOR_PIPELINE_VERSION,
+    ROLE_SOURCES,
+    ActorHandles,
+    actor_sql_columns,
+)
 from airweave.domains.entities.canonical.content_models import ContentProvenance, MatchedPart
 from airweave.domains.entities.canonical.coverage import capture_coverage
 from airweave.domains.entities.canonical.extraction_models import ExtractionCoverage
@@ -88,6 +94,10 @@ class _EnrichmentRecord(BaseModel):
     email_thread_id: str | None
     native_version: NativeVersion | None
     native_type: str | None
+    actor_source: str | None = None
+    sender_handle: str | None = None
+    current_chat_handles: tuple[str, ...] = ()
+    contact_handles: tuple[str, ...] = ()
 
 
 class _CollectionResult(BaseModel):
@@ -151,6 +161,29 @@ class OwnedSearchService:
                     "message": "Selected sources need canonical search metadata re-projection",
                 },
             )
+        if request.actor_filters or request.actor_any_of:
+            supported = {
+                ROLE_SOURCES[actor.role]
+                for actor in (
+                    *request.actor_filters,
+                    *((request.actor_any_of,) if request.actor_any_of else ()),
+                )
+            }
+            selected = {scope.short_name for scope in scopes.values()}
+            if not supported <= selected:
+                raise HTTPException(422, "Actor role unsupported by selected sources")
+            if any(
+                scope.index_pipeline_version < ACTOR_PIPELINE_VERSION
+                for scope in scopes.values()
+                if scope.short_name in supported
+            ):
+                raise HTTPException(
+                    409,
+                    {
+                        "code": "reindex_required",
+                        "message": "Selected actor sources need actor metadata re-projection",
+                    },
+                )
         hits, scores, matched_text, exclusions, postfiltered = {}, {}, {}, 0, 0
         engine_partial, full = False, False
         plan = SearchPlan(
@@ -558,6 +591,22 @@ class OwnedSearchService:
                     value=list(request.native_types),
                 )
             )
+        for actor in request.actor_filters:
+            conditions.append(
+                FilterCondition(
+                    field="airweave_system_metadata.actor_tokens",
+                    operator="equals",
+                    value=actor.token,
+                )
+            )
+        if request.actor_any_of:
+            conditions.append(
+                FilterCondition(
+                    field="airweave_system_metadata.actor_tokens",
+                    operator="in",
+                    value=list(request.actor_any_of.tokens),
+                )
+            )
         for name, after, before in (
             ("created", request.created_after, request.created_before),
             ("updated", request.updated_after, request.updated_before),
@@ -680,6 +729,16 @@ class OwnedSearchService:
                 Entity.source_created_at,
                 Entity.source_updated_at,
                 Entity.completeness,
+                *(
+                    actor_sql_columns(Entity.source_payload)
+                    if request.actor_filters or request.actor_any_of
+                    else ()
+                ),
+                case(
+                    {sync: scopes[sync].short_name for sync in sync_ids},
+                    value=Entity.sync_id,
+                    else_=None,
+                ).label("actor_source"),
                 case(
                     (
                         Entity.sync_id.in_(
@@ -890,6 +949,22 @@ class OwnedSearchService:
             return False
         if request.native_types and row.native_type not in request.native_types:
             return False
+        if request.actor_filters or request.actor_any_of:
+            actors = ActorHandles(
+                sender_handle=row.sender_handle,
+                current_chat_handles=row.current_chat_handles,
+                contact_handles=row.contact_handles,
+            )
+            if not all(
+                ROLE_SOURCES[actor.role] == row.actor_source and actors.matches(actor)
+                for actor in request.actor_filters
+            ):
+                return False
+            if request.actor_any_of and (
+                ROLE_SOURCES[request.actor_any_of.role] != row.actor_source
+                or not actors.matches_any(request.actor_any_of)
+            ):
+                return False
         for value, after, before in (
             (row.source_created_at, request.created_after, request.created_before),
             (row.source_updated_at, request.updated_after, request.updated_before),

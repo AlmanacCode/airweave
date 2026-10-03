@@ -5,11 +5,12 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.db.unit_of_work import UnitOfWork
+from airweave.domains.entities.canonical.page_receipts import PageAcknowledgement
 from airweave.domains.native_ingestion.access_models import NativeAccessChange, NativeRecordAccess
 from airweave.domains.native_ingestion.access_store import NativeAccessStore
 from airweave.domains.native_ingestion.import_models import NativeImportState, StartNativeImport
 from airweave.domains.native_ingestion.import_store import NativeImportStore
-from airweave.domains.native_ingestion.page_models import CommitNativePage, NativePageAck
+from airweave.domains.native_ingestion.page_models import CommitNativePage
 from airweave.domains.native_ingestion.page_store import NativePageStore
 from airweave.domains.native_ingestion.scope_models import (
     BeginNativeScope,
@@ -93,7 +94,7 @@ class NativeImports:
         source_id: UUID,
         request_key: str,
         request: CommitNativePage,
-    ) -> NativePageAck:
+    ) -> PageAcknowledgement:
         """Authorize and execute page in one transaction."""
         async with UnitOfWork(db):
             return await self.pages.commit(db, organization_id, source_id, request_key, request)

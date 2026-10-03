@@ -12,11 +12,12 @@ from airweave.api.context import ApiContext
 from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
 from airweave.db.session import get_db
+from airweave.domains.entities.canonical.page_receipts import PageAcknowledgement
 from airweave.domains.entities.canonical.store import CanonicalStoreError, WriterBusy
 from airweave.domains.native_ingestion.access_models import NativeAccessChange, NativeRecordAccess
 from airweave.domains.native_ingestion.errors import NativeAdmissionError, NativeImportNotFound
 from airweave.domains.native_ingestion.import_models import NativeImportState, StartNativeImport
-from airweave.domains.native_ingestion.page_models import CommitNativePage, NativePageAck
+from airweave.domains.native_ingestion.page_models import CommitNativePage
 from airweave.domains.native_ingestion.scope_models import (
     BeginNativeScope,
     NativeScopeRef,
@@ -123,7 +124,7 @@ async def reconcile_scope(
         raise HTTPException(409, {"code": error.code, "message": str(error)}) from error
 
 
-@router.put("/{source_id}/imports/{request_key}/pages", response_model=NativePageAck)
+@router.put("/{source_id}/imports/{request_key}/pages", response_model=PageAcknowledgement)
 async def page(
     source_id: UUID,
     request_key: RequestKey,
@@ -131,7 +132,7 @@ async def page(
     db: AsyncSession = Depends(get_db),
     ctx: ApiContext = Depends(backend_actor),
     container: Container = Depends(deps.get_container),
-) -> NativePageAck:
+) -> PageAcknowledgement:
     """Page using server-held import authority."""
     try:
         return await container.native_imports.page(

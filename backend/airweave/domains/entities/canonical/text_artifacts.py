@@ -30,6 +30,7 @@ def prepare_text(
             characters=len(item.text),
             content_start=item.content_start,
             kind=item.kind,
+            preparation=item.preparation,
         )
         artifacts.append((artifact, content))
     return tuple(artifacts)

@@ -132,8 +132,13 @@ class TextualRepresentationBuilder:
                     entity_id=entity.entity_id,
                     text=entity.textual_representation or "",
                     content_start=content_starts.get(entity.entity_id),
+                    preparation=(
+                        native_bodies[entity.entity_id].preparation
+                        if entity.entity_id in native_bodies
+                        else None
+                    ),
                     kind=(
-                        "native_text"
+                        native_bodies[entity.entity_id].kind
                         if entity.entity_id in native_bodies
                         else "extracted_text"
                         if entity.entity_id in content_starts

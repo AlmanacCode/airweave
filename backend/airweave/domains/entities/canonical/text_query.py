@@ -129,6 +129,7 @@ class CanonicalTextReader:
             pipeline_version=row.pipeline_version,
             part_key=part.key,
             kind=artifact.kind,
+            preparation=artifact.preparation,
             content_characters=(
                 artifact.characters - artifact.content_start
                 if artifact.content_start is not None

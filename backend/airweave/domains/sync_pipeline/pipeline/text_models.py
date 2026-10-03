@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from airweave.domains.entities.canonical.text_models import TextPreparation
 from airweave.platform.entities._base import BaseEntity
 
 
@@ -12,6 +13,8 @@ class NativeTextBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     text: str
+    kind: Literal["native_text", "extracted_text"] = "native_text"
+    preparation: TextPreparation | None = None
     metadata_fields: tuple[str, ...] = ()
 
 
@@ -23,6 +26,7 @@ class BuiltText(BaseModel):
     text: str
     content_start: int | None = Field(default=None, ge=0)
     kind: Literal["native_text", "extracted_text", "generated_text"] = "generated_text"
+    preparation: TextPreparation | None = None
 
 
 class BuiltTextBatch(BaseModel):

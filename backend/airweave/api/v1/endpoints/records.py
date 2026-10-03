@@ -16,6 +16,11 @@ from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
 from airweave.db.session import get_db
 from airweave.domains.entities.canonical.calendar_query import CalendarRangeNotCaptured
+from airweave.domains.entities.canonical.contact_query import (
+    ContactCandidatePage,
+    ContactLookup,
+    lookup_contacts,
+)
 from airweave.domains.entities.canonical.drive_models import (
     DriveFilters,
     DriveListQuery,
@@ -37,6 +42,7 @@ from airweave.domains.entities.canonical.projection_store import current_extract
 from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.query_models import (
     DocumentRead,
+    HistoricalRecordRead,
     IndexedRecordRead,
     MailThreadPage,
     RecordChangePage,
@@ -527,4 +533,71 @@ async def read_text_representation(
         offset=offset,
         limit=limit,
         view=view,
+    )
+
+
+@router.get("/{sync_id}/contacts/candidates", response_model=ContactCandidatePage)
+async def contact_candidates(
+    sync_id: UUID,
+    mode: Literal["raw_handle", "international_phone"],
+    value: str = Query(min_length=1, max_length=256),
+    limit: int = Query(default=100, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=16384),
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> ContactCandidatePage:
+    """Traverse eligible retained cards, including empty matching windows."""
+    return await lookup_contacts(
+        service,
+        db,
+        ctx.organization.id,
+        sync_id,
+        ContactLookup(mode=mode, value=value, limit=limit, cursor=cursor),
+    )
+
+
+@router.get(
+    "/{sync_id}/records/{record_id}/revisions/{revision}", response_model=HistoricalRecordRead
+)
+async def historical_record(
+    response: Response,
+    sync_id: UUID,
+    record_id: UUID,
+    revision: int = Path(ge=1),
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> HistoricalRecordRead:
+    """Read a historical capture using current source/record access."""
+    response.headers["Cache-Control"] = "private, no-store"
+    return await service.read_revision(db, ctx.organization.id, sync_id, record_id, revision)
+
+
+@router.get("/{sync_id}/records/{record_id}/revisions/{revision}/blobs/{sha256}")
+async def historical_record_blob(
+    sync_id: UUID,
+    record_id: UUID,
+    revision: int = Path(ge=1),
+    sha256: str = Path(pattern=r"^[a-f0-9]{64}$"),
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+    container: Container = Depends(deps.get_container),
+) -> Response:
+    """Download historical bytes; this does not attest current attachment freshness."""
+    content = await service.historical_blob(
+        db, ctx.organization.id, sync_id, record_id, revision, sha256, container.storage_backend
+    )
+    return Response(
+        content,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Record-Revision": str(revision),
+            "X-Record-Authority": "current_source_record_access",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": "attachment",
+            "ETag": '"' + sha256 + '"',
+        },
     )
