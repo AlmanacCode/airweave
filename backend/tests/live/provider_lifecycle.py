@@ -56,7 +56,7 @@ from airweave.domains.syncs.jobs.repository import SyncJobRepository
 from airweave.domains.syncs.jobs.state_machine import SyncJobStateMachine
 from airweave.models import Entity, Organization, SourceConnection, Sync, SyncJob
 from airweave.models import SyncCursor as StoredCursor
-from airweave.platform.configs.config import GoogleCalendarConfig
+from airweave.platform.configs.config import GoogleCalendarConfig, SlackConfig
 from airweave.platform.cursors.gmail import GmailCursor
 from airweave.platform.cursors.google_calendar import GoogleCalendarCursor
 from airweave.platform.cursors.google_drive import GoogleDriveCursor
@@ -409,12 +409,22 @@ def require_read_only_drive(name, request):
         raise ValueError("Drive qualification permits provider reads only")
 
 
-async def child(manifest):
+def verify_slack_capture_policy(name, manifest, source):
+    if name == "slack" and manifest.get("slack_config", {}).get("capture_files"):
+        assert "file" in source.canonical_record_types
+        assert source.capture_cycle_configuration.known_object_validation == ("message",)
+
+
+async def child(manifest, *, runtime_sessions=None, storage_backend=None):
     engine = create_async_engine(
-        harness.test_database_url(),
+        (
+            manifest["runtime_database_url"]
+            if runtime_sessions is not None
+            else harness.test_database_url()
+        ),
         connect_args={"server_settings": {"search_path": manifest["schema"]}},
     )
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    sessions = runtime_sessions or async_sessionmaker(engine, expire_on_commit=False)
     organization_id, sync_id = UUID(manifest["organization_id"]), UUID(manifest["sync_id"])
     job_id = UUID(manifest["job_id"]) if "job_id" in manifest else uuid4()
     attempt_number = manifest.get("attempt_number", 1)
@@ -442,7 +452,14 @@ async def child(manifest):
 
     async def observe_slack_rate_limit(response):
         await response.aread()
-        limited = response.status_code == 429 or response.json().get("error") in {
+        payload = (
+            response.json()
+            if response.request.url.host == "slack.com"
+            and response.request.url.path.startswith("/api/")
+            and "json" in response.headers.get("content-type", "")
+            else {}
+        )
+        limited = response.status_code == 429 or payload.get("error") in {
             "ratelimited",
             "rate_limited",
         }
@@ -479,7 +496,8 @@ async def child(manifest):
         count_drive_request(name, request, previous, counters)
 
     @asynccontextmanager
-    async def db_context():
+    async def db_context(scoped_organization_id):
+        assert scoped_organization_id == organization_id
         async with sessions() as db:
             yield db
 
@@ -510,7 +528,7 @@ async def child(manifest):
             source_short_name=name,
             connection=SimpleNamespace(id=uuid4(), short_name=name),
             execution_config=config,
-            force_full_sync=False,
+            force_full_sync=manifest.get("force_full", False),
             batch_size=10,
             max_batch_latency_ms=20,
             should_batch=True,
@@ -531,9 +549,10 @@ async def child(manifest):
         }.get(name)
         cursor = SyncCursor(sync_id, cursor_schema, previous or None) if cursor_schema else None
         loaded = cursor.loaded_from_db if cursor else False
-        storage = BoundedStorage(
+        storage = storage_backend or BoundedStorage(
             Path(manifest["root"]) / "blobs", manifest["blob_byte_limit"], counters
         )
+        storage.counters = counters
         files = FileService(job_id, storage, sync_id=sync_id)
         files.MAX_FILE_SIZE_BYTES = manifest["file_byte_limit"]
         fence = SimpleNamespace(organization_id=organization_id, sync_id=sync_id, job_id=job_id)
@@ -568,6 +587,11 @@ async def child(manifest):
                 else None,
                 request_hook=request_hook,
                 response_hook=observe_slack_rate_limit if name == "slack" else None,
+                slack_config=(
+                    SlackConfig.model_validate(manifest["slack_config"])
+                    if name == "slack" and "slack_config" in manifest
+                    else None
+                ),
                 max_file_bytes=manifest["file_byte_limit"],
             )
         )
@@ -575,6 +599,7 @@ async def child(manifest):
             asyncio.timeout(manifest["timeout"]),
             connection as (source, identity_verification),
         ):
+            verify_slack_capture_policy(name, manifest, source)
             identity_verified = True
             await authenticate_retained_source(
                 sessions, retained_binding, organization_id, sync_id, name
@@ -633,7 +658,9 @@ async def child(manifest):
             # Only connection ownership and external telemetry are replaced; state
             # transitions, capture, reconciliation and cursor writes are production code.
             with (
-                patch("airweave.domains.syncs.jobs.state_machine.get_db_context", db_context),
+                patch(
+                    "airweave.domains.syncs.jobs.state_machine.get_tenant_db_context", db_context
+                ),
                 patch("airweave.domains.sync_pipeline.orchestrator.business_events"),
             ):
                 await runner.run()

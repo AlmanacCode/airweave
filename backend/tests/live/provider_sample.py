@@ -69,10 +69,17 @@ async def rest_source(
     response_hook=None,
     gmail_unfiltered=False,
     calendar_config=None,
+    slack_config: SlackConfig | None = None,
     max_file_bytes=10 * 1024 * 1024,
 ):
     host = {"gmail": "gmail.googleapis.com", "slack": "slack.com"}.get(name, "www.googleapis.com")
-    hosts = {host, "docs.googleapis.com"} if name == "google_drive" else {host}
+    hosts = (
+        {host, "docs.googleapis.com"}
+        if name == "google_drive"
+        else {host, "files.slack.com"}
+        if name == "slack"
+        else {host}
+    )
     auth = ManagedAuthProvider(api_key=key, connected_account_id=account, allowed_hosts=hosts)
     transport = ComposioTransport(api_key=key, connected_account_id=account, allowed_hosts=hosts)
     transport.MAX_BINARY_BYTES = max_file_bytes
@@ -118,7 +125,8 @@ async def rest_source(
             ),
             "slack": (
                 SlackSource,
-                SlackConfig(
+                slack_config
+                or SlackConfig(
                     expected_team_id=os.environ["LIVE_SLACK_TEAM_ID"],
                     expected_user_id=os.environ["LIVE_SLACK_USER_ID"],
                 )
