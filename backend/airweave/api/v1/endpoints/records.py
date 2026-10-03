@@ -16,6 +16,16 @@ from airweave.api.router import TrailingSlashRouter
 from airweave.core.container import Container
 from airweave.db.session import get_db
 from airweave.domains.entities.canonical.calendar_query import CalendarRangeNotCaptured
+from airweave.domains.entities.canonical.drive_models import (
+    DriveFilters,
+    DriveListQuery,
+    DriveMetadataPage,
+    DriveMetadataRead,
+)
+from airweave.domains.entities.canonical.drive_models import (
+    NativeID as DriveID,
+)
+from airweave.domains.entities.canonical.drive_query import CanonicalDriveQuery
 from airweave.domains.entities.canonical.mail_models import (
     MailFilters,
     MailMessagePage,
@@ -143,11 +153,56 @@ async def record_error_response(request: Request, error: CanonicalStoreError) ->
         "slack_thread_unavailable": 409,
         "calendar_read_incomplete": 409,
         "calendar_range_not_captured": 409,
+        "drive_changed_restart": 409,
+        "drive_metadata_unavailable": 409,
     }.get(error.code, 400)
     detail = {"code": error.code, "message": str(error), "retryable": status == 503}
     if isinstance(error, CalendarRangeNotCaptured):
         detail["action"] = error.action
     return JSONResponse(status_code=status, content={"error": detail})
+
+
+@router.get("/{sync_id}/drive/files", response_model=DriveMetadataPage)
+async def drive_files(
+    sync_id: UUID,
+    folder: DriveID | None = None,
+    drive: DriveID | None = None,
+    name: str | None = Query(default=None, min_length=1, max_length=512),
+    mime_type: str | None = Query(default=None, pattern=r"^[\w.+-]+/[\w.+-]+$"),
+    sort: Literal["name", "updated"] = "name",
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = Query(default=None, min_length=1, max_length=16384),
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> DriveMetadataPage:
+    """Enumerate current saved file metadata without projection or provider requests."""
+    return await CanonicalDriveQuery(service.signing_key).files(
+        db,
+        ctx.organization.id,
+        sync_id,
+        DriveListQuery(
+            filters=DriveFilters(
+                folder=folder, drive=drive, name=name, mime_type=mime_type, sort=sort
+            ),
+            limit=limit,
+            cursor=cursor,
+        ),
+    )
+
+
+@router.get("/{sync_id}/drive/files/{file_id}", response_model=DriveMetadataRead)
+async def drive_file(
+    sync_id: UUID,
+    file_id: DriveID,
+    db: AsyncSession = Depends(get_db),
+    ctx: ApiContext = Depends(deps.get_context),
+    service: CanonicalQueryService = Depends(deps.get_canonical_query_service),
+) -> DriveMetadataRead:
+    """Resolve one native file identity within this authorized captured Drive."""
+    return await CanonicalDriveQuery(service.signing_key).file(
+        db, ctx.organization.id, sync_id, file_id
+    )
 
 
 @router.get("/{sync_id}/records", response_model=RecordPage)
