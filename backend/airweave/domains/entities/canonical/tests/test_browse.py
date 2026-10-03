@@ -71,7 +71,12 @@ async def test_unprepared_cross_source_keyset_half_open_and_live_updates(databas
         (
             fence,
             (
-                observation("first", source_created_at=START, source_updated_at=START),
+                observation(
+                    "first",
+                    payload={"title": "Other provider", "threadId": "domain/thread:1"},
+                    source_created_at=START,
+                    source_updated_at=START,
+                ),
                 observation("missing-clock"),
                 observation("upper", source_created_at=START + timedelta(days=1)),
             ),
@@ -101,6 +106,7 @@ async def test_unprepared_cross_source_keyset_half_open_and_live_updates(databas
             )
             assert first.has_more and not second.has_more
             assert {x.identity.native_id for x in (*first.items, *second.items)} == {"first", "tie"}
+            assert all(item.email_thread_id is None for item in (*first.items, *second.items))
             orders.append([first.items[0].record_id, second.items[0].record_id])
             assert first.coverage == "retained_traversal" and first.missing_clock == "excluded"
             assert "original" not in first.items[0].model_dump()
@@ -180,6 +186,17 @@ async def test_unprepared_cross_source_keyset_half_open_and_live_updates(databas
         assert later.consistency == "live"
         with pytest.raises(SourceNotFound):
             await service.browse(db, uuid4(), RecordBrowseQuery(filters=filters))
+    # The same malformed value is an explicit metadata gap only for a Gmail source.
+    async with database() as db:
+        await db.execute(
+            update(SourceConnection)
+            .where(SourceConnection.sync_id == fence.sync_id)
+            .values(short_name="gmail")
+        )
+        await db.commit()
+    async with database() as db:
+        with pytest.raises(RecordMetadataUnavailable):
+            await service.browse(db, fence.organization_id, RecordBrowseQuery(filters=filters))
 
 
 async def test_authority_before_limit_and_native_version_without_body(database, source):

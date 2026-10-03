@@ -32,7 +32,7 @@ from airweave.models.sync import Sync
 
 
 class RecordMetadataUnavailable(CanonicalStoreError):
-    """Native provenance is not safe to expose as an ordinary provider original."""
+    """Retained identity metadata cannot safely produce a discovery or read locator."""
 
     code = "record_metadata_unavailable"
 
@@ -341,7 +341,12 @@ class CanonicalQueryStore:
                 native_type.label("native_type"),
                 case(
                     (
-                        func.jsonb_typeof(payload["threadId"]) == "string",
+                        and_(
+                            Entity.sync_id.in_(
+                                tuple(s.sync_id for s in sources if s.provider == "gmail")
+                            ),
+                            func.jsonb_typeof(payload["threadId"]) == "string",
+                        ),
                         payload["threadId"].astext,
                     ),
                     else_=None,
@@ -431,14 +436,21 @@ class CanonicalQueryStore:
                     raise RecordMetadataUnavailable(
                         "Retained native metadata needs a fresh export"
                     ) from None
-            result.append(
-                RecordBrowseItem(
-                    **values,
-                    source_connection_id=source.source_connection_id,
-                    provider=source.provider,
-                    identity=identity,
-                    parent=parent,
-                    native_version=version,
+            try:
+                result.append(
+                    RecordBrowseItem(
+                        **values,
+                        source_connection_id=source.source_connection_id,
+                        provider=source.provider,
+                        identity=identity,
+                        parent=parent,
+                        native_version=version,
+                    )
                 )
-            )
+            except ValidationError:
+                # Invalid Gmail thread metadata must not produce a broken read locator
+                # or expose the invalid value through a Pydantic error response.
+                raise RecordMetadataUnavailable(
+                    "Retained record metadata needs a fresh capture"
+                ) from None
         return tuple(result)
