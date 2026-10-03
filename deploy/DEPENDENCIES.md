@@ -1,6 +1,6 @@
 # Private staging dependency plan
 
-Reviewed against current code on 2026-09-30. No resources were provisioned by this
+Dependency topology reviewed on 2026-09-30; embedding selection aligned on 2026-10-03. No resources were provisioned by this
 review. This is a proposed single-replica staging topology, not a capacity proof
 or production availability design. `porter.yaml` deploys only API and worker.
 
@@ -15,7 +15,7 @@ Docling service or paid OCR just to start the worker.
 Prefer an existing maintained Porter PostgreSQL add-on if it supplies backups,
 restore and version pinning. Otherwise use CloudNativePG's official chart and
 single-instance Cluster resource. Do not create a bespoke database controller.
-Use official service images for Redis, Svix and MiniLM with small private service
+Use official service images for Redis and Svix with small private service
 manifests. A single Vespa StatefulSet with its application package and PVC is
 adequate for this bounded staging trial; a new Vespa operator and multi-node
 production topology are unnecessary until capacity or availability requires them.
@@ -28,21 +28,20 @@ production topology are unnecessary until capacity or availability requires them
 | Temporal server | Existing capture/projection/maintenance workflows. Worker cannot poll without it. | One frontend/history/matching/internal worker each; combined 1 CPU / 2 GiB initial requests |
 | Redis | Auth context cache, rate limits, pub/sub; Svix delivery queue. Enable persistence for queued delivery. | 0.1 CPU / 256 MiB; 5 GiB volume |
 | Vespa | Derived searchable chunks; canonical SQL remains authoritative. | 2 CPU / 8 GiB; 60 GiB volume |
-| MiniLM inference | Selected dense embedder. API and worker both check `/health` during composition. | 0.5 CPU / 1.5 GiB; no GPU |
+| Cohere Embed 5 Pro | Selected metered dense embedder, 1,024 dimensions. API and worker use a configured secret; no local dense inference service. | External per-use cost; no AWS-credit assumption |
 | API | Existing Porter process. | 0.5 CPU / 1 GiB |
 | Application worker | Capture, converters, chunker and sparse model share this process. | 1 CPU / 3–4 GiB; current manifest is only 2 GiB and needs measurement |
 | Svix | External webhook delivery. Not a startup network prerequisite, but omission loses those events after retries. | 0.1 CPU / 256 MiB; state in PostgreSQL/Redis |
 | S3 | Immutable captured blobs and separate database backups. | Private bucket, workload IAM, bounded retention for backups |
 
-The proposed requests total about 5.7 CPU and 18–19 GiB before Kubernetes and
+The proposed requests total about 5.2 CPU and 16.5–17.5 GiB before Kubernetes and
 operator overhead. They are allocation hypotheses, not minimum vendor promises.
 Use bounded capture concurrency and observe peak RSS, CPU, disk and retry lag.
 Do not claim the current 3 GiB application manifest covers the dependency stack.
 
 OCR is optional after the worker startup correction. A scanned PDF without OCR
 is captured but its projection fails and stays pending; no partial text is fed.
-Text-bearing PDF extraction still works locally. Images need OCR. Generative
-model keys, Cohere, frontend, Connect UI and Temporal UI are also unnecessary for
+Text-bearing PDF extraction still works locally. Images need OCR. Generative-model keys, frontend, Connect UI and Temporal UI are unnecessary for
 owned indexed retrieval. Do not enable their product endpoints as verified.
 
 Svix details matter: `SvixAdapter.__init__` constructs a client without a probe;
@@ -60,7 +59,7 @@ operator-supported image digest before deployment. Vespa CI used:
 vespaengine/vespa@sha256:5c30f5c41e7563498c4f925db6a837a3848f04726a3ed26aed4a7c8ab69f18fd
 ```
 
-Deploy the repository's 384-dimensional application schema with that image before
+Deploy the repository's application schema configured for 1,024 dimensions with that image before
 API/worker traffic. The current Compose file's `vespa:8`, `redis:7-alpine`, Svix,
 Docling and inference image tags are floating and are not a release lockfile.
 Resolve and record their architecture-specific digests before applying manifests.
@@ -85,7 +84,7 @@ Bootstrap in this order:
 3. Redis persistence, Svix, Temporal schema jobs and namespace. Add the `SyncId`
    Keyword search attribute explicitly and verify it exists. Never retain the
    Compose init command's `|| true`, which can hide failed setup.
-4. Vespa application deployment, inference health, model artifact cache. The
+4. Vespa application deployment, configured Cohere access, model artifact cache. The
    Python sparse model and semantic chunker download public artifacts; prewarm a
    writable cache or verify restricted-egress startup. This is independent of OCR.
 5. Application migration/bootstrap jobs, then API and worker from the same image.

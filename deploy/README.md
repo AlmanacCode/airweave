@@ -29,7 +29,7 @@ claiming recovery is verified in this deployment.
 
 Provision isolated PostgreSQL databases for application and Temporal state;
 private Redis, Temporal and Svix; persistent Vespa with the matching application
-package; local MiniLM inference; and a private S3 bucket for canonical bytes.
+package; configured Cohere inference; and a private S3 bucket for canonical bytes.
 Use the repository's existing dependency configurations as inputs, not its local
 Compose file as a production deployment: that file enables local auth and exposes
 ports. Dependency image pins, persistent volumes, backups and a restore exercise
@@ -45,7 +45,7 @@ no initialized Temporal client after a transient startup outage.
 
 Create the Porter environment group `almanac-source-store-staging` with only the
 owned service's values. Supply database connection settings, Redis endpoint,
-Temporal endpoint/namespace, Vespa endpoint, TEXT2VEC_INFERENCE_URL,
+Temporal endpoint/namespace, Vespa endpoint, COHERE_API_KEY,
 STORAGE_AWS_BUCKET, SVIX_URL, SVIX_JWT_SECRET and the application's required
 encryption/signing secrets. Inspect `backend/airweave/core/config/settings.py`
 for exact current fields. Do not copy the main product database from Doppler.
@@ -59,16 +59,22 @@ search with missing content. Configure an OCR backend to index those documents.
 This does not mean every PDF requires OCR: the PDF converter first tries local
 text extraction. Image conversion requires an OCR backend.
 
-The selected local MiniLM service is a startup dependency for both API and worker:
-composition checks its health endpoint. FastEmbed and the semantic chunker also
-load public model artifacts; provide a writable persistent model cache and verify
-startup with the intended network policy. OCR, generative search credentials,
-Cohere reranking, frontend and Temporal UI are optional for owned indexed search.
+The selected embedding recipe is Cohere Embed 5 Pro (`cohere_embed_v5_pro`),
+1,024 dimensions, matching the retained-corpus qualification. Supply the key via
+secret management; no local MiniLM service is part of this staging template.
+FastEmbed and the semantic chunker still load public model artifacts; prewarm a
+writable persistent model cache and qualify startup under the intended network
+policy. Removing MiniLM does not remove those local preparation dependencies.
 
-The manifest uses local embeddings to avoid assuming third-party model credits.
-Semantic quality and resource use still need measurement. Do not claim generative
-search is operational without separately configured model credentials and a live
-search test.
+Cohere is metered separately from AWS. The configured account's $50/month cap is
+not a credit-eligibility claim or an application-enforced per-import budget.
+Reranking remains opt-in at the product query contract, not implicitly enabled
+by supplying an embedding key. No generative-search capability is implied.
+
+This template is for a fresh isolated index configured with the same model and
+1,024-dimensional schema. Do not point it at an existing 384-dimensional index or
+silently relabel stored vectors; changing models requires an explicit new index/
+reprojection and verified cutover. Existing MiniLM CI fixtures remain unchanged.
 
 ## Local image build
 

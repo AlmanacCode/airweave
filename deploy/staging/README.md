@@ -19,7 +19,7 @@ not a reason to silently change the deployed platform.
 | Redis | 7.4.11-alpine3.21 |
 | Svix | Server v1.101.0, not the unrelated SDK version |
 | Vespa | Existing CI-tested image index, pinned amd64 child |
-| MiniLM | all-MiniLM-L6-v2 inference image, pinned amd64 child |
+| Cohere Embed 5 Pro | Configured external API, 1,024 dimensions; no local inference deployment |
 
 Primary evidence: [Temporal chart index](https://temporalio.github.io/helm-charts/index.yaml),
 [CNPG chart index](https://cloudnative-pg.github.io/charts/index.yaml),
@@ -81,7 +81,7 @@ for verifying the CNI enforces it.
    the `SyncId` Keyword search attribute, then verify both. Do not mask errors with
    `|| true`. Application settings must match this namespace and private frontend.
 5. Deploy the committed `vespa/app` package after replacing `{{EMBEDDING_DIM}}`
-   with 384, `{{VERSION}}` with the release identifier, and the host in `hosts.xml`
+   with 1,024 (numeric `1024`), `{{VERSION}}` with the release identifier, and the host in `hosts.xml`
    with the stable StatefulSet hostname. Wait for prepare/activate **and convergence**.
    `vespa/init-vespa.sh` is a Compose helper whose convergence timeout only warns;
    it is not a reviewed staging bootstrap job. The application package artifact
@@ -91,7 +91,7 @@ for verifying the CNI enforces it.
    scoped service-key organization separately per `backend/SERVICE_AUTH.md`.
    API/worker entrypoints do not migrate or seed. Do not put schema credentials in
    `porter.yaml` runtime configuration. Existing maintenance schedule ownership stays.
-7. Verify Redis persistence, inference `/.well-known/ready` (HTTP 204), Vespa feed/query, Temporal worker
+7. Verify Redis persistence, configured Cohere access, Vespa feed/query, Temporal worker
    polling, source-store API authorization, scoped capture and restore. Probe and
    resource tuning remains necessary for Svix/Vespa; these templates don't claim it.
 
@@ -131,7 +131,7 @@ to repository@digest. Six static workload image references were independently
 checked for syntax and exact agreement with the lockfile amd64 digests. This is
 still not image pull, startup or Kubernetes admission proof.
 
-### Readiness correction from actual-model CI
+### Historical MiniLM CI readiness correction (not current staging)
 
 Run36725698424 reached the real inference container but its old `/health` probe
 returned404, so model retrieval assertions did not run. Startup validation,
@@ -142,3 +142,8 @@ and retrieval afterward. Later CI36744440692 at2bb84cf passed the real-model
 retrieval lane and image build. That verifies the disposable CI topology; it
 does not establish Kubernetes admission, deployed readiness, capacity or restore
 for these staging templates.
+
+The October 3 staging alignment removes the MiniLM Deployment/Service and selects
+Cohere Embed 5 Pro at 1,024 dimensions. The image lock retains historical CI provenance;
+it does not require provisioning an unused inference service. Existing 384-dimensional
+CI/corpora remain untouched. Never activate this recipe against their index schema.
