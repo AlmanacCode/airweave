@@ -1,0 +1,154 @@
+{
+  "runtime": "6b1092c",
+  "provider_calls": 0,
+  "paid_calls": 0,
+  "shared_schema_deployment": false,
+  "fixture_authentication": true,
+  "cleanup_performed": false,
+  "retained_original_json_bytes": 17016348,
+  "per_kind": [
+    {
+      "kind": "meeting",
+      "records": 260,
+      "current": 260,
+      "chunks": 2163,
+      "failures": 0
+    },
+    {
+      "kind": "meeting_listing",
+      "records": 260,
+      "current": 260,
+      "chunks": 0,
+      "failures": 0
+    },
+    {
+      "kind": "scratchpad_note",
+      "records": 22,
+      "current": 22,
+      "chunks": 25,
+      "failures": 0
+    },
+    {
+      "kind": "scratchpad_listing",
+      "records": 22,
+      "current": 22,
+      "chunks": 0,
+      "failures": 0
+    }
+  ],
+  "sql_relation_bytes": 16982016,
+  "terminal": "completed",
+  "retained_originals": 564,
+  "searchable_records": 282,
+  "listing_exclusions": 282,
+  "source_hash_unchanged": true,
+  "source_payloads_exact_in_copy": true,
+  "first_pass_only": true,
+  "limits": {
+    "wall_seconds": 1500,
+    "derived_and_feed_bytes": 201326592,
+    "disk_floor": 2147483648
+  },
+  "token_counts_available": false,
+  "elapsed_seconds": 1181.938,
+  "counts": {
+    "feed_bytes": 99831551,
+    "derived_bytes": 15843763,
+    "feed_documents": 2188,
+    "local_dense": 2188,
+    "vespa": 2188,
+    "forbidden": 0,
+    "chunk_characters": 11070343,
+    "prepared_text_characters": 10629744
+  },
+  "date": "2026-10-02",
+  "product_runtime": "eb9321055",
+  "qualification": "Full retained-copy projection and installed CLI through synthetic authenticated local fixture; not hosted/native-principal qualification",
+  "capture_complete": false,
+  "native_principal_attested": false,
+  "source_provenance": "Exact real retained Wispr originals; derived copies have separate UUIDs and revision1, mapped privately",
+  "copy_fidelity": {
+    "records": 564,
+    "exact_fields": [
+      "blobs",
+      "completeness",
+      "content_access",
+      "content_hash",
+      "identity",
+      "observed_at",
+      "parent",
+      "payload",
+      "payload_schema_version",
+      "source_created_at",
+      "source_updated_at"
+    ],
+    "original_to_derived_uuid_revision_map_verified": true,
+    "copy_revisions_are_one": true,
+    "native_scope_completeness_claim": false
+  },
+  "cli": {
+    "commands": 31,
+    "latest_five_native_order_exact": true,
+    "latest_five_notes_transcript_summary_exact_full_text": true,
+    "scratchpad_native_content_exact": true,
+    "native_date_window": true,
+    "pagination": true,
+    "copy_capture_coverage": null,
+    "fixed_queries_unchanged": true,
+    "comparison": [
+      {
+        "ordinal": 1,
+        "type": "meeting",
+        "before_keyword_rank": null,
+        "after_keyword_rank": 1,
+        "before_keyword_excluded": 0,
+        "after_keyword_excluded": 0,
+        "before_hybrid_rank": null,
+        "after_hybrid_rank": null,
+        "before_hybrid_excluded": 100,
+        "after_hybrid_excluded": 0
+      },
+      {
+        "ordinal": 2,
+        "type": "meeting",
+        "before_keyword_rank": 1,
+        "after_keyword_rank": 1,
+        "before_keyword_excluded": 4,
+        "after_keyword_excluded": 0,
+        "before_hybrid_rank": 7,
+        "after_hybrid_rank": 9,
+        "before_hybrid_excluded": 100,
+        "after_hybrid_excluded": 0
+      },
+      {
+        "ordinal": 3,
+        "type": "scratchpad_note",
+        "before_keyword_rank": 1,
+        "after_keyword_rank": 1,
+        "before_keyword_excluded": 1,
+        "after_keyword_excluded": 0,
+        "before_hybrid_rank": 1,
+        "after_hybrid_rank": 1,
+        "before_hybrid_excluded": 100,
+        "after_hybrid_excluded": 0
+      }
+    ]
+  },
+  "attribution": "Fresh collection removes stale-candidate pressure as well as applying overlap; no clean v3 full-corpus control was rebuilt. Do not attribute hybrid-rank differences solely to overlap.",
+  "embedding_limit": "Independent20-document convenience audit on this run found5 documents with long-sentence truncation by local500-token-per-sentence vectorizer.36895 inputtokens become26268. Lexical content/originals retained; semantic input completeness not established.",
+  "embedding_audit": "/tmp/owned-embedding-input-audit-20261002.json",
+  "footprint_note": "Feed bytes are serialized output, not resident Vespa disk. SQL relation bytes include original/store/projection tables and indexes after processing; separate from derived-file/feed cap.",
+  "limitations": [
+    "Retained scope contains260 meetings+22scratchpads, not all-provider completeness.",
+    "Native notes empty in260, transcripts nonempty255/260, summaries260, scratchpads22; unchanged source limitations.",
+    "Three fixed known-item diagnostics are not human relevance gold or multilingual-quality measurement.",
+    "First hybrid expected positive remains absent top20 despite zero excluded candidates.",
+    "Old v3 corpus and detached58177/58178 fixture preserved. New fixture58181/58182 is local, unsupervised, and verified at handoff."
+  ],
+  "private_artifact_sha256": {
+    "proof.private.json": "1834b7132edde7c2a2e3c99c5577f31564c61f411aaa5b9a8b53edea33d77a5d",
+    "copy-map.private.json": "69abfafc813062c881ee8b34a7034788c704f032a5b286be97c6bae16c66a600",
+    "cli-proof.private.json": "4a8efacb46dd03d41986b88a3eb0d5222f97e3d70bc9f0491c04a9c1e695a7e8",
+    "feed-manifest.private.jsonl": "4580fb73c809d66efc333c781419a69f8bc302d8dfe962cbf03e59f11456730e"
+  }
+}
