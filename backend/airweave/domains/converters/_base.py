@@ -6,7 +6,7 @@ import os
 from abc import ABC, abstractmethod
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from airweave.core.logging import logger
 from airweave.domains.ocr.protocols import OcrProvider
@@ -19,6 +19,14 @@ class ConversionResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     text: str | None
     gap: Literal["ocr_unavailable"] | None = None
+    failure_reason: Literal["preparation_limit"] | None = None
+
+    @model_validator(mode="after")
+    def validate_failure(self):
+        """A failed conversion cannot also claim text or a partial extraction gap."""
+        if self.failure_reason is not None and (self.text is not None or self.gap is not None):
+            raise ValueError("Conversion failure cannot include extracted content or a gap")
+        return self
 
 
 class BaseTextConverter(ABC):

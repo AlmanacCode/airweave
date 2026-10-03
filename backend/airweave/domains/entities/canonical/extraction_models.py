@@ -35,6 +35,7 @@ class ExtractionOutcome(ExtractionPart):
             "unsupported_format",
             "original_not_captured",
             "conversion_failed",
+            "preparation_limit",
             "ocr_unavailable",
             "export_size_limit",
             "read_size_limit",
@@ -59,6 +60,7 @@ class ExtractionOutcome(ExtractionPart):
             raise ValueError("Only indexed content may carry distinct extraction gaps")
         if self.reason != expected[self.outcome] and not (
             (self.outcome == "unsupported" and self.reason == "ocr_unavailable")
+            or (self.outcome == "failed" and self.reason == "preparation_limit")
             or (
                 self.outcome == "unavailable_original"
                 and self.reason

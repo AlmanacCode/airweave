@@ -584,3 +584,54 @@ async def test_inert_attachment_decode_failure_publishes_body_with_failed_part(
         assert [p.outcome for p in coverage.parts] == ["indexed", "indexed", "failed"]
         assert coverage.parts[2].reason == "conversion_failed"
         assert row.projection_error == "conversion_failed"
+
+
+async def test_xlsx_limit_keeps_published_mail_body_and_captured_original(
+    database, source, tmp_path
+):
+    """Real XLSX extraction + SQL; synthetic MIME and fake embeddings, no provider calls."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    from airweave.domains.entities.canonical.mail_body import current_mail_body
+
+    workbook = Workbook()
+    workbook.active["A1"] = "नमस्ते"
+    workbook.active["XFD1"] = "Original retained far column"
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    data = stream.getvalue()
+    service, fence = source
+    binding = await bind_projection(database, fence, "gmail")
+    item = original(
+        part(
+            data,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename="sparse.xlsx",
+        )
+    )
+    await capture(database, service, fence, item)
+    target = destination(binding.collection_id)
+    result = await projector(database, FilesystemBackend(tmp_path)).batch(
+        fence.organization_id, fence.sync_id, "gmail", target, logger
+    )
+    assert result.failed == 1 and result.published == 1
+    target.feed_prepared.assert_awaited_once()
+    async with database() as db:
+        row = (await db.scalars(select(Entity).where(Entity.sync_id == fence.sync_id))).one()
+        coverage = await current_extraction(
+            db, fence.organization_id, fence.sync_id, row.id, row.record_revision
+        )
+        assert coverage.status == "partial"
+        assert [p.outcome for p in coverage.parts] == ["indexed", "failed"]
+        assert coverage.parts[1].reason == "preparation_limit"
+        captured = await service.store.read(db, fence.organization_id, fence.sync_id, row.id)
+        assert captured.completeness == "complete" and captured.content_access == "available"
+        assert captured.payload == item.payload
+        body = await db.scalar(
+            select(current_mail_body().with_only_columns(ProjectionGeneration.mail_body_text)
+                   .scalar_subquery()).select_from(Entity).join(Sync, Sync.id == Entity.sync_id)
+        )
+        assert "intact fundraising email body with useful context" in body.lower()

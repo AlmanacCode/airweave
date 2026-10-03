@@ -211,3 +211,22 @@ class TestHandleConversionFailures:
 
         assert entities == [e1]
         runtime.entity_tracker.record_skipped.assert_called_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_preparation_limit_preserves_failed_reason_without_appending_text():
+    builder = TextualRepresentationBuilder(converter_registry=MagicMock())
+    converter = MagicMock()
+    converter.convert_batch = AsyncMock(
+        return_value={"/path": ConversionResult(text=None, failure_reason="preparation_limit")}
+    )
+    entity = _make_entity()
+    before = entity.textual_representation
+    outcomes = {}
+    failures = await builder._convert_sub_batch(
+        converter, [(entity, "/path")], FakeSyncContext(), {}, outcomes
+    )
+    assert failures == [entity] and entity.textual_representation == before
+    assert outcomes[entity.entity_id].failure_reason == "preparation_limit"
+    with pytest.raises(ValueError):
+        ConversionResult(text="partial", failure_reason="preparation_limit")

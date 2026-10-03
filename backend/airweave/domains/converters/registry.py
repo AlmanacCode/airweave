@@ -16,6 +16,7 @@ from airweave.domains.converters.strict_text import StrictTextConverter
 from airweave.domains.converters.txt import TxtConverter
 from airweave.domains.converters.web import WebConverter
 from airweave.domains.converters.xlsx import XlsxConverter
+from airweave.domains.converters.xlsx_limits import XlsxLimits
 from airweave.domains.ocr.protocols import OcrProvider
 
 
@@ -35,6 +36,7 @@ class ConverterRegistry(ConverterRegistryProtocol):
         txt = TxtConverter()
         strict_text = StrictTextConverter()
         xlsx = XlsxConverter()
+        self.xlsx_limits: XlsxLimits = xlsx.limits
         code = CodeConverter()
         self._web = WebConverter()
 

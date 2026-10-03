@@ -1,125 +1,119 @@
-"""XLSX to markdown converter using openpyxl."""
+"""Bounded XLSX to markdown extraction using openpyxl's read-only reader."""
 
-import asyncio
-from typing import Dict, List
+from collections.abc import Iterator
+from pathlib import Path
+from zipfile import ZipFile
 
 from airweave.core.logging import logger
 from airweave.domains.converters._base import BaseTextConverter, ConversionResult
+from airweave.domains.converters.xlsx_limits import XlsxLimits
+from airweave.domains.storage.limits import MAX_FILE_SIZE_BYTES
 from airweave.domains.sync_pipeline.async_helpers import run_in_thread_pool
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError, SyncFailureError
 
 
-class XlsxConverter(BaseTextConverter):
-    """Converts XLSX files to markdown using local openpyxl extraction."""
+class XlsxPreparationLimit(EntityProcessingError):
+    """The original exceeds the supported XLSX preparation content bounds."""
 
-    async def convert_batch(self, file_paths: List[str]) -> Dict[str, ConversionResult]:
-        """Convert XLSX files to markdown text using openpyxl."""
+
+class XlsxConverter(BaseTextConverter):
+    """Preserve formulas and multilingual text without trusting declared dimensions."""
+
+    def __init__(self, limits: XlsxLimits | None = None) -> None:
+        """Use one immutable limit policy for extraction and provenance."""
+        self.limits = limits or XlsxLimits()
+
+    async def convert_batch(self, file_paths: list[str]) -> dict[str, ConversionResult]:
+        """Serialize local expansions within a batch; the shared executor owns threads."""
         try:
             import openpyxl  # noqa: F401
-        except ImportError:
-            raise SyncFailureError(
-                "openpyxl package required for XLSX conversion but not installed"
-            )
+        except ImportError as exc:
+            raise SyncFailureError("openpyxl package required for XLSX conversion") from exc
 
-        logger.debug(f"Converting {len(file_paths)} XLSX files to markdown...")
-
-        results = {}
-        semaphore = asyncio.Semaphore(10)
-
-        async def _convert_one(path: str):
-            async with semaphore:
-                try:
-                    markdown = await self._extract_xlsx_to_markdown(path)
-
-                    if not markdown or not markdown.strip():
-                        logger.warning(f"XLSX extraction produced no content for {path}")
-                        results[path] = None
-                    else:
-                        results[path] = markdown
-                        logger.debug(f"Extracted XLSX: {path} ({len(markdown)} characters)")
-
-                except EntityProcessingError as e:
-                    logger.warning(f"XLSX conversion failed for {path}: {e}")
-                    results[path] = None
-                except Exception as e:
-                    logger.error(f"Unexpected error converting XLSX {path}: {e}")
-                    results[path] = None
-
-        await asyncio.gather(*[_convert_one(p) for p in file_paths], return_exceptions=True)
-
-        successful = sum(1 for r in results.values() if r)
-        logger.debug(f"XLSX conversion complete: {successful}/{len(file_paths)} files successful")
-
-        return {key: ConversionResult(text=value) for key, value in results.items()}
-
-    async def _extract_xlsx_to_markdown(self, xlsx_path: str) -> str:  # noqa: C901
-        def _extract() -> str:  # noqa: C901
-            from openpyxl import load_workbook
-
+        results: dict[str, ConversionResult] = {}
+        for path in file_paths:
             try:
-                wb = load_workbook(xlsx_path, data_only=False)
-            except Exception as e:
-                raise EntityProcessingError(f"Failed to open XLSX file {xlsx_path}: {e}")
+                text = await run_in_thread_pool(self._extract, path)
+                results[path] = ConversionResult(text=text)
+            except XlsxPreparationLimit as exc:
+                logger.warning(f"XLSX preparation limit: {exc}")
+                results[path] = ConversionResult(text=None, failure_reason="preparation_limit")
+            except Exception as exc:
+                logger.warning(f"XLSX conversion failed: {exc}")
+                results[path] = ConversionResult(text=None)
+        return results
 
-            sheet_names = wb.sheetnames
+    def _check_package(self, path: str) -> None:
+        """Bound eager shared-string/style parsing before openpyxl opens the package."""
+        if Path(path).stat().st_size > MAX_FILE_SIZE_BYTES:
+            raise XlsxPreparationLimit("original input bytes")
+        with ZipFile(path) as package:
+            members = package.infolist()
+            if len(members) > self.limits.maximum_package_members:
+                raise XlsxPreparationLimit("package member count")
+            if any(member.file_size > self.limits.maximum_member_bytes for member in members):
+                raise XlsxPreparationLimit("expanded package member bytes")
+            if sum(member.file_size for member in members) > self.limits.maximum_expanded_bytes:
+                raise XlsxPreparationLimit("expanded package bytes")
 
-            if not sheet_names:
-                raise EntityProcessingError(f"XLSX file {xlsx_path} has no sheets")
+    def _extract(self, path: str) -> str:
+        from openpyxl import load_workbook
 
-            markdown_parts = []
-
-            for sheet_name in sheet_names:
-                sheet = wb[sheet_name]
-
-                max_row = sheet.max_row
-                max_col = sheet.max_column
-
-                if max_row == 0 or max_col == 0:
-                    logger.debug(f"Sheet '{sheet_name}' is empty, skipping")
-                    continue
-
-                markdown_parts.append(f"## Sheet: {sheet_name}\n")
-
-                rows_data = []
-                for row in sheet.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
-                    row_values = []
-                    for cell in row:
-                        value = cell.value
-                        if value is None:
-                            row_values.append("")
-                        else:
-                            row_values.append(str(value))
-                    rows_data.append(row_values)
-
-                if not rows_data:
-                    markdown_parts.append("*Empty sheet*\n")
-                    continue
-
-                if len(rows_data) > 1:
-                    header = rows_data[0]
-                    data_rows = rows_data[1:]
-
-                    markdown_parts.append("| " + " | ".join(header) + " |")
-                    markdown_parts.append("| " + " | ".join(["---"] * len(header)) + " |")
-
-                    for row in data_rows:
-                        padded_row = row + [""] * (len(header) - len(row))
-                        markdown_parts.append("| " + " | ".join(padded_row[: len(header)]) + " |")
-                else:
-                    for value in rows_data[0]:
-                        if value:
-                            markdown_parts.append(f"- {value}")
-
-                markdown_parts.append("")
-
-            if not markdown_parts:
-                raise EntityProcessingError(f"XLSX file {xlsx_path} has no extractable content")
-
-            return "\n".join(markdown_parts)
-
+        self._check_package(path)
+        workbook = load_workbook(path, read_only=True, data_only=False, keep_links=False)
         try:
-            return await run_in_thread_pool(_extract)
-        except EntityProcessingError:
-            raise
-        except Exception as e:
-            raise EntityProcessingError(f"XLSX extraction failed for {xlsx_path}: {e}")
+            if not workbook.sheetnames:
+                raise EntityProcessingError("XLSX has no sheets")
+            parts: list[str] = []
+            output_bytes = 0
+            total_rows = 0
+            total_cells = 0
+
+            def append(text: str) -> None:
+                nonlocal output_bytes
+                output_bytes += len(text.encode("utf-8")) + int(bool(parts))
+                if output_bytes > self.limits.maximum_output_bytes:
+                    raise XlsxPreparationLimit("extracted UTF-8 bytes")
+                parts.append(text)
+
+            for sheet in workbook.worksheets:
+                # Ignore incorrect producer dimensions; actual sparse gaps still count below.
+                sheet.reset_dimensions()
+                rows: list[list[str]] = []
+                width = 0
+                for values in sheet.iter_rows(values_only=True):
+                    total_rows += 1
+                    if total_rows > self.limits.maximum_rows:
+                        raise XlsxPreparationLimit("worksheet rows")
+                    # openpyxl creates this tuple before yielding it. Explicit column names
+                    # are bounded by its parser; malformed coordinate-less rows are only
+                    # package-bounded before this check, not subject to a hard RSS limit.
+                    width = max(width, len(values))
+                    if width > self.limits.maximum_columns:
+                        raise XlsxPreparationLimit("worksheet columns")
+                    if total_cells + (len(rows) + 1) * width > self.limits.maximum_cells:
+                        raise XlsxPreparationLimit("rendered worksheet cells")
+                    rows.append(["" if value is None else str(value) for value in values])
+                total_cells += len(rows) * width
+                for line in self._sheet_lines(sheet.title, rows, width):
+                    append(line)
+            return "\n".join(parts)
+        finally:
+            workbook.close()
+
+    @staticmethod
+    def _sheet_lines(title: str, rows: list[list[str]], width: int) -> Iterator[str]:
+        """Render the bounded final rectangle without truncating later wider rows."""
+        yield f"## Sheet: {title}\n"
+        if not rows:
+            yield "*Empty sheet*\n"
+        elif len(rows) == 1:
+            for value in rows[0]:
+                if value:
+                    yield f"- {value}"
+        else:
+            for index, row in enumerate(rows):
+                yield "| " + " | ".join(row + [""] * (width - len(row))) + " |"
+                if index == 0:
+                    yield "| " + " | ".join(["---"] * width) + " |"
+        yield ""

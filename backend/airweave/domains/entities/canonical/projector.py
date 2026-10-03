@@ -276,6 +276,9 @@ class CanonicalProjector:
                 representations=body_text.representations + file_text.representations,
                 failed_entity_ids=file_text.failed_entity_ids,
                 conversion_gaps={**body_text.conversion_gaps, **file_text.conversion_gaps},
+                conversion_failures={
+                    **body_text.conversion_failures, **file_text.conversion_failures
+                },
             ),
             coverage,
         )
@@ -334,6 +337,11 @@ def _conversion_coverage(built: BuiltTextBatch, coverage: ExtractionCoverage) ->
     available = {_part_index(entity.entity_id) for entity in built.entities}
     gaps = {_part_index(identity): reason for identity, reason in built.conversion_gaps.items()}
     failed = {_part_index(identity) for identity in built.failed_entity_ids}
+    failures = {
+        _part_index(identity): reason for identity, reason in built.conversion_failures.items()
+    }
+    if set(failures) - failed:
+        raise ValueError("Conversion failure reason does not belong to a failed part")
     if set(gaps) - {part.part_index for part in coverage.parts}:
         raise ValueError("Conversion gap does not belong to a selected source part")
     parts = []
@@ -344,7 +352,7 @@ def _conversion_coverage(built: BuiltTextBatch, coverage: ExtractionCoverage) ->
             part = ExtractionOutcome(
                 **part.model_dump(exclude={"outcome", "reason"}),
                 outcome="failed",
-                reason="conversion_failed",
+                reason=failures.get(part.part_index, "conversion_failed"),
             )
         if part.part_index in gaps:
             if part.outcome != "indexed":
@@ -375,6 +383,7 @@ def _check_converted_parts(
         or set(entities) != set(representations)
         or set(entities) & set(failed)
         or set(failed) & set(built.conversion_gaps)
+        or set(built.conversion_failures) - set(failed)
         or set(entities) | set(failed) | set(built.conversion_gaps) != expected
         or len(failed) != tracker.failed_count
     ):

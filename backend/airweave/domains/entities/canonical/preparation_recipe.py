@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from airweave.domains.converters.xlsx_limits import XlsxLimits
+
 
 class RecipeFact(BaseModel):
     """Explicit composition facts; unknown values are never inferred from current code."""
@@ -49,6 +51,7 @@ class ExtractionRecipe(RecipeFact):
     converter_extensions: tuple[str, ...]
     configured_ocr: tuple[OcrPolicy, ...]
     actual_ocr_outcome: Literal["unknown"] = "unknown"
+    xlsx_limits: XlsxLimits | None = None
 
 
 class SemanticRecipe(RecipeFact):
