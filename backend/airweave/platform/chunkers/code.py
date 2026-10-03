@@ -1,4 +1,4 @@
-"""Code chunker using AST-based parsing with TokenChunker safety net."""
+"""Code chunker using AST-based parsing with UnicodeTokenChunker safety net."""
 
 from typing import Any, Dict, List, Optional
 
@@ -7,6 +7,7 @@ from airweave.domains.sync_pipeline.async_helpers import run_in_thread_pool
 from airweave.domains.sync_pipeline.exceptions import SyncFailureError
 from airweave.platform.chunkers._base import BaseChunker
 from airweave.platform.chunkers.tiktoken_compat import SafeEncoding
+from airweave.platform.chunkers.unicode_tokens import UnicodeTokenChunker
 from airweave.platform.tokenizers import TikTokenTokenizer, get_tokenizer
 
 
@@ -15,13 +16,13 @@ class CodeChunker(BaseChunker):
 
     Two-stage approach (internal implementation detail):
     1. CodeChunker: Chunks at logical code boundaries (functions, classes, methods)
-    2. TokenChunker fallback: Force-splits any oversized chunks at token boundaries
+    2. UnicodeTokenChunker fallback: Force-splits any oversized chunks at token boundaries
 
     The chunker is shared across all syncs in the pod to avoid reloading
     the Magika language detection model for every sync job.
 
     Note: Even with AST-based splitting, single large AST nodes (massive functions
-    without children) can exceed chunk_size, so we use TokenChunker as safety net.
+    without children) can exceed chunk_size, so we use UnicodeTokenChunker as safety net.
     """
 
     # Configuration constants
@@ -57,7 +58,7 @@ class CodeChunker(BaseChunker):
     def _ensure_chunkers(self):
         """Lazy initialization of chunker models.
 
-        Initializes CodeChunker (AST parsing) + TokenChunker (safety net).
+        Initializes CodeChunker (AST parsing) + UnicodeTokenChunker (safety net).
 
         Raises:
             SyncFailureError: If model loading fails (infrastructure error)
@@ -67,7 +68,6 @@ class CodeChunker(BaseChunker):
 
         try:
             from chonkie import CodeChunker as ChonkieCodeChunker
-            from chonkie import TokenChunker
 
             # Get tokenizer wrapper for our own token counting
             tokenizer = get_tokenizer(self.TOKENIZER)
@@ -91,16 +91,14 @@ class CodeChunker(BaseChunker):
                 include_nodes=False,
             )
 
-            # Initialize TokenChunker for fallback (also needs safe encoding)
-            self._token_chunker = TokenChunker(
-                tokenizer=safe_encoding,
-                chunk_size=self.MAX_TOKENS_PER_CHUNK,
-                chunk_overlap=0,
+            # Split oversized code without cutting Unicode characters.
+            self._token_chunker = UnicodeTokenChunker(
+                encoding=tokenizer.encoding, chunk_size=self.MAX_TOKENS_PER_CHUNK
             )
 
             logger.info(
                 f"Loaded CodeChunker (auto-detect, target: {self.CHUNK_SIZE}) + "
-                f"TokenChunker fallback (hard_limit: {self.MAX_TOKENS_PER_CHUNK})"
+                f"UnicodeTokenChunker fallback (hard_limit: {self.MAX_TOKENS_PER_CHUNK})"
             )
 
         except Exception as e:
@@ -111,7 +109,7 @@ class CodeChunker(BaseChunker):
 
         Stage 1: CodeChunker chunks at AST boundaries (functions, classes)
         Stage 1.5: Recount tokens with tiktoken cl100k_base (Chonkie reports incorrect counts)
-        Stage 2: TokenChunker force-splits any chunks exceeding MAX_TOKENS_PER_CHUNK (hard limit)
+        Stage 2: UnicodeTokenChunker force-splits any chunks exceeding MAX_TOKENS_PER_CHUNK (hard limit)
 
         Uses run_in_thread_pool because Chonkie is synchronous (avoids blocking event loop).
 
@@ -173,7 +171,7 @@ class CodeChunker(BaseChunker):
     def _apply_safety_net_batched(
         self, code_results: List[List[Any]]
     ) -> List[List[Dict[str, Any]]]:
-        """Split oversized chunks using TokenChunker fallback.
+        """Split oversized chunks using UnicodeTokenChunker fallback.
 
         Same implementation as SemanticChunker - collects oversized chunks,
         batch processes them, then reconstructs results.
@@ -195,16 +193,16 @@ class CodeChunker(BaseChunker):
                     oversized_texts.append(chunk.text)
                     oversized_map[pos] = (doc_idx, chunk_idx)
 
-        # Batch process all oversized chunks with TokenChunker fallback
-        # TokenChunker enforces hard limit in one pass (no recursion needed)
+        # Batch process all oversized chunks with UnicodeTokenChunker fallback
+        # UnicodeTokenChunker enforces hard limit in one pass (no recursion needed)
         split_results_by_position = {}
         if oversized_texts:
             logger.debug(
                 f"Safety net: splitting {len(oversized_texts)} oversized code chunks "
-                f"exceeding {self.MAX_TOKENS_PER_CHUNK} tokens with TokenChunker"
+                f"exceeding {self.MAX_TOKENS_PER_CHUNK} tokens with UnicodeTokenChunker"
             )
 
-            # Use TokenChunker to split at exact token boundaries
+            # Split on token boundaries that also preserve complete UTF-8 characters
             # GUARANTEED to produce chunks ≤ MAX_TOKENS_PER_CHUNK in one pass
             split_results = self._token_chunker.chunk_batch(oversized_texts)
             split_results_by_position = dict(enumerate(split_results))
@@ -240,7 +238,7 @@ class CodeChunker(BaseChunker):
 
         if oversized_texts:
             logger.debug(
-                f"TokenChunker fallback split {len(oversized_texts)} code chunks "
+                f"UnicodeTokenChunker fallback split {len(oversized_texts)} code chunks "
                 f"that exceeded {self.MAX_TOKENS_PER_CHUNK} tokens"
             )
 

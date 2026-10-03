@@ -1,0 +1,34 @@
+{
+  "problem": "Fallback token cuts split UTF-8 characters; Chonkie decode inserts replacement characters and exact prepared-text offsets fail.",
+  "synthetic_reproduction": {
+    "text_class": "Hindi and emoji, no personal data",
+    "vendor_chunk_count": 64,
+    "vendor_replacement_chunks": 28,
+    "vendor_exact_roundtrip": false,
+    "limit_tokens": 16
+  },
+  "fix": "Reuse tiktoken byte tokens; move cuts backward to complete UTF-8 boundaries and verify isolated token count. Preserve exact character offsets; reject impossible budgets. Shared fallback for semantic and code chunkers.",
+  "original_record_diagnostic": {
+    "prepared_transcript_characters": 82686,
+    "before": "Chunk lost its exact prepared-text offsets",
+    "after_prepared_parts": 3,
+    "after_prepared_chunks": 14,
+    "original_revision": 1,
+    "provider_calls": 0,
+    "paid_calls": 0,
+    "publication_calls": 0,
+    "embedding": "fake; real cached local semantic boundary model"
+  },
+  "verification": {
+    "focused_tests": 33,
+    "seconds": 2.44,
+    "warning_count": 3,
+    "warnings": "existing Pydantic class Config deprecations",
+    "legacy_test_fixture_correction": "MagicMock metadata must explicitly set absent content_provenance=None; canonical offset rejection tests remain intact."
+  },
+  "limits": [
+    "No publication retry or complete-corpus repair claimed by read-only diagnostic.",
+    "Token limits remain existing cl100k budget; this does not qualify other embedding-model input limits.",
+    "Real failed record content remains private."
+  ]
+}
