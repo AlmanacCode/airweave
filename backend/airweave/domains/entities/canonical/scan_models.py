@@ -49,6 +49,10 @@ class ChildScopeObservation(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     scope: CompletedScope
     continuation: ScanContinuation = Field(default_factory=ScanContinuation)
+    terminal_empty: bool = Field(
+        default=False,
+        description="Provider validated a complete child inventory containing no records",
+    )
 
 
 class BeginScan(BaseModel):

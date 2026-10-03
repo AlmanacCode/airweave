@@ -312,6 +312,7 @@ async def test_fresh_message_page_declares_exact_file_inventory_scope(native_fil
     )
     assert page.records[0].payload == native
     (declaration,) = page.child_scope_observations
+    assert declaration.terminal_empty is (native_files == [])
     owner = SourceRecord.model_construct(identity=page.records[0].identity)
     assert declaration.scope == connector.child_scope(owner, "file")
     assert declaration.continuation == ScanContinuation()
@@ -329,6 +330,22 @@ async def test_invalid_attachment_inventory_cannot_emit_fresh_scope_receipt():
         return_value={"messages": [{"ts": "1", "files": [{"id": "F1"}, {"id": "F1"}]}]}
     )
     with pytest.raises(ValueError, match="duplicate file identities"):
+        await connector.capture_page(
+            CompletedScope(record_type="message", container_id="C1"),
+            ScanContinuation(),
+            files=MagicMock(),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_files", [None, "", {}, [None]])
+async def test_malformed_file_inventory_never_certifies_terminal_empty(native_files):
+    connector = await source()
+    connector.slack_config = SlackConfig(
+        expected_team_id="T1", expected_user_id="U1", capture_files=True
+    )
+    connector._get = AsyncMock(return_value={"messages": [{"ts": "1", "files": native_files}]})
+    with pytest.raises(ValueError):
         await connector.capture_page(
             CompletedScope(record_type="message", container_id="C1"),
             ScanContinuation(),

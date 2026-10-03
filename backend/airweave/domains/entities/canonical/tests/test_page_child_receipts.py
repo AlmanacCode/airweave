@@ -111,7 +111,10 @@ async def test_page_receipts_include_unchanged_owners_and_preserve_child_progres
     assert current.parent_visibility_epoch == owner.visibility_epoch
 
 
-async def test_changed_inventory_restarts_child_and_hides_removed_attachment(database, source):
+@pytest.mark.parametrize("terminal_empty", [False, True])
+async def test_changed_inventory_restarts_child_and_hides_removed_attachment(
+    database, source, terminal_empty
+):
     service, fence = source
     _, _, messages, state = await history(database, source)
     message = messages[0].model_copy(
@@ -125,17 +128,28 @@ async def test_changed_inventory_restarts_child_and_hides_removed_attachment(dat
     )
     child = await finish(database, service, fence, child)
     changed = message.model_copy(update={"payload": {"files": []}})
-    await commit(database, service, request(fence, result.state, (changed,)))
+    await commit(
+        database,
+        service,
+        request(
+            fence,
+            result.state,
+            (changed,),
+            (declaration(changed).model_copy(update={"terminal_empty": terminal_empty}),),
+        ),
+    )
     async with database() as db:
         current = await service.read_scan(db, fence, child.scope)
         file = await db.scalar(select(Entity).where(Entity.native_id == "F"))
         retained = await service.store.read(db, fence.organization_id, fence.sync_id, file.id)
     assert retained.content_access == "unavailable"
-    assert current.phase == "collecting" and current.continuation == ScanContinuation()
+    assert current.phase == ("complete" if terminal_empty else "collecting")
+    assert current.continuation == ScanContinuation()
     assert current.version.sweep_id != child.version.sweep_id
     assert current.parent_verified_revision == 2
-    empty = await page(database, service, fence, current, final=True)
-    await finish(database, service, fence, empty)
+    if not terminal_empty:
+        empty = await page(database, service, fence, current, final=True)
+        await finish(database, service, fence, empty)
     async with database() as db:
         assert (await db.get(Entity, file.id)).deleted_at is not None
 
@@ -318,3 +332,195 @@ async def test_established_child_namespace_change_rolls_back_page(database, sour
     async with database() as db:
         assert (await service.read_scan(db, fence, state.scope)).version == result.state.version
         assert (await service.read_scan(db, fence, declared.scope)).scope == declared.scope
+
+
+def empty_inventory(message):
+    return message.model_copy(
+        update={"payload": {"files": []}, "descendant_visibility_fields": ("files",)}
+    )
+
+
+def empty_declaration(message):
+    return declaration(message).model_copy(update={"terminal_empty": True})
+
+
+async def test_terminal_empty_commit_survives_new_writer_without_child_work(database, source):
+    service, fence = source
+    cycle, channel, messages, state = await history(database, source)
+    messages = tuple(empty_inventory(message) for message in messages)
+    result = await commit(
+        database,
+        service,
+        request(
+            fence, state, messages, tuple(empty_declaration(message) for message in messages)
+        ).model_copy(update={"final": True}),
+    )
+    await finish(database, service, fence, result.state)
+    async with database() as db:
+        children = [
+            await service.read_scan(db, fence, declaration(message).scope) for message in messages
+        ]
+        assert all(child.phase == "complete" for child in children)
+        newer = await service.activate_writer(
+            db,
+            fence.organization_id,
+            fence.sync_id,
+            fence.job_id,
+            attempt_id=uuid4(),
+            attempt_number=2,
+        )
+        root = await service.read_scan(db, newer, CompletedScope(record_type="channel"))
+    with pytest.raises(StaleWriter):
+        await commit(database, service, request(fence, result.state, messages))
+    root = await scan(
+        database, service, newer, cycle, root.scope, expected=root.version, restart=True
+    )
+    root = await page(database, service, newer, root, channel, final=True)
+    await finish(database, service, newer, root)
+    async with database() as db:
+        # Existing frontier accepts completed exact same-cycle owner receipts.
+        # No child admission or provider exact message GET is scheduled.
+        assert await service.next_scope_work(db, newer, cycle.version.cycle_id) is None
+        for message in messages:
+            child = await service.read_scan(db, newer, declaration(message).scope)
+            assert (
+                child.phase == "complete" and child.parent_verified_attempt_id == fence.attempt_id
+            )
+
+
+@pytest.mark.parametrize("change", ["revision", "epoch", "access"])
+async def test_completed_empty_receipt_does_not_survive_changed_owner(database, source, change):
+    from airweave.domains.entities.canonical.cycle_store import child_scope_complete
+
+    service, fence = source
+    cycle, _, messages, state = await history(database, source)
+    message = empty_inventory(messages[0])
+    await commit(
+        database, service, request(fence, state, (message,), (empty_declaration(message),))
+    )
+    changed = message.model_copy(
+        update={
+            "payload": {"files": [] if change != "epoch" else ["F"], "text": "new revision"},
+            **(
+                {"kind": "delete", "removal_reason": "access_revoked"} if change == "access" else {}
+            ),
+        }
+    )
+    await capture(database, service, fence, changed)
+    async with database() as db:
+        owner = await db.scalar(
+            select(Entity).where(Entity.native_id == message.identity.native_id)
+        )
+        if change == "access":
+            assert owner.deleted_at is not None
+        else:
+            assert not await db.scalar(
+                select(child_scope_complete(fence, cycle, "file")).where(Entity.id == owner.id)
+            )
+        child = await service.read_scan(db, fence, declaration(message).scope)
+        with pytest.raises((CycleConflict, ScanConflict)):
+            await service.begin_scan(
+                db,
+                BeginScan(
+                    fence=fence,
+                    scope=child.scope,
+                    cycle_id=cycle.version.cycle_id,
+                    fingerprint=CONFIG.fingerprint,
+                    expected=child.version,
+                    expected_parent_epoch=child.parent_visibility_epoch,
+                    expected_parent_revision=1,
+                ),
+            )
+
+
+async def test_empty_cleanup_crash_rolls_back_owner_child_and_removal(
+    database, source, monkeypatch
+):
+    service, fence = source
+    _, _, messages, state = await history(database, source)
+    message = messages[0].model_copy(
+        update={"payload": {"files": ["F"]}, "descendant_visibility_fields": ("files",)}
+    )
+    initial = await commit(database, service, request(fence, state, (message,)))
+    async with database() as db:
+        child = await service.read_scan(db, fence, declaration(message).scope)
+    child = await page(
+        database, service, fence, child, item("file", "F", message.identity), final=True
+    )
+    child = await finish(database, service, fence, child)
+    changed = empty_inventory(message)
+    original = service.scans.reconcile
+
+    async def fail_after_cleanup(*args, **kwargs):
+        await original(*args, **kwargs)
+        raise RuntimeError("synthetic crash after empty cleanup")
+
+    monkeypatch.setattr(service.scans, "reconcile", fail_after_cleanup)
+    with pytest.raises(RuntimeError, match="synthetic crash"):
+        await commit(
+            database,
+            service,
+            request(fence, initial.state, (changed,), (empty_declaration(changed),)),
+        )
+    async with database() as db:
+        owner = await db.scalar(
+            select(Entity).where(Entity.native_id == message.identity.native_id)
+        )
+        file = await db.scalar(select(Entity).where(Entity.native_id == "F"))
+        assert owner.record_revision == 1 and owner.source_payload["files"] == ["F"]
+        assert file.deleted_at is None
+        assert (await service.read_scan(db, fence, child.scope)).version == child.version
+        assert (await service.read_scan(db, fence, state.scope)).version == initial.state.version
+
+
+@pytest.mark.parametrize("parent_count", [1, 2])
+async def test_empty_page_cleanup_removal_budget_is_bounded(database, source, parent_count):
+    service, fence = source
+    _, _, messages, state = await history(database, source)
+    messages = tuple(
+        message.model_copy(
+            update={"payload": {"files": ["old"]}, "descendant_visibility_fields": ("files",)}
+        )
+        for message in messages[:parent_count]
+    )
+    initial = await commit(database, service, request(fence, state, messages))
+    children = []
+    for parent_index, message in enumerate(messages):
+        async with database() as db:
+            child = await service.read_scan(db, fence, declaration(message).scope)
+        child = await page(
+            database,
+            service,
+            fence,
+            child,
+            *(
+                item("file", f"F{parent_index}-{index}", message.identity)
+                for index in range(260 // parent_count)
+            ),
+            final=True,
+        )
+        children.append(await finish(database, service, fence, child))
+    changed = tuple(empty_inventory(message) for message in messages)
+    result = await commit(
+        database,
+        service,
+        request(
+            fence, initial.state, changed, tuple(empty_declaration(message) for message in changed)
+        ),
+    )
+    # Two parent changes plus at most 250 file removals, across the entire page.
+    assert len(result.capture.changes) == parent_count + 250
+    async with database() as db:
+        current = [await service.read_scan(db, fence, child.scope) for child in children]
+        assert any(child.phase == "reconciling" for child in current)
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(Entity)
+                .where(Entity.entity_definition_short_name == "file", Entity.deleted_at.is_(None))
+            )
+            == 10
+        )
+    for child in current:
+        if child.phase == "reconciling":
+            await finish(database, service, fence, child)

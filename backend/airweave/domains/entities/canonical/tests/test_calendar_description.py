@@ -111,7 +111,7 @@ async def prepared_preview(record):
             web_url="",
             raw_source_fields={"content_provenance": provenance.model_dump()},
         )
-        _, preview = _matched_content(result, ProjectionLocator.parse(built.entity_id), coverage)
+        _, preview, _ = _matched_content(result, ProjectionLocator.parse(built.entity_id), coverage)
         return built, artifacts[0], preview
 
 
