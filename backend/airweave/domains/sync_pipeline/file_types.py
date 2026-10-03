@@ -7,6 +7,7 @@ _DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".pptx", ".xlsx"}
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 _HTML_EXTENSIONS = {".html", ".htm"}
 _TEXT_EXTENSIONS = {".txt", ".json", ".xml", ".md", ".yaml", ".yml", ".toml"}
+_INERT_TEXT_EXTENSIONS = {".ics", ".dsn", ".headers"}
 _CODE_EXTENSIONS = {
     ".py",
     ".js",
@@ -34,5 +35,6 @@ SUPPORTED_FILE_EXTENSIONS = (
     | _IMAGE_EXTENSIONS
     | _HTML_EXTENSIONS
     | _TEXT_EXTENSIONS
+    | _INERT_TEXT_EXTENSIONS
     | _CODE_EXTENSIONS
 )

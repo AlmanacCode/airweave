@@ -392,6 +392,8 @@ def _select_inputs(
         part, entity = item.part, item.entity
         if item.omission == "unsupported_format":
             outcome, reason = "unsupported", "unsupported_format"
+        elif item.omission == "conversion_failed":
+            outcome, reason = "failed", "conversion_failed"
         elif entity is None:
             outcome, reason = "unavailable_original", "original_not_captured"
         elif (

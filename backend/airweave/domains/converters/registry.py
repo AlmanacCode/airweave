@@ -12,6 +12,7 @@ from airweave.domains.converters.html import HtmlConverter
 from airweave.domains.converters.pdf import PdfConverter
 from airweave.domains.converters.pptx import PptxConverter
 from airweave.domains.converters.protocols import ConverterRegistryProtocol
+from airweave.domains.converters.strict_text import StrictTextConverter
 from airweave.domains.converters.txt import TxtConverter
 from airweave.domains.converters.web import WebConverter
 from airweave.domains.converters.xlsx import XlsxConverter
@@ -32,6 +33,7 @@ class ConverterRegistry(ConverterRegistryProtocol):
         pptx = PptxConverter(ocr_provider=ocr_provider)
         html = HtmlConverter()
         txt = TxtConverter()
+        strict_text = StrictTextConverter()
         xlsx = XlsxConverter()
         code = CodeConverter()
         self._web = WebConverter()
@@ -55,6 +57,9 @@ class ConverterRegistry(ConverterRegistryProtocol):
             ".yaml": txt,
             ".yml": txt,
             ".toml": txt,
+            ".ics": strict_text,
+            ".dsn": strict_text,
+            ".headers": strict_text,
             # Code
             ".py": code,
             ".js": code,

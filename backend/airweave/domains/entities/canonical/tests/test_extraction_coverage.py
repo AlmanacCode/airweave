@@ -553,3 +553,34 @@ async def test_pdf_partial_and_unavailable_ocr_are_published_without_losing_orig
                 assert coverage.parts[-1].kind == "metadata"
             ref, original = originals[native]
             assert await storage.read_file(ref.key) == original
+
+
+async def test_inert_attachment_decode_failure_publishes_body_with_failed_part(
+    database, source, tmp_path
+):
+    service, fence = source
+    binding = await bind_projection(database, fence, "gmail")
+    await capture(
+        database,
+        service,
+        fence,
+        original(
+            part(b"BEGIN:VCALENDAR\r\nSUMMARY:Review\r\nEND:VCALENDAR\r\n", mime="text/calendar"),
+            part(b"\xff", mime="text/calendar"),
+        ),
+    )
+    target = destination(binding.collection_id)
+    result = await projector(database, FilesystemBackend(tmp_path)).batch(
+        fence.organization_id, fence.sync_id, "gmail", target, logger
+    )
+    assert result.published == 1 and result.failed == 1
+    target.feed_prepared.assert_awaited_once()
+    async with database() as db:
+        row = await db.scalar(select(Entity).where(Entity.sync_id == fence.sync_id))
+        coverage = await current_extraction(
+            db, fence.organization_id, fence.sync_id, row.id, row.record_revision
+        )
+        assert coverage.status == "partial"
+        assert [p.outcome for p in coverage.parts] == ["indexed", "indexed", "failed"]
+        assert coverage.parts[2].reason == "conversion_failed"
+        assert row.projection_error == "conversion_failed"
