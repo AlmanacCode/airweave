@@ -1,0 +1,134 @@
+{
+  "qualification": "retained Wispr full current mappings through isolated authenticated fixture and installed CLI",
+  "date": "2026-10-02",
+  "runtime_commits": {
+    "initial_projection": "c095353",
+    "failed_and_pending_one_pass": "968bd55",
+    "product": "eb9321055"
+  },
+  "pipeline_transition": "existing isolated clone v2 to v3 using plan_reprojection; continuation keeps v3",
+  "source_calls": 0,
+  "paid_calls": 0,
+  "shared_schema_deployment": false,
+  "original_and_checkpoint_preserved": true,
+  "prior_546_generation_ids_preserved": true,
+  "corpus": {
+    "records": 564,
+    "searchable_content_records": 282,
+    "relation_listing_zero_document_publications": 282,
+    "current_publications": 564,
+    "pending": 0,
+    "projection_failures": 0,
+    "per_kind": [
+      {
+        "entity_definition_short_name": "meeting",
+        "records": 260,
+        "current_publications": 260,
+        "zero_chunk_publications": 0,
+        "failures": 0
+      },
+      {
+        "entity_definition_short_name": "meeting_listing",
+        "records": 260,
+        "current_publications": 260,
+        "zero_chunk_publications": 260,
+        "failures": 0
+      },
+      {
+        "entity_definition_short_name": "scratchpad_note",
+        "records": 22,
+        "current_publications": 22,
+        "zero_chunk_publications": 0,
+        "failures": 0
+      },
+      {
+        "entity_definition_short_name": "scratchpad_listing",
+        "records": 22,
+        "current_publications": 22,
+        "zero_chunk_publications": 22,
+        "failures": 0
+      }
+    ],
+    "extraction": {
+      "complete": 282
+    },
+    "nonempty_native_parts": {
+      "notes": 0,
+      "transcript": 255,
+      "summary": 260,
+      "content": 22
+    },
+    "native_start_range": [
+      "2026-08-06T18:11:47.408Z",
+      "2026-10-01T21:55:29.013Z"
+    ],
+    "parts_with_devanagari": 189
+  },
+  "first_pass": {
+    "terminal": "operator_interrupted",
+    "elapsed_seconds": 1146.985,
+    "processed": 550,
+    "published": 546,
+    "failed_exact_offset_validation": 4,
+    "unprocessed": 14,
+    "new_output_bytes": 110479942,
+    "harness_mistake": "Inherited Temporal workflow could automatically resweep failed records. Operator stopped before any second sweep; initial raw proof terminal null is superseded by interruption evidence."
+  },
+  "continuation": {
+    "terminal": "completed",
+    "one_activity_call": true,
+    "no_retry_or_reset": true,
+    "exact_pending_records": 18,
+    "elapsed_seconds": 37.313,
+    "new_output_bytes": 4379363,
+    "limits": {
+      "seconds": 180,
+      "aggregate_derived_bytes": 33554432,
+      "free_floor": 2147483648
+    }
+  },
+  "cli": {
+    "commands": 31,
+    "latest_five_native_identity_order_matches": true,
+    "latest_five_notes_transcript_summary_exact_full_content": true,
+    "native_date_window_verified": true,
+    "list_pagination_verified": true,
+    "scratchpad_native_content_exact": true,
+    "known_queries": [
+      {
+        "ordinal": 1,
+        "type": "meeting",
+        "keyword_expected_identity_found": false,
+        "hybrid_expected_identity_found": false
+      },
+      {
+        "ordinal": 2,
+        "type": "meeting",
+        "keyword_expected_identity_found": true,
+        "hybrid_expected_identity_found": true
+      },
+      {
+        "ordinal": 3,
+        "type": "scratchpad_note",
+        "keyword_expected_identity_found": true,
+        "hybrid_expected_identity_found": true
+      }
+    ],
+    "query_mode_bounds": "three preselected original-backed queries; keyword and hybrid top20; meeting kind where applicable; no reranker",
+    "capture_discovery": "incomplete",
+    "awaiting_index": 0
+  },
+  "limits": [
+    "Local synthetic authentication/binding fixture, not hosted or native-principal qualification.",
+    "All retained records current does not establish whole-account capture completeness; public capture discovery remains incomplete.",
+    "All260 mapped Notes empty;255nonempty transcripts,5empty despite native transcript flags;260nonempty provider summaries retained separately.",
+    "Original audio/editor content not qualified; script presence is not multilingual search quality.",
+    "One of three expected meeting identities missed by both keyword/hybrid; no query rewriting or relevance benchmark claim."
+  ],
+  "private_artifact_digests": {
+    "/tmp/wispr-retained-index-20261002/current-v3-proof.json": "04f86099cf5a34041059e4c7ac451a64ac96299e6e1338a27c66a587e4446369",
+    "/tmp/wispr-retained-index-20261002/current-v3-interruption-safe.json": "40da92f41a5430fc4a0e12f6a2168b261fb278c98dae7c0d64fa9c3a629d40e6",
+    "/tmp/wispr-retained-index-20261002/fixed-v3-proof.json": "6eb3db92f7fd286c0c23d7d4e63ea47efd4d8eeeb73094fec22531da2828294f",
+    "/tmp/wispr-current-full-preflight-20261002/cli-proof.private.json": "425fb9590e13ec484fc2931aa6d35cb0b6c0021b9f5908b7497af6ad44d0707d"
+  }
+}
