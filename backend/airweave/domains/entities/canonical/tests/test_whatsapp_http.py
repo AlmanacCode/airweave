@@ -5,18 +5,16 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI
 from sqlalchemy import select
 
 from airweave.adapters.storage.filesystem import FilesystemBackend
 from airweave.api import deps
-from airweave.api.v1.endpoints.records import record_error_response, router
-from airweave.db.session import get_db
 from airweave.domains.entities.canonical.query import CanonicalQueryService
 from airweave.domains.entities.canonical.query_store import CanonicalQueryStore
 from airweave.domains.entities.canonical.requests import CaptureBatch
-from airweave.domains.entities.canonical.store import CanonicalRecordStore, CanonicalStoreError
+from airweave.domains.entities.canonical.store import CanonicalRecordStore
 from airweave.domains.entities.canonical.tests.helpers import bind_projection
+from airweave.domains.entities.canonical.tests.test_http import query_app
 from airweave.domains.entities.canonical.tests.test_whatsapp_recovery import (
     MEDIA,
     connector,
@@ -53,24 +51,13 @@ async def test_whatsapp_retained_http_read_download_and_tenant_denial(database, 
             )
         )
         record_id = record.id
-    app = FastAPI()
-    app.include_router(router, prefix="/sync")
-    app.add_exception_handler(CanonicalStoreError, record_error_response)
     owner = fence.organization_id
-
-    async def session():
-        async with database() as db:
-            yield db
 
     async def context():
         return SimpleNamespace(organization=SimpleNamespace(id=owner))
 
-    app.dependency_overrides[get_db] = session
-    app.dependency_overrides[deps.get_context] = context
+    app = query_app(database, context)
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(storage_backend=storage)
-    app.dependency_overrides[deps.get_canonical_query_service] = lambda: CanonicalQueryService(
-        CanonicalRecordStore(), CanonicalQueryStore(), "synthetic-signing-secret"
-    )
     path = f"/sync/{fence.sync_id}/records/{record_id}"
     blob_path = f"{path}/blobs/{sha256(MEDIA).hexdigest()}"
     async with httpx.AsyncClient(
