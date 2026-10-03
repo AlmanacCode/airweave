@@ -15,6 +15,7 @@ from airweave.domains.entities.canonical.extraction_models import (
 )
 from airweave.domains.entities.canonical.mail_body import prepared_mail_body
 from airweave.domains.entities.canonical.models import SourceRecord
+from airweave.domains.entities.canonical.preparation_recipe import PreparationRecipe
 from airweave.domains.entities.canonical.projection_inputs import ProjectionInputs
 from airweave.domains.entities.canonical.projection_models import (
     ProjectionBatchResult,
@@ -96,15 +97,22 @@ class CanonicalProjector:
         sessions: Callable[[UUID], AbstractAsyncContextManager[AsyncSession]],
         processor: ChunkEmbedProcessor,
         storage: StorageBackend,
+        *,
+        recipe: PreparationRecipe | None = None,
     ):
         """Inject existing processor, storage, and transaction session ownership."""
         self._store = store
         self._sessions = sessions
         self._processor = processor
         self._storage = storage
+        self._recipe = recipe if recipe is not None else PreparationRecipe()
 
     async def _admit(
-        self, work: ProjectionWork, source_name: str, destination: VespaDestination
+        self,
+        work: ProjectionWork,
+        source_name: str,
+        destination: VespaDestination,
+        generation: UUID,
     ) -> bool:
         """Close authorization transaction before any external processing begins."""
         if (
@@ -113,7 +121,7 @@ class CanonicalProjector:
         ):
             return False
         async with self._sessions(work.organization_id) as db:
-            return await self._store.admit(db, work)
+            return await self._store.begin_attempt(db, work, generation, self._recipe)
 
     async def _prepare_mail_text(
         self, work: ProjectionWork, source_name: str, generation: UUID, built: tuple[BuiltText, ...]
@@ -125,7 +133,9 @@ class CanonicalProjector:
         if body is None:
             raise ValueError("Gmail projection did not convert its required body")
         async with self._sessions(work.organization_id) as db:
-            return await self._store.prepare_mail_body(db, work, generation, body)
+            return await self._store.prepare_mail_body(
+                db, work, generation, body, recipe=self._recipe
+            )
 
     async def project_one(
         self,
@@ -138,10 +148,9 @@ class CanonicalProjector:
         from airweave.domains.entities.canonical.projection_mappers import map_record
         from airweave.domains.entities.canonical.projection_policy import excluded_from_search
 
-        if not await self._admit(work, source_name, destination):
-            return ProjectionResult()
-
         generation = uuid4()
+        if not await self._admit(work, source_name, destination, generation):
+            return ProjectionResult()
         chunks = []
         coverage = ExtractionCoverage(parts=())
         no_documents = work.record.deleted_at is not None or excluded_from_search(
@@ -206,6 +215,7 @@ class CanonicalProjector:
                         manifest,
                         coverage=coverage,
                         text_representations=tuple(item for item, _ in artifacts),
+                        recipe=self._recipe,
                     ):
                         return ProjectionResult()
                 for artifact, content in artifacts:
@@ -223,6 +233,7 @@ class CanonicalProjector:
                     (),
                     coverage=coverage,
                     text_representations=(),
+                    recipe=self._recipe,
                 ):
                     return ProjectionResult()
         async with self._sessions(work.organization_id) as db:

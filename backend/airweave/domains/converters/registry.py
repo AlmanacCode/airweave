@@ -93,6 +93,10 @@ class ConverterRegistry(ConverterRegistryProtocol):
                 }
             )
 
+    def supported_extensions(self) -> tuple[str, ...]:
+        """Report actual composed capability, including optional image conversion."""
+        return tuple(sorted(self._extension_map))
+
     def for_extension(self, ext: str) -> Optional[BaseTextConverter]:
         """Return the converter for a given file extension, or None."""
         return self._extension_map.get(ext)

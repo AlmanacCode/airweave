@@ -150,7 +150,10 @@ async def test_owned_payload_mapper_to_publication_pipeline(database, source):
 
     from airweave.domains.sync_pipeline.pipeline.text_models import BuiltText, BuiltTextBatch
 
-    async def build_text(entities, context, runtime, *, native_bodies=None):
+    async def build_text(
+        entities, context, runtime, *, native_bodies=None, strict_conversion=False
+    ):
+        assert strict_conversion
         for entity in entities:
             entity.textual_representation = "Synthetic complete text"
         return BuiltTextBatch(

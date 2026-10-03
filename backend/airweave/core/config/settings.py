@@ -243,6 +243,8 @@ class Settings(BaseSettings):
     # Optional local OCR; models are provisioned at build/setup time, never during inference.
     LOCAL_OCR_TESSDATA_PATH: Optional[str] = None
     LOCAL_OCR_LANGUAGES: tuple[str, ...] = ("eng",)
+    # Optional immutable build manifest digest; absent builds have unknown identity.
+    PREPARATION_ARTIFACT_SHA256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     # Docling OCR fallback service (None = disabled)
     DOCLING_BASE_URL: Optional[str] = None

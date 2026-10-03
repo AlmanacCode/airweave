@@ -32,6 +32,7 @@ from airweave.platform.rate_limiters import MistralRateLimiter
 # ---------------------------------------------------------------------------
 
 MAX_RETRIES = 5
+OCR_MODEL = "mistral-ocr-latest"
 RETRY_MIN_WAIT = 2  # seconds (lower than batch since direct calls are faster)
 RETRY_MAX_WAIT = 30  # seconds
 RETRY_MULTIPLIER = 2
@@ -163,7 +164,7 @@ class MistralOcrClient:
 
             ocr_resp = await self._api_call(
                 lambda: self._client.ocr.process_async(
-                    model="mistral-ocr-latest",
+                    model=OCR_MODEL,
                     document=MistralFileChunk(file_id=file_resp.id),
                 ),
                 operation_name=f"ocr_{file_name}",

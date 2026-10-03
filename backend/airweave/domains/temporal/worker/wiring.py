@@ -76,6 +76,7 @@ def create_activities() -> list:
                     container.sparse_embedder,
                 ),
                 container.storage_backend,
+                recipe=container.preparation_recipe,
             ),
             source_registry=container.source_registry,
         ).run,

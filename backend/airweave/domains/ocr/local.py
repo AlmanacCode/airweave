@@ -1,11 +1,13 @@
 """Optional local OCR provider with one bounded, disposable process per input."""
 
 import asyncio
+import hashlib
 import re
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from airweave.domains.entities.canonical.preparation_recipe import ModelIdentity
 from airweave.domains.ocr.local_worker import (
     MAX_INPUT_BYTES,
     MAX_OUTPUT_BYTES,
@@ -34,6 +36,7 @@ class LocalOcrProvider:
         directory = Path(tessdata_path).resolve()
         if not directory.is_dir() or not languages:
             raise ValueError("Local OCR requires a tessdata directory and languages")
+        models = []
         for language in languages:
             if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", language):
                 raise ValueError("Invalid local OCR language selector")
@@ -42,11 +45,13 @@ class LocalOcrProvider:
                 raise ValueError("Local OCR language model is unavailable")
             try:
                 with model.open("rb") as handle:
-                    handle.read(1)
+                    digest = hashlib.file_digest(handle, "sha256").hexdigest()
             except OSError:
                 raise ValueError("Local OCR language model is unreadable") from None
+            models.append(ModelIdentity(identifier=language, sha256=digest, resolution="digest"))
         self._tessdata = directory
         self._languages = "+".join(languages)
+        self.model_artifacts = tuple(models)
 
     async def convert_batch(self, file_paths: list[str]) -> dict[str, str | None]:
         """Process sequentially; each failed file remains available to the fallback chain."""
