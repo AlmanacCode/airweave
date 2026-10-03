@@ -47,3 +47,11 @@ legacy-row migration validation and PgBouncer qualification remain release gates
 The shared auth-provider name versus globally unique Connection.readable_id is
 also an enrollment blocker for multiple owners; RLS does not resolve it or permit
 global credentials as a workaround.
+
+Owned composition recognizes the complete existing enrollment-control pair
+(organization plus allowed control API key IDs). Independently of local mode,
+that service selects existing null subscription accounting and payment adapters;
+it does not initialize Stripe or grant access to Airweave billing tables. Three
+composition checks verify partial configuration rejection and retention of the
+nonlocal Redis API rate limiter. Canonical/entity counters, provider backoff and
+bounded shared processing remain separate from subscription accounting.

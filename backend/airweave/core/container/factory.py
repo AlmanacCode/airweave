@@ -947,9 +947,22 @@ def _create_source_services(settings: Settings) -> dict:
     }
 
 
+def _owned_control_configured(settings: Settings) -> bool:
+    """Owned product control, not Airweave subscription accounting, owns limits.
+
+    Require the complete established enrollment-control pair. This selection
+    never turns on local-development behavior or disables provider/API controls.
+    """
+    organization = settings.OWNED_TENANT_CONTROL_ORGANIZATION_ID is not None
+    keys = bool(settings.OWNED_TENANT_CONTROL_API_KEY_IDS)
+    if organization != keys:
+        raise ValueError("Owned control requires both organization and allowed API key IDs")
+    return organization
+
+
 def _create_payment_gateway(settings: Settings) -> PaymentGatewayProtocol:
     """Create payment gateway: Stripe if enabled, otherwise a null implementation."""
-    if settings.STRIPE_ENABLED:
+    if settings.STRIPE_ENABLED and not _owned_control_configured(settings):
         from airweave.adapters.payment.stripe import StripePaymentGateway
 
         return StripePaymentGateway()
@@ -1090,7 +1103,7 @@ def _create_usage_checker(
     """Create the singleton UsageLimitChecker."""
     from airweave.domains.usage.limit_checker import AlwaysAllowLimitChecker
 
-    if settings.LOCAL_DEVELOPMENT:
+    if _owned_control_configured(settings) or settings.LOCAL_DEVELOPMENT:
         return AlwaysAllowLimitChecker()
 
     return UsageLimitChecker(
@@ -1107,7 +1120,7 @@ def _create_usage_ledger(settings: Settings, billing_deps: dict) -> UsageLedgerP
     from airweave.domains.usage.ledger import NullUsageLedger
     from airweave.domains.usage.repository import UsageRepository
 
-    if settings.LOCAL_DEVELOPMENT:
+    if _owned_control_configured(settings) or settings.LOCAL_DEVELOPMENT:
         return NullUsageLedger()
 
     return UsageLedger(
