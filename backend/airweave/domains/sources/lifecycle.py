@@ -21,7 +21,6 @@ from airweave.api.context import ApiContext
 from airweave.core.context import BaseContext
 from airweave.core.exceptions import NotFoundException
 from airweave.core.logging import ContextualLogger, LoggerConfigurator
-from airweave.core.shared_models import FeatureFlag
 from airweave.domains.auth_provider._base import AUTH_PROVIDER_OPTIONAL_FIELDS, BaseAuthProvider
 from airweave.domains.auth_provider.exceptions import (
     AuthProviderAccountNotFoundError,
@@ -724,8 +723,6 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
         managed_auth: ManagedAuthProvider | ManagedToolAuthProvider | None = None,
     ) -> AirweaveHttpClient:
         """Build an AirweaveHttpClient with rate limiting for this source."""
-        feature_enabled = ctx.has_feature(FeatureFlag.SOURCE_RATE_LIMITING)
-
         from airweave.platform.http_client.composio_transport import ComposioTransport
 
         transport = (
@@ -743,13 +740,9 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
             source_short_name=source_short_name,
             rate_limiter=self._rate_limiter,
             source_connection_id=source_connection_id,
-            feature_flag_enabled=feature_enabled,
             logger=logger,
         )
-        logger.debug(
-            f"AirweaveHttpClient built for {source_short_name} "
-            f"(feature_flag_enabled={feature_enabled})"
-        )
+        logger.debug(f"AirweaveHttpClient built for {source_short_name} with configured limits")
         return client
 
     def _build_typed_config(

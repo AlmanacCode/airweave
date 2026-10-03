@@ -30,6 +30,7 @@ async def tenant_runtime(database):
         schema = await db.scalar(text("SELECT current_schema()"))
         await db.run_sync(migrate, "0017_owned_tenant_rls.py")
         await db.run_sync(migrate, "0018_owned_worker_discovery.py")
+        await db.run_sync(migrate, "0020_owned_source_limits.py")
     roles = []
     engines = []
     for group in ("airweave_tenant", "airweave_control"):
