@@ -24,6 +24,7 @@ from airweave.domains.connections.protocols import ConnectionRepositoryProtocol
 from airweave.domains.credentials.protocols import IntegrationCredentialServiceProtocol
 from airweave.domains.oauth.protocols import OAuthFlowServiceProtocol
 from airweave.domains.owned_provisioning.guard import require_provider_source
+from airweave.domains.owned_provisioning.models import ManagedSource
 from airweave.domains.owned_provisioning.settings import OwnedComposioSettings
 from airweave.domains.owned_provisioning.store import owned_creation_spec
 from airweave.domains.source_connections.protocols import (
@@ -213,6 +214,7 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
             transaction=uow,
             readable_auth_provider_id=None,
             validated_auth_provider_config=config,
+            owned_spec=spec,
         )
 
     async def reinitiate_oauth(
@@ -503,6 +505,7 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
         transaction: UnitOfWork | None,
         readable_auth_provider_id: str | None,
         validated_auth_provider_config: dict | None,
+        owned_spec: ManagedSource | None = None,
     ) -> SourceConnectionSchema:
         """Reuse ordinary source/sync persistence for both explicit auth authorities."""
         validated_config = self._source_validation.validate_config(
@@ -532,7 +535,13 @@ class SourceConnectionCreationService(SourceConnectionCreateServiceProtocol):
             )
             sync_result = None
             if bool(obj_in.sync_immediately) or has_schedule:
-                destination_ids = await self._sync_service.resolve_destination_ids(uow.session, ctx)
+                # Owned canonical acquisition retains originals; its independent
+                # projector owns the physical index destination.
+                destination_ids = (
+                    []
+                    if owned_spec is not None
+                    else await self._sync_service.resolve_destination_ids(uow.session, ctx)
+                )
                 sync_result = await self._sync_service.create(
                     uow.session,
                     name=obj_in.name or entry.name,

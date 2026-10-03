@@ -1127,3 +1127,57 @@ async def test_native_source_cannot_start_provider_oauth():
     with pytest.raises(HTTPException) as error:
         await svc.reinitiate_oauth(AsyncMock(), id=sc.id, ctx=_ctx())
     assert error.value.status_code == 409
+
+
+@pytest.mark.parametrize("owned", [True, False])
+async def test_canonical_owned_creation_omits_legacy_destination(owned):
+    from unittest.mock import patch
+
+    from airweave.domains.owned_provisioning.models import ManagedSource
+    from airweave.schemas.source_connection import ScheduleConfig
+
+    svc = _service(_entry())
+    svc._source_validation.validate_config = MagicMock(return_value={})
+    svc._get_collection = AsyncMock(return_value=SimpleNamespace(id=uuid4(), readable_id="col"))
+    svc._create_connection_record = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+    svc._sync_service.resolve_destination_ids = AsyncMock(return_value=[uuid4()])
+    svc._sync_service.create = AsyncMock(side_effect=RuntimeError("admitted"))
+    uow = SimpleNamespace(session=AsyncMock())
+    spec = (
+        ManagedSource(
+            provider="gmail",
+            expected_identity="owner@example.invalid",
+            collection="col",
+            project_key="project",
+            connected_account_id="connected",
+            auth_config_id="config",
+            user_id="owner",
+            cron="0 0 * * *",
+        )
+        if owned
+        else None
+    )
+    obj = SourceConnectionCreate(
+        short_name="gmail",
+        readable_collection_id="col",
+        sync_immediately=False,
+        schedule=ScheduleConfig(cron="0 0 * * *"),
+    )
+    with (
+        patch("airweave.schemas.CollectionRecord.model_validate"),
+        patch("airweave.schemas.Connection.model_validate"),
+        pytest.raises(RuntimeError, match="admitted"),
+    ):
+        await svc._persist_auth_provider(
+            AsyncMock(),
+            obj_in=obj,
+            entry=_entry(),
+            ctx=_ctx(),
+            transaction=uow,
+            readable_auth_provider_id=None if owned else "tenant-auth",
+            validated_auth_provider_config={},
+            owned_spec=spec,
+        )
+    assert svc._sync_service.resolve_destination_ids.await_count == (0 if owned else 1)
+    ids = svc._sync_service.create.call_args.kwargs["destination_connection_ids"]
+    assert ids == ([] if owned else svc._sync_service.resolve_destination_ids.return_value)
