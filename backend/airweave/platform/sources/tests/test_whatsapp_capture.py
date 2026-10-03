@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
@@ -19,7 +20,8 @@ from airweave.domains.entities.canonical.requests import (
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
 from airweave.domains.sources.exceptions import SourceError, SourceRateLimitError, SourceServerError
 from airweave.domains.storage import FileSkippedException
-from airweave.platform.http_client.unipile_transport import UnipileError
+from airweave.platform.http_client.airweave_client import AirweaveHttpClient
+from airweave.platform.http_client.unipile_transport import UnipileError, UnipileWhatsAppClient
 from airweave.platform.sources.records.whatsapp_collections import (
     WhatsAppParticipantCollection,
     WhatsAppReactionCollection,
@@ -766,3 +768,97 @@ async def test_validation_error_traceback_omits_private_inputs(boundary):
     assert sentinel not in str(error)
     assert sentinel not in "".join(traceback.format_exception(error))
     assert error.__cause__ is None  # No catch-all replacement or altered cause policy.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mismatch", ["event_account", "event_chat", "parent_payload", "deleted_parent"]
+)
+async def test_exact_refresh_identity_mismatch_denied_before_any_provider_io(mismatch):
+    capture = source()
+    capture.client.message = AsyncMock()
+    owner = parent()
+    account_id, chat_id = "acc_bound", "group@lid"
+    if mismatch == "event_account":
+        account_id = "different-account"
+    elif mismatch == "event_chat":
+        chat_id = "different@lid"
+    elif mismatch == "parent_payload":
+        owner = owner.model_copy(update={"payload": CHAT | {"id": "different@lid"}})
+    else:
+        owner = owner.model_copy(update={"deleted_at": datetime.now(timezone.utc)})
+    with pytest.raises(SourceError, match="identity"):
+        await capture.acquire_message_refresh(
+            event_account_id=account_id,
+            event_chat_id=chat_id,
+            event_message_id="msg",
+            parent=owner,
+            files=Files(),
+        )
+    capture.client.account.assert_not_awaited()
+    capture.client.message.assert_not_awaited()
+    capture.client.attachment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_exact_refresh_real_client_rejects_returned_message_identity():
+    capture = source()
+    requests = []
+
+    def response(request):
+        requests.append(request.url.path)
+        return httpx.Response(200, json=MESSAGE | {"id": "different-message"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as raw:
+        client = UnipileWhatsAppClient(
+            AirweaveHttpClient(raw, uuid4(), "whatsapp", feature_flag_enabled=False),
+            account_id="acc_bound",
+            api_key="synthetic-test-key",
+        )
+        # The caller owns one run-level validation; acquisition performs only exact GET.
+        capture.client = client
+        with pytest.raises(SourceError, match="identity"):
+            await capture.acquire_message_refresh(
+                event_account_id="acc_bound",
+                event_chat_id="group@lid",
+                event_message_id="msg",
+                parent=parent(),
+                files=Files(),
+            )
+    assert requests == ["/v2/acc_bound/chats/group@lid/messages/msg"]
+
+
+@pytest.mark.asyncio
+async def test_exact_refresh_uses_identity_hint_and_retains_full_native_body_and_original_media():
+    capture = source()
+    native = MESSAGE | {
+        "is_edited": True,
+        "attachments": [ATTACHMENT],
+        "extra_native": {"retain": [None, "नमस्ते"]},
+    }
+    capture.client.message = AsyncMock(return_value=WhatsAppMessage.model_validate(native))
+    owner = parent()
+    files = Files()
+    # Event's sparse update contributes only a locator; authored text must come from exact GET.
+    hint = {
+        "account_id": "acc_bound",
+        "chat_id": "group@lid",
+        "message_id": "msg",
+        "is_edited": True,
+    }
+    record = await capture.acquire_message_refresh(
+        event_account_id=hint["account_id"],
+        event_chat_id=hint["chat_id"],
+        event_message_id=hint["message_id"],
+        parent=owner,
+        files=files,
+    )
+    assert record.payload == native and record.parent == owner.identity
+    assert (
+        record.payload["text"] == MESSAGE["text"] and record.payload["quoted"] == MESSAGE["quoted"]
+    )
+    assert record.blobs[0].source_path == "/attachments/0"
+    assert record.blobs[0].sha256 == hashlib.sha256(files.content).hexdigest()
+    capture.client.message.assert_awaited_once_with("group@lid", "msg")
+    capture.client.account.assert_not_awaited()
+    capture.client.owner_profile.assert_not_awaited()

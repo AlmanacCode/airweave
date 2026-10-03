@@ -116,6 +116,47 @@ class WhatsAppCapture:
         except UnipileError as error:
             _source_failure(error)
 
+    async def acquire_message_refresh(
+        self,
+        *,
+        event_account_id: str,
+        event_chat_id: str,
+        event_message_id: str,
+        parent: SourceRecord,
+        files: FileService,
+    ) -> CaptureRecord:
+        """Acquire an exact native original; this never persists or admits an event.
+
+        The caller must have run validate() for this currently attested run, supplies
+        the current authorized chat/binding, and owns shared writer fencing, admission
+        and ordering. Use only for nonconflicting creates/updates;
+        this result is NOT safe to overwrite pending or committed deletion state.
+        Sparse event content is deliberately not an input. Native404 is not a tombstone.
+        """
+        try:
+            if (
+                event_account_id != self.config.account_id
+                or not event_chat_id
+                or not event_message_id
+                or parent.identity.record_type != "whatsapp_chat"
+                or parent.identity.native_id != event_chat_id
+                or parent.identity.container_id is not None
+                or parent.parent is not None
+                or parent.payload_schema_version != 1
+                or parent.deleted_at is not None
+                or parent.content_access != "available"
+            ):
+                raise UnipileError("identity")
+            chat = WhatsAppChat.model_validate(parent.payload)
+            if chat.id != event_chat_id or chat.is_channel:
+                raise UnipileError("identity")
+            message = await self.client.message(event_chat_id, event_message_id)
+            if message.id != event_message_id or message.chat_id != event_chat_id:
+                raise UnipileError("identity")
+            return await self._message(message, parent.identity, files, datetime.now(timezone.utc))
+        except UnipileError as error:
+            _source_failure(error)
+
     async def _validate(self) -> None:
         """Re-attest exact native principal; successful login is not history completeness."""
         account = await self.client.account()
