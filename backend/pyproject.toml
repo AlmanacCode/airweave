@@ -16,6 +16,9 @@ sqlalchemy = { extras = ["asyncio"], version = "^2.0.25" }
 alembic = "^1.13.1"
 asyncpg = "^0.31.0"
 pydantic = { extras = ["email"], version = "^2.5.3" }
+protobuf = ">=6.31.1,<7"
+pytypedstream = "0.1.0"
+phonenumberslite = "9.0.40"
 python-jose = { extras = ["cryptography"], version = "^3.3.0" }
 passlib = { extras = ["bcrypt"], version = "^1.7.4" }
 python-multipart = "^0.0.22"

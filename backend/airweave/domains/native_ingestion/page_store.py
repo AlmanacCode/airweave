@@ -1,26 +1,24 @@
 """Atomic page admission and bounded lost-response recovery on existing scan state."""
 
-import hashlib
-import json
 from datetime import datetime, timezone
 from uuid import UUID
 
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from airweave.domains.entities.canonical.page_receipts import (
+    PageAcknowledgement,
+    PageReceiptError,
+    ScanPageReceipts,
+    page_digest,
+)
 from airweave.domains.entities.canonical.scan_models import ScanContinuation
-from airweave.domains.entities.canonical.scan_store import CanonicalScanStore, ScanConflict
+from airweave.domains.entities.canonical.scan_store import CanonicalScanStore
 from airweave.domains.native_ingestion.errors import NativeAdmissionError
 from airweave.domains.native_ingestion.import_store import NativeImportStore
 from airweave.domains.native_ingestion.models import IngestNativePage
-from airweave.domains.native_ingestion.page_models import (
-    CommitNativePage,
-    NativePageAck,
-    NativePageReceipt,
-)
+from airweave.domains.native_ingestion.page_models import CommitNativePage
 from airweave.domains.native_ingestion.store import NativeIngestionStore
-
-_RECEIPT = "native_page_receipt"
 
 
 class NativePageStore:
@@ -31,6 +29,7 @@ class NativePageStore:
         self.imports = imports
         self.ingestion = ingestion
         self.scans = CanonicalScanStore(ingestion.canonical)
+        self.receipts = ScanPageReceipts(self.scans)
 
     async def commit(
         self,
@@ -39,35 +38,26 @@ class NativePageStore:
         source_id: UUID,
         request_key: str,
         request: CommitNativePage,
-    ) -> NativePageAck:
+    ) -> PageAcknowledgement:
         """A committed current page retry returns its receipt without another capture."""
         imported = await self.imports.active(db, organization_id, source_id, request_key)
-        current = await self.scans.read(db, imported.fence, request.scope)
-        if current is None:
-            raise NativeAdmissionError("Native scope has not been started")
-        if current.cycle_id != imported.cycle_id:
-            raise NativeAdmissionError("Scope belongs to another native import")
-        digest = hashlib.sha256(
-            json.dumps(
-                request.model_dump(mode="json"),
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                allow_nan=False,
-            ).encode()
-        ).hexdigest()
-        stored = current.continuation.value.get(_RECEIPT)
-        if stored is not None:
-            try:
-                previous = NativePageReceipt.model_validate(stored)
-            except ValidationError as error:
-                raise NativeAdmissionError("Native page receipt is malformed") from error
-            if previous.acknowledgement.page_id == request.page_id:
-                if previous.digest != digest or previous.acknowledgement.version != current.version:
-                    raise ScanConflict("Page retry conflicts with committed progress")
-                return previous.acknowledgement
-        if current.version != request.expected:
-            raise ScanConflict("Page changed; read committed scope progress before retrying")
+        digest = page_digest(request)
+        try:
+            recovered = await self.receipts.recover(
+                db,
+                imported.fence,
+                request.scope,
+                imported.cycle_id,
+                page_id=request.page_id,
+                digest=digest,
+                expected=request.expected,
+            )
+        except ValidationError as error:
+            raise NativeAdmissionError("Native page receipt is malformed") from error
+        except PageReceiptError as error:
+            raise NativeAdmissionError(str(error)) from error
+        if recovered is not None:
+            return recovered
         result = await self.ingestion.page(
             db,
             IngestNativePage(
@@ -81,7 +71,7 @@ class NativePageStore:
                 final=request.final,
             ),
         )
-        ack = NativePageAck(
+        ack = PageAcknowledgement(
             page_id=request.page_id,
             version=result.state.version,
             phase=result.state.phase,
@@ -89,12 +79,13 @@ class NativePageStore:
             changed=len(result.capture.changes),
             unchanged=result.capture.unchanged,
         )
-        # The scan owns this row and its lock; receipt and page share the outer commit.
-        row = await self.scans._row(db, imported.fence, request.scope)
-        assert row is not None  # Existing scan remains locked through this transaction.
-        row.continuation = {
-            "cursor": request.cursor,
-            _RECEIPT: NativePageReceipt(digest=digest, acknowledgement=ack).model_dump(mode="json"),
-        }
-        await db.flush()
+        await self.receipts.persist(
+            db,
+            imported.fence,
+            request.scope,
+            imported.cycle_id,
+            digest=digest,
+            acknowledgement=ack,
+            cursor=request.cursor,
+        )
         return ack

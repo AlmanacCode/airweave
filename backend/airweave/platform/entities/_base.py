@@ -67,6 +67,7 @@ class AirweaveSystemMetadata(BaseModel):
     content_provenance: ContentProvenance | None = None
     canonical_record_type: Optional[str] = None
     native_type: Optional[str] = None
+    actor_tokens: list[str] = Field(default_factory=list)
     source_created_us: Optional[int] = None
     source_updated_us: Optional[int] = None
     source_created_known: Optional[int] = None

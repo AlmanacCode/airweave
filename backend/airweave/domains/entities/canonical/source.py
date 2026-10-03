@@ -30,6 +30,13 @@ def indexed_record_types(short_name: str, registry: SourceRegistryProtocol) -> t
     """
     if short_name == "almanac":
         return ("knowledge", "session", "message")
+    push_types = {
+        "imessage": ("imessage_message",),
+        "apple_notes": ("apple_note",),
+        "apple_contacts": ("apple_contact",),
+    }
+    if short_name in push_types:
+        return push_types[short_name]
     return getattr(registry.get(short_name).source_class_ref, "canonical_record_types", ())
 
 

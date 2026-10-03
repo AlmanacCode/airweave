@@ -4927,6 +4927,18 @@ docs = ["sphinx", "sphinx-argparse"]
 image = ["Pillow"]
 
 [[package]]
+name = "phonenumberslite"
+version = "9.0.40"
+description = "Python version of Google's common library for parsing, formatting, storing and validating international phone numbers."
+optional = false
+python-versions = ">=2.5"
+groups = ["main"]
+files = [
+    {file = "phonenumberslite-9.0.40-py2.py3-none-any.whl", hash = "sha256:e504bb005cc6a94fefedc89dfcad614378848a42b15f7ac03a7639838849b5ca"},
+    {file = "phonenumberslite-9.0.40.tar.gz", hash = "sha256:b12d16ae17aae2a0638d11bf10ae23484f01292500a9ceaea203cf5e7bd98a0c"},
+]
+
+[[package]]
 name = "pillow"
 version = "11.3.0"
 description = "Python Imaging Library (Fork)"
@@ -6155,6 +6167,18 @@ lxml = ">=3.1.0"
 Pillow = ">=3.3.2"
 typing-extensions = ">=4.9.0"
 XlsxWriter = ">=0.5.7"
+
+[[package]]
+name = "pytypedstream"
+version = "0.1.0"
+description = "A pure Python, cross-platform library/tool for reading Mac OS X and NeXTSTEP typedstream files"
+optional = false
+python-versions = ">=3.6"
+groups = ["main"]
+files = [
+    {file = "pytypedstream-0.1.0-py3-none-any.whl", hash = "sha256:499920d4cb8bec8fd9d9cdd4c6312765eb418c398c10371ab1c9c0051104d278"},
+    {file = "pytypedstream-0.1.0.tar.gz", hash = "sha256:c3b01790e667189966e98fcfeb638cc0541358ea7348745619fe58e3e8c9fd51"},
+]
 
 [[package]]
 name = "pytz"
@@ -7554,6 +7578,14 @@ optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
+    {file = "tree_sitter_c_sharp-0.23.1-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:e87be7572991552606a3155d2f6c2045ded8bce94bfd9f74bf521d949c219a1c"},
+    {file = "tree_sitter_c_sharp-0.23.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:86c2fdf178c66474a1be2965602818d30780e4e3ed890e3c206931f65d9a154c"},
+    {file = "tree_sitter_c_sharp-0.23.1-cp310-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:035d259e64c41d02cc45afc3b8b46388b232e7d16d84734d851cca7334761da5"},
+    {file = "tree_sitter_c_sharp-0.23.1-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:fa472cb9de7e14fee9408e144f29f68384cd8e9c677dff0002da19f361a59bdf"},
+    {file = "tree_sitter_c_sharp-0.23.1-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:1a0ea86eccff74e85ab4a2cf77c813fad7c84162962ce242dff0c51601028832"},
+    {file = "tree_sitter_c_sharp-0.23.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:8ab26dc998bbd4b4287b129f67c10ca715deb402ed77d0645674490ea509097e"},
+    {file = "tree_sitter_c_sharp-0.23.1-cp310-abi3-win_amd64.whl", hash = "sha256:d4486653feaff3314ef45534dcb6f9ea8ab3aa160896287c6473788f88eb38be"},
+    {file = "tree_sitter_c_sharp-0.23.1-cp310-abi3-win_arm64.whl", hash = "sha256:e7a14b76ec23cc8386cf662d5ea602d81331376c93ca6299a97b174047790345"},
     {file = "tree_sitter_c_sharp-0.23.1-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:2b612a6e5bd17bb7fa2aab4bb6fc1fba45c94f09cb034ab332e45603b86e32fd"},
     {file = "tree_sitter_c_sharp-0.23.1-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:1a8b98f62bc53efcd4d971151950c9b9cd5cbe3bacdb0cd69fdccac63350d83e"},
     {file = "tree_sitter_c_sharp-0.23.1-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:986e93d845a438ec3c4416401aa98e6a6f6631d644bbbc2e43fcb915c51d255d"},
@@ -8467,4 +8499,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<3.14"
-content-hash = "670b890d619fe149be6bb6fa927613c4fa04b48ea482052206b730052d90b10a"
+content-hash = "46b15f610127fbe011274002933eb8165ad0efb1c4e6786d61ee6ae39f9cbe96"

@@ -52,6 +52,7 @@ from airweave.domains.credentials.protocols import (
     IntegrationCredentialRepositoryProtocol,
     IntegrationCredentialServiceProtocol,
 )
+from airweave.domains.device_ingestion.service import DeviceIngestion
 from airweave.domains.embedders.protocols import (
     DenseEmbedderProtocol,
     DenseEmbedderRegistryProtocol,
@@ -260,6 +261,7 @@ class Container:
     owned_provisioning: OwnedProvisioningService
     native_sources: NativeSources
     native_imports: NativeImports
+    device_ingestion: DeviceIngestion
     instant_search: InstantSearchServiceProtocol
     classic_search: ClassicSearchServiceProtocol
     agentic_search: AgenticSearchServiceProtocol

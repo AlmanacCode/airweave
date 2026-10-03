@@ -34,9 +34,12 @@ from airweave.core.protocols import HttpMetrics
 
 
 def _native_request(request: Request) -> bool:
-    """Native publisher paths carry identities and retained source data."""
+    """Native/device publisher paths carry identities and retained source data."""
     path = request.url.path
-    return "/native/sources/" in path or path.endswith("/native/sources")
+    return any(
+        prefix + "/" in path or path.endswith(prefix)
+        for prefix in ("/native/sources", "/device/sources")
+    )
 
 
 def _observable_url(request: Request) -> str:

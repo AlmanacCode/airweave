@@ -10,6 +10,7 @@ from airweave.api.v1.endpoints import (
     calendar_records,
     collections,
     connect,
+    device_ingestion,
     entities,
     entity_counts,
     file_retrieval,
@@ -76,3 +77,7 @@ api_router.include_router(
     owned_provisioning.router, prefix="/owned-sources", tags=["owned-sources"]
 )
 api_router.include_router(owned_tenants.router, prefix="/owned-tenants", tags=["owned-tenants"])
+
+api_router.include_router(
+    device_ingestion.router, prefix="/device/sources", tags=["device-ingestion"]
+)

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
+from airweave.domains.entities.canonical.actors import committed_actor_handles
 from airweave.domains.entities.canonical.models import SourceRecord
 from airweave.platform.entities._base import AirweaveSystemMetadata
 
@@ -34,6 +35,7 @@ def stamp_search_metadata(meta: AirweaveSystemMetadata, record: SourceRecord) ->
     """Use only the committed source record, never mapper or observation timestamps."""
     meta.canonical_record_type = record.identity.record_type
     meta.native_type = None
+    meta.actor_tokens = list(committed_actor_handles(meta.source_name, record.payload).tokens)
     if meta.source_name == "almanac":
         meta.native_type = (
             _NativeTypePayload.model_validate(record.payload).original.type

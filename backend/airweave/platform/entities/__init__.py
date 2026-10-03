@@ -21,6 +21,7 @@ from .apollo import (
     ApolloEmailActivityEntity,
     ApolloSequenceEntity,
 )
+from .apple import AppleAttachmentEntity, AppleRecordEntity
 from .asana import (
     AsanaCommentEntity,
     AsanaFileEntity,
@@ -706,6 +707,9 @@ ENTITIES_BY_SOURCE: dict[str, list[type]] = {
         WebFileEntity,
     ],
     "wispr": [WisprMeetingEntity, WisprNoteEntity],
+    "imessage": [AppleRecordEntity, AppleAttachmentEntity],
+    "apple_notes": [AppleRecordEntity, AppleAttachmentEntity],
+    "apple_contacts": [AppleRecordEntity],
     "word": [
         WordDocumentEntity,
     ],

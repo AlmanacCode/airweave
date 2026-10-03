@@ -1,138 +1,91 @@
-"""All source connectors."""
+"""Lazy public source exports; importing native contracts does not load every provider."""
 
-from .airtable import AirtableSource
-from .apollo import ApolloSource
-from .asana import AsanaSource
-from .attio import AttioSource
-from .bitbucket import BitbucketSource
-from .box import BoxSource
-from .calcom import CalSource
-from .clickup import ClickUpSource
-from .coda import CodaSource
-from .confluence import ConfluenceSource
-from .ctti import CTTISource
-from .document360 import Document360Source
-from .dropbox import DropboxSource
-from .enron import EnronSource
-from .exception_stub import ExceptionStubSource
-from .file_stub import FileStubSource
-from .fireflies import FirefliesSource
-from .freshdesk import FreshdeskSource
-from .github import GitHubSource
-from .gitlab import GitLabSource
-from .gmail import GmailSource
-from .google_calendar import GoogleCalendarSource
-from .google_docs import GoogleDocsSource
-from .google_drive import GoogleDriveSource
-from .google_slides import GoogleSlidesSource
-from .herb import (
-    HerbCodeReviewSource,
-    HerbDocumentsSource,
-    HerbMeetingsSource,
-    HerbMessagingSource,
-    HerbPeopleSource,
-    HerbResourcesSource,
-)
-from .hubspot import HubspotSource
-from .incremental_stub import IncrementalStubSource
-from .intercom import IntercomSource
-from .jira import JiraSource
-from .linear import LinearSource
-from .monday import MondaySource
-from .notion import NotionSource
-from .onedrive import OneDriveSource
-from .onenote import OneNoteSource
-from .outlook_calendar import OutlookCalendarSource
-from .outlook_mail import OutlookMailSource
-from .pipedrive import PipedriveSource
-from .powerpoint import PowerPointSource
-from .salesforce import SalesforceSource
-from .servicenow import ServiceNowSource
-from .sharepoint import SharePointSource
-from .sharepoint2019v2.source import SharePoint2019V2Source
-from .sharepoint_online.source import SharePointOnlineAppSource, SharePointOnlineSource
-from .shopify import ShopifySource
-from .slab import SlabSource
-from .slack import SlackSource
-from .slite import SliteSource
-from .snapshot import SnapshotSource
-from .stripe import StripeSource
-from .stub import StubSource
-from .teams import TeamsSource
-from .timed import TimedSource
-from .todoist import TodoistSource
-from .trello import TrelloSource
-from .wispr import WisprSource
-from .word import WordSource
-from .zendesk import ZendeskSource
-from .zoho_crm import ZohoCRMSource
-from .zoom import ZoomSource
+from importlib import import_module
 
-ALL_SOURCES: list[type] = [
-    AirtableSource,
-    ApolloSource,
-    AsanaSource,
-    AttioSource,
-    BitbucketSource,
-    BoxSource,
-    CalSource,
-    ClickUpSource,
-    CodaSource,
-    ConfluenceSource,
-    CTTISource,
-    Document360Source,
-    DropboxSource,
-    EnronSource,
-    ExceptionStubSource,
-    FileStubSource,
-    FirefliesSource,
-    FreshdeskSource,
-    GitHubSource,
-    GitLabSource,
-    HerbCodeReviewSource,
-    HerbDocumentsSource,
-    HerbMeetingsSource,
-    HerbMessagingSource,
-    HerbPeopleSource,
-    HerbResourcesSource,
-    GmailSource,
-    GoogleCalendarSource,
-    GoogleDocsSource,
-    GoogleDriveSource,
-    GoogleSlidesSource,
-    HubspotSource,
-    IncrementalStubSource,
-    IntercomSource,
-    JiraSource,
-    LinearSource,
-    MondaySource,
-    NotionSource,
-    OneDriveSource,
-    OneNoteSource,
-    OutlookCalendarSource,
-    OutlookMailSource,
-    PipedriveSource,
-    PowerPointSource,
-    SalesforceSource,
-    ServiceNowSource,
-    SharePointSource,
-    SharePoint2019V2Source,
-    SharePointOnlineSource,
-    SharePointOnlineAppSource,
-    ShopifySource,
-    SlabSource,
-    SliteSource,
-    SlackSource,
-    SnapshotSource,
-    StripeSource,
-    StubSource,
-    TeamsSource,
-    TimedSource,
-    TodoistSource,
-    TrelloSource,
-    WisprSource,
-    WordSource,
-    ZendeskSource,
-    ZoomSource,
-    ZohoCRMSource,
-]
+_SOURCE_MODULES = {
+    "AirtableSource": "airtable",
+    "ApolloSource": "apollo",
+    "AsanaSource": "asana",
+    "AttioSource": "attio",
+    "BitbucketSource": "bitbucket",
+    "BoxSource": "box",
+    "CalSource": "calcom",
+    "ClickUpSource": "clickup",
+    "CodaSource": "coda",
+    "ConfluenceSource": "confluence",
+    "CTTISource": "ctti",
+    "Document360Source": "document360",
+    "DropboxSource": "dropbox",
+    "EnronSource": "enron",
+    "ExceptionStubSource": "exception_stub",
+    "FileStubSource": "file_stub",
+    "FirefliesSource": "fireflies",
+    "FreshdeskSource": "freshdesk",
+    "GitHubSource": "github",
+    "GitLabSource": "gitlab",
+    "HerbCodeReviewSource": "herb",
+    "HerbDocumentsSource": "herb",
+    "HerbMeetingsSource": "herb",
+    "HerbMessagingSource": "herb",
+    "HerbPeopleSource": "herb",
+    "HerbResourcesSource": "herb",
+    "GmailSource": "gmail",
+    "GoogleCalendarSource": "google_calendar",
+    "GoogleDocsSource": "google_docs",
+    "GoogleDriveSource": "google_drive",
+    "GoogleSlidesSource": "google_slides",
+    "HubspotSource": "hubspot",
+    "IncrementalStubSource": "incremental_stub",
+    "IntercomSource": "intercom",
+    "JiraSource": "jira",
+    "LinearSource": "linear",
+    "MondaySource": "monday",
+    "NotionSource": "notion",
+    "OneDriveSource": "onedrive",
+    "OneNoteSource": "onenote",
+    "OutlookCalendarSource": "outlook_calendar",
+    "OutlookMailSource": "outlook_mail",
+    "PipedriveSource": "pipedrive",
+    "PowerPointSource": "powerpoint",
+    "SalesforceSource": "salesforce",
+    "ServiceNowSource": "servicenow",
+    "SharePointSource": "sharepoint",
+    "SharePoint2019V2Source": "sharepoint2019v2.source",
+    "SharePointOnlineSource": "sharepoint_online.source",
+    "SharePointOnlineAppSource": "sharepoint_online.source",
+    "ShopifySource": "shopify",
+    "SlabSource": "slab",
+    "SliteSource": "slite",
+    "SlackSource": "slack",
+    "SnapshotSource": "snapshot",
+    "StripeSource": "stripe",
+    "StubSource": "stub",
+    "TeamsSource": "teams",
+    "TimedSource": "timed",
+    "TodoistSource": "todoist",
+    "TrelloSource": "trello",
+    "WisprSource": "wispr",
+    "WordSource": "word",
+    "ZendeskSource": "zendesk",
+    "ZoomSource": "zoom",
+    "ZohoCRMSource": "zoho_crm",
+}
+
+__all__ = [*_SOURCE_MODULES, "ALL_SOURCES"]
+
+
+def __getattr__(name: str):
+    """Keep the registry and direct imports compatible, loading providers only on demand."""
+    if name == "ALL_SOURCES":
+        result = [__getattr__(source) for source in _SOURCE_MODULES]
+    elif name in _SOURCE_MODULES:
+        result = getattr(import_module(f".{_SOURCE_MODULES[name]}", __name__), name)
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    globals()[name] = result
+    return result
+
+
+def __dir__() -> list[str]:
+    """Preserve discoverability of lazy public exports."""
+    return sorted(set(globals()) | set(__all__))

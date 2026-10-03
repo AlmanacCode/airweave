@@ -131,6 +131,15 @@ class MailThreadCursor(BaseModel):
     after_id: UUID
 
 
+class HistoricalRecordRead(BaseModel):
+    """Historical capture authorized by current access, not its original ACL."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    record: SourceRecord
+    current_revision: int = Field(ge=1)
+    authority: Literal["current_source_record_access"] = "current_source_record_access"
+
+
 class RecordBrowseFilters(BaseModel):
     """Exact retained inventory and half-open source clocks, bound to continuation."""
 

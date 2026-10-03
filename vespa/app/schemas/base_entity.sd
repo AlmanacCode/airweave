@@ -71,6 +71,12 @@ schema base_entity {
             attribute: fast-search
         }
 
+        field airweave_system_metadata_actor_tokens type array<string> {
+            indexing: attribute | summary
+            attribute: fast-search
+            match: exact
+        }
+
         field airweave_system_metadata_native_type type string {
             indexing: attribute | summary
             attribute: fast-search

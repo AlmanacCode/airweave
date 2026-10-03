@@ -7,11 +7,11 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.domains.entities.canonical.cycle_store import attest_cycle, scope_owner
+from airweave.domains.entities.canonical.page_receipts import read_page_receipt
 from airweave.domains.entities.canonical.scan_models import BeginScan, ReconcileScan, ScanState
 from airweave.domains.entities.canonical.scan_store import CanonicalScanStore
 from airweave.domains.native_ingestion.errors import NativeAdmissionError
 from airweave.domains.native_ingestion.import_store import NativeImportStore
-from airweave.domains.native_ingestion.page_models import NativePageReceipt
 from airweave.domains.native_ingestion.scope_models import (
     BeginNativeScope,
     NativeScopeRef,
@@ -23,8 +23,8 @@ from airweave.domains.native_ingestion.scope_models import (
 def scope_state(state: ScanState) -> NativeScopeState:
     """Hide the internal receipt envelope, retaining its bounded last-page acknowledgement."""
     try:
-        saved = state.continuation.value.get("native_page_receipt")
-        ack = NativePageReceipt.model_validate(saved).acknowledgement if saved is not None else None
+        saved = read_page_receipt(state.continuation)
+        ack = saved.acknowledgement if saved is not None else None
         return NativeScopeState(
             scope=state.scope,
             cycle_id=state.cycle_id,

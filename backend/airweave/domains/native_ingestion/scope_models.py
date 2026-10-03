@@ -5,9 +5,9 @@ from uuid import UUID
 
 from pydantic import Field, JsonValue
 
+from airweave.domains.entities.canonical.page_receipts import PageAcknowledgement
 from airweave.domains.entities.canonical.requests import CompletedScope, ScanVersion
 from airweave.domains.native_ingestion.models import NativeModel
-from airweave.domains.native_ingestion.page_models import NativePageAck
 
 
 class NativeScopeRef(NativeModel):
@@ -39,4 +39,4 @@ class NativeScopeState(NativeModel):
     phase: Literal["collecting", "reconciling", "complete"]
     coverage: Literal["bounded", "complete"]
     cursor: dict[str, JsonValue]
-    last_page: NativePageAck | None = None
+    last_page: PageAcknowledgement | None = None

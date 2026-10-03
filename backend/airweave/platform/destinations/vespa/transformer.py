@@ -328,6 +328,7 @@ class EntityTransformer:
             {
                 "canonical_record_type": meta.canonical_record_type,
                 "native_type": meta.native_type,
+                "actor_tokens": meta.actor_tokens,
                 "source_created_us": meta.source_created_us,
                 "source_updated_us": meta.source_updated_us,
                 "source_created_known": meta.source_created_known,

@@ -11,6 +11,7 @@ from airweave.core.logging import logger as default_logger
 
 # Field name mappings from logical names to Vespa field paths
 FIELD_NAME_MAP = {
+    "airweave_system_metadata.actor_tokens": "airweave_system_metadata_actor_tokens",
     # System metadata fields (short form)
     "collection_id": "airweave_system_metadata_collection_id",
     "entity_type": "airweave_system_metadata_entity_type",

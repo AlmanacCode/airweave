@@ -551,6 +551,11 @@ async def map_record(  # noqa: C901 -- explicit provider dispatch keeps mapper o
         return
     with TemporaryDirectory(prefix="airweave-projection-") as temporary:
         directory = Path(temporary)
+        if source_name in ("imessage", "apple_notes", "apple_contacts"):
+            from airweave.domains.entities.canonical.apple_projection import map_apple
+
+            yield await map_apple(record, source_name, storage, directory)
+            return
         if source_name == "gmail":
             from airweave.domains.entities.canonical.gmail_projection import map_gmail
 
