@@ -1,12 +1,52 @@
 """HTML to markdown converter."""
 
 import asyncio
+import re
 from typing import Dict, List
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from airweave.core.logging import logger
 from airweave.domains.converters._base import BaseTextConverter, ConversionResult
 from airweave.domains.sync_pipeline.async_helpers import run_in_thread_pool
 from airweave.domains.sync_pipeline.exceptions import EntityProcessingError
+
+_DISPLAY_DECLARATION = re.compile(r"(?:^|;)\s*display\s*:\s*([^;]+)", re.IGNORECASE)
+_DISPLAY_NONE = re.compile(r"none\s*(?:!\s*important)?", re.IGNORECASE)
+_PREHEADER_PADDING = re.compile(r"(?<!\S)\u034f(?:\s*\u034f)+(?!\S)")
+
+
+class _HtmlNodeContext(BaseModel):
+    """Only element attributes are needed from the library's visitor context."""
+
+    model_config = ConfigDict(extra="ignore")
+    attributes: dict[str, str] = Field(default_factory=dict)
+
+
+class _PreheaderPaddingVisitor:
+    """Remove empty mail padding while preserving hidden previews and language."""
+
+    def visit_element_end(self, context: dict[str, JsonValue], output: str) -> dict[str, str]:
+        """Clean standalone repeated joiners only with explicit hidden evidence."""
+        if "\u034f" not in output or "`" in output:
+            # Code may deliberately quote invisible characters. Preserve it unchanged.
+            return {"type": "continue"}
+        attributes = _HtmlNodeContext.model_validate(context).attributes
+        style = attributes.get("style", "")
+        declarations = _DISPLAY_DECLARATION.findall(style)
+        hidden = "hidden" in attributes or (
+            "/*" not in style
+            and len(declarations) == 1
+            and _DISPLAY_NONE.fullmatch(declarations[0].strip()) is not None
+        )
+        # This is narrow inline evidence, not a CSS cascade or visibility engine.
+        # Ambiguous declarations, class styles and aria-hidden alone remain intact.
+        # Library 2.24 omits valueless attributes, so bare `hidden` also stays intact.
+        if hidden:
+            cleaned = _PREHEADER_PADDING.sub("", output)
+            if cleaned != output:
+                return {"type": "custom", "output": cleaned}
+        return {"type": "continue"}
 
 
 class HtmlConverter(BaseTextConverter):
@@ -15,7 +55,7 @@ class HtmlConverter(BaseTextConverter):
     async def convert_batch(self, file_paths: List[str]) -> Dict[str, ConversionResult]:
         """Convert HTML files to markdown text."""
         try:
-            from html_to_markdown import ConversionOptions, convert
+            from html_to_markdown import ConversionOptions, convert_with_visitor
         except ImportError:
             logger.error("html-to-markdown package not installed for HTML conversion")
             raise EntityProcessingError(
@@ -55,8 +95,10 @@ class HtmlConverter(BaseTextConverter):
 
                         # Keep generated head metadata out of body chunks/snippets.
                         # The retained HTML remains the authoritative original.
-                        markdown = convert(
-                            html_content, ConversionOptions(extract_metadata=False)
+                        markdown = convert_with_visitor(
+                            html_content,
+                            ConversionOptions(extract_metadata=False),
+                            visitor=_PreheaderPaddingVisitor(),
                         )
 
                         return markdown.strip() if markdown else ""
