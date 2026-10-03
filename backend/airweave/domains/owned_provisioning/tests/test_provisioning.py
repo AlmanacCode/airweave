@@ -244,6 +244,11 @@ async def test_rotation_timeout_retains_cleanup_and_original_source(database, se
         )
         assert row.cancellation_job_ids == [str(original_job)]
         assert row.generation == 2 and row.observed_generation == 1
+        from airweave.domains.entities.canonical.read_authority import source_is_readable
+
+        # Acquisition generation advanced, but the original acknowledged scope
+        # remains readable through a failed/uncertain remote acknowledgement.
+        assert await db.scalar(select(source_is_readable(ctx.organization.id, first.sync_id)))
         assert (
             row.sync_id == first.sync_id and row.source_connection_id == first.source_connection_id
         )
@@ -288,7 +293,9 @@ async def test_http_boundary_and_legacy_edit_cannot_bypass_generation(database, 
             yield db
 
     app.dependency_overrides[get_db] = session
+    app.dependency_overrides[deps.get_tenant_db] = session
     app.dependency_overrides[deps.get_context] = lambda: ctx
+    app.dependency_overrides[deps.get_owned_context] = lambda: ctx
     app.dependency_overrides[deps.get_container] = lambda: SimpleNamespace(
         owned_provisioning=service
     )
@@ -1160,3 +1167,26 @@ def test_wispr_provisioning_cannot_fabricate_native_or_mismatch_broker(changes):
     }
     with pytest.raises(ValueError):
         ManagedSource.model_validate({**data, **changes})
+
+
+async def test_changed_scope_prepare_withdraws_old_read_authority(database, setup):
+    from airweave.domains.entities.canonical.read_authority import source_is_readable
+
+    ctx, service, request, account, *_ = setup
+    async with database() as db:
+        first = await service.ensure(db, ctx, account, request)
+    narrowed = request.model_copy(
+        update={
+            "generation": 2,
+            "source": request.source.model_copy(update={"config": {"query": "is:unread"}}),
+        }
+    )
+    # Commit desired scope without executing provider validation or scheduling.
+    async with database() as db:
+        await service.store.ensure(db, ctx, account, narrowed)
+    async with database() as db:
+        assert not await db.scalar(select(source_is_readable(ctx.organization.id, first.sync_id)))
+        row = await db.scalar(
+            select(OwnedProvisioning).where(OwnedProvisioning.account_id == account)
+        )
+        assert row.generation == 2 and row.observed_generation == 1

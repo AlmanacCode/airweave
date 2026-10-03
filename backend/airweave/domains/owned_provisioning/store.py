@@ -100,6 +100,7 @@ class ProvisioningStore:
                 raise HTTPException(
                     status_code=409, detail="Connect a new account after disconnect"
                 )
+            retain_reads = request.state == "paused"
             if request.state == "active" and row.source_connection_id is not None:
                 source = await db.scalar(
                     select(SourceConnection)
@@ -124,6 +125,20 @@ class ProvisioningStore:
                     raise HTTPException(
                         status_code=409, detail="Reconnect changes original account identity"
                     )
+                previous = EnsureSource.model_validate(row.request_payload)
+                # Preserve only the already-readable scope. Credentials/cron may
+                # change; provider identity, broker route and saved scope may not.
+                retain_reads = (
+                    row.desired_state == "active"
+                    and row.observed_generation > 0
+                    and source.is_authenticated
+                    and previous.source is not None
+                    and previous.source.account_assurance == request.source.account_assurance
+                    and previous.source.config == request.source.config
+                    and previous.source.auth_provider == request.source.auth_provider
+                    and previous.source.auth_config_id == request.source.auth_config_id
+                    and previous.source.user_id == request.source.user_id
+                )
             if request.source is not None:
                 await self._configure(db, uow, ctx, row, request)
             if row.sync_id is not None:
@@ -136,7 +151,7 @@ class ProvisioningStore:
                 sync.provisioning_generation = request.generation
                 source = await db.get(SourceConnection, row.source_connection_id)
                 jobs = await stop_source_writer(
-                    db, sync, source, retain_read_authority=request.state == "paused"
+                    db, sync, source, retain_read_authority=retain_reads
                 )
                 row.cancellation_job_ids = list(
                     dict.fromkeys([*row.cancellation_job_ids, *(str(job) for job in jobs)])
