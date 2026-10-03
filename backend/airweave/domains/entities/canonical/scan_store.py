@@ -538,13 +538,30 @@ class CanonicalScanStore:
                 raise ScanConflict(
                     "Child observation requires an allowed current-page upsert owner"
                 )
+            if observation.terminal_empty and (
+                observation.continuation.value
+                or cycle.configuration.policy(scope.record_type) != "exhaustive"
+                or scope.record_type in cycle.configuration.known_object_validation
+                or cycle.configuration.children_of(scope.record_type)
+            ):
+                raise ScanConflict(
+                    "Terminal empty inventory requires exhaustive leaf unpaginated proof"
+                )
             key = (scope.parent, scope.record_type)
             if key in seen:
                 raise ScanConflict("Duplicate child observation for the same owner and kind")
             seen.add(key)
 
-    async def _observe_child_scopes(self, db: AsyncSession, request: CommitScanPage) -> None:
-        """Derive existing child receipts inside the page's atomic writer transaction."""
+    async def _observe_child_scopes(
+        self, db: AsyncSession, request: CommitScanPage
+    ) -> tuple[CaptureResult, ...]:
+        """Commit validated empty inventories with their owners, using existing scan receipts.
+
+        Removals across this entire native page remain bounded; unfinished scopes
+        continue through ordinary reconciliation and exact-owner admission.
+        """
+        captures: list[CaptureResult] = []
+        removal_budget = 250
         for observation in request.child_scope_observations:
             # _begin may advance the cycle version; never reuse an earlier snapshot.
             cursor, cycle = await attest_cycle(db, request.fence, request.cycle_id)
@@ -574,7 +591,31 @@ class CanonicalScanStore:
                 expected_parent_revision=parent.record_revision,
                 continuation=observation.continuation,
             )
-            await self._begin_verified(db, request_begin, context=(cursor, cycle, parent))
+            state = await self._begin_verified(db, request_begin, context=(cursor, cycle, parent))
+            if observation.terminal_empty and state.phase != "complete":
+                row = await self._row(db, request.fence, scope)
+                if row.phase == "collecting":
+                    row.phase = "reconciling"
+                    # Empty proof cannot preserve sightings from a collecting sweep.
+                    row.sweep_id = uuid4()
+                    row.revision += 1
+                    await db.flush()
+                    state = await self._state(db, row)
+                if removal_budget:
+                    result = await self.reconcile(
+                        db,
+                        ReconcileScan(
+                            fence=request.fence,
+                            scope=scope,
+                            cycle_id=request.cycle_id,
+                            expected=state.version,
+                            observed_at=parent.observed_at,
+                            limit=removal_budget,
+                        ),
+                    )
+                    captures.append(result.capture)
+                    removal_budget -= len(result.capture.changes)
+        return tuple(captures)
 
     async def page(
         self,
@@ -647,7 +688,15 @@ class CanonicalScanStore:
             sequence=discovered.sequence,
             unchanged=captured.unchanged + discovered.unchanged,
         )
-        await self._observe_child_scopes(db, request)
+        children = await self._observe_child_scopes(db, request)
+        captured = CaptureResult(
+            changes=(
+                *captured.changes,
+                *(change for child in children for change in child.changes),
+            ),
+            sequence=sync.observed_change_sequence,
+            unchanged=captured.unchanged + sum(child.unchanged for child in children),
+        )
         row.continuation = continuation
         row.revision += 1
         if request.final:

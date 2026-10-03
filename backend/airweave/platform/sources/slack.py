@@ -373,7 +373,10 @@ class SlackSource(BaseSource):
                     update={
                         "records": records,
                         "child_scope_observations": tuple(
-                            ChildScopeObservation(scope=self._child_scope(record.identity, "file"))
+                            ChildScopeObservation(
+                                scope=self._child_scope(record.identity, "file"),
+                                terminal_empty=record.payload.get("files") == [],
+                            )
                             for record in records
                         ),
                     }
